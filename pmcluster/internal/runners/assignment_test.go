@@ -123,8 +123,9 @@ var assignmentKeys = []string{
 	// dind: the leader decides whether a job gets its own daemon, and the worker is
 	// told — it is part of the documented contract this test pins.
 	"dind",
-	"enabled", "group", "held", "interval_seconds", "issued_at", "labels", "memory",
-	"mode", "node", "org", "reason", "refused", "registration_token",
+	"enabled",
+	"group", "held", "interval_seconds", "issued_at", "labels", "memory",
+	"mode", "node", "node_docker_restart", "org", "reason", "refused", "registration_token",
 	"registration_token_expires_at", "socket_path", "socket_proxy",
 }
 

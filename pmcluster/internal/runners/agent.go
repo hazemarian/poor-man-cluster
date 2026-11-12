@@ -291,6 +291,15 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 		return res, err
 	}
 
+	// Persist the node-level part of the decision before the container work: the
+	// watchdog reads it, and it must reflect the leader's answer even when starting
+	// the runner fails two lines below.
+	if a.StatePath != "" {
+		if err := WriteNodePolicy(filepath.Dir(a.StatePath), NodePolicy{DockerRestart: as.NodeDockerRestart}); err != nil {
+			a.Log.Warn().Err(err).Msg("runners — could not persist the node policy; the watchdog keeps its previous setting")
+		}
+	}
+
 	spec := Spec{
 		Org:         as.Org,
 		Group:       as.Group,

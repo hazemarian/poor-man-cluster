@@ -175,21 +175,23 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// installed with — measured after the watchdog shipped, where the leader
 		// had memory bounds and an active watchdog timer and the OOM-killed
 		// worker had neither.
-		// The docker socket reaches the watchdog only when the operator enabled it:
-		// its remedy restarts every container on this node. The store is opened
-		// briefly here, following the same guarded pattern as the volume-root lookup
-		// below: before `pmcluster init` there is no data.db, and creating one just to
-		// read a default would defeat the init guard.
-		sock := ""
+		// The unit always carries --docker-socket: that is the CAPABILITY. Whether it
+		// acts is decided at run time from the node policy document, because a worker
+		// has no store to read the setting from — the first version gated the unit on
+		// the local store, which on a worker is always absent, so the feature silently
+		// did nothing on exactly the nodes it was written for (measured on
+		// nxt-sw-6-w: setting true, unit never gained the flag).
+		sock := defaultDockerSocket
 		if _, statErr := os.Stat(cfg.DBPath()); statErr == nil {
 			if st, err := store.Open(cfg.DBPath()); err == nil {
-				if cluster.LoadNodeDockerRestart(cmd.Context(), st) {
-					sock = defaultDockerSocket
+				if werr := runners.WriteNodePolicy(cfg.DataDir,
+					runners.NodePolicy{DockerRestart: cluster.LoadNodeDockerRestart(cmd.Context(), st)}); werr != nil {
+					log.Warn().Err(werr).Msg("could not write the node policy; the watchdog keeps its previous setting")
 				}
 				_ = st.Close()
 			}
 		}
-		go convergeSystemd(func(f string, a ...any) { log.Info().Msgf(f, a...) }, sock)
+		go convergeSystemd(func(f string, a ...any) { log.Info().Msgf(f, a...) }, sock, cfg.DataDir)
 
 		// Publish this node's binary version so skew is visible before an
 		// upgrade script discovers it.

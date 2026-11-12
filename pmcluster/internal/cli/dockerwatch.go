@@ -2,10 +2,12 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -48,6 +50,10 @@ const (
 	dockerWatchStateFile = "watchdog-docker.json"
 	// defaultDockerSocket is where dockerd listens on every node this platform runs.
 	defaultDockerSocket = "/var/run/docker.sock"
+	// nodePolicyFileName is the document the leader's node-level decisions reach this
+	// node through. Written by the runner agent (worker) or the daemon (manager), read
+	// by the watchdog.
+	nodePolicyFileName = "node-policy.json"
 )
 
 // dockerVerdict is what one docker-watch run decided.
@@ -159,6 +165,28 @@ func watchDockerOnce(ctx context.Context, statePath string, d dockerWatchDeps) (
 	st.LastRestart = now.Unix()
 	_ = saveWatchdogState(statePath, st)
 	return verdict, nil
+}
+
+// nodePolicyArmsDocker reads the leader's decision from the node policy document.
+//
+// Anything unreadable, missing or malformed means NOT armed: this decides whether a
+// root timer restarts a node's docker daemon, and every failure mode must fall towards
+// doing nothing.
+func nodePolicyArmsDocker(path string) bool {
+	if path == "" {
+		return false
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var doc struct {
+		DockerRestart bool `json:"docker_restart"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return false
+	}
+	return doc.DockerRestart
 }
 
 // probeDockerSocket asks the daemon for /_ping over its unix socket. Using the API

@@ -73,6 +73,15 @@ type Assignment struct {
 	// socket at SocketPath, false is the documented raw-socket debug fallback.
 	SocketProxy bool   `json:"socket_proxy"`
 	SocketPath  string `json:"socket_path"`
+	// NodeDockerRestart arms THIS node's watcher to restart docker when its socket
+	// stops answering.
+	//
+	// It travels in the assignment because the setting lives on the leader and a
+	// worker has no store to read it from — the first version read the local store,
+	// which on a worker always returned the default, so the feature silently did
+	// nothing on exactly the nodes that need it (measured on nxt-sw-6-w: the setting
+	// said true, the watchdog unit never gained the flag).
+	NodeDockerRestart bool `json:"node_docker_restart"`
 	// DinD asks the node for a private docker daemon instead of either socket.
 	// It travels in this document because the decision is the operator's, made once
 	// on the leader: a worker that chose for itself would make "what does a job
@@ -178,12 +187,13 @@ func ResolveAssignment(cfg Config, nodes []runtime.Node, node string) (Assignmen
 	// selected" for a node that IS selected.
 	cfg.Node = node
 	a := Assignment{
-		Node:        node,
-		Org:         cfg.Org,
-		Group:       cfg.Group,
-		SocketProxy: cfg.SocketProxy,
-		DinD:        cfg.DinD,
-		SocketPath:  cfg.SocketPath,
+		Node:              node,
+		Org:               cfg.Org,
+		Group:             cfg.Group,
+		SocketProxy:       cfg.SocketProxy,
+		DinD:              cfg.DinD,
+		NodeDockerRestart: cfg.NodeDockerRestart,
+		SocketPath:        cfg.SocketPath,
 		// The cap travels RESOLVED FOR THIS NODE: a worker cannot read
 		// github_runner_node_memory (configs are manager-only), so if the
 		// leader sent the cluster default the node would start the container

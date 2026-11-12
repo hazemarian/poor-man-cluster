@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -162,5 +163,44 @@ func TestWatchdogServiceOnlyWatchesDockerWhenEnabled(t *testing.T) {
 		defaultWatchdogProbeURL, defaultDockerSocket)
 	if !strings.Contains(on, "--docker-socket "+defaultDockerSocket) {
 		t.Fatalf("the enabled unit does not pass the socket:\n%s", on)
+	}
+	// Capability and permission are separate flags: the socket is what the watchdog
+	// CAN reach, the policy file is what the leader SAID. A unit with the socket and
+	// no policy stays disarmed, which is the safe ship state.
+	if !strings.Contains(on, "--policy-file /root/.pmcluster/"+nodePolicyFileName) {
+		t.Fatalf("the unit does not read the node policy document:\n%s", on)
+	}
+}
+
+// TestNodePolicyArmsDockerIsFailClosed: this decides whether a root timer restarts a
+// node's docker daemon. Missing, unreadable, malformed and false must all mean "do
+// nothing"; only an explicit true may arm it.
+func TestNodePolicyArmsDockerIsFailClosed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, nodePolicyFileName)
+
+	if nodePolicyArmsDocker("") {
+		t.Fatal("an empty path armed docker")
+	}
+	if nodePolicyArmsDocker(path) {
+		t.Fatal("a missing policy file armed docker")
+	}
+	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if nodePolicyArmsDocker(path) {
+		t.Fatal("a malformed policy file armed docker")
+	}
+	if err := os.WriteFile(path, []byte(`{"docker_restart":false}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if nodePolicyArmsDocker(path) {
+		t.Fatal("an explicit false armed docker")
+	}
+	if err := os.WriteFile(path, []byte(`{"docker_restart":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !nodePolicyArmsDocker(path) {
+		t.Fatal("an explicit true did not arm docker")
 	}
 }

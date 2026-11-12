@@ -40,7 +40,7 @@ var stopUnitDropIn = "/etc/systemd/system/pmcluster.service.d/memory.conf"
 //
 // Best effort by design: a container without systemd, a dev box or a non-root run
 // must start normally, so every failure is a log line, never an error.
-func convergeSystemd(logf func(string, ...any), dockerSocket string) {
+func convergeSystemd(logf func(string, ...any), dockerSocket, dataDir string) {
 	if os.Geteuid() != 0 {
 		return
 	}
@@ -92,7 +92,13 @@ func convergeSystemd(logf func(string, ...any), dockerSocket string) {
 	// Independent of the unit, and effective at once. enable --now is
 	// idempotent, which is what makes a node that predates the watchdog watch.
 	var buf bytes.Buffer
-	installWatchdog(&buf, exe, filepath.Join(os.Getenv("HOME"), ".pmcluster"), dockerSocket)
+	if dataDir == "" {
+		// Same fallback the agent uses: one directory for the watchdog state, the
+		// applied assignment and the node policy, so the two processes cannot end up
+		// reading different files.
+		dataDir = filepath.Join(os.Getenv("HOME"), ".pmcluster")
+	}
+	installWatchdog(&buf, exe, dataDir, dockerSocket)
 	if out := strings.TrimSpace(buf.String()); out != "" {
 		logf("watchdog: %s", strings.ReplaceAll(out, "\n", "; "))
 	}

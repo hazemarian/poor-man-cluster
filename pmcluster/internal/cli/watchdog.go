@@ -361,6 +361,9 @@ var (
 	// watchdogDockerSocket is empty by default: watching docker is a deliberate
 	// choice because its remedy restarts every container on the node.
 	watchdogDockerSocket string
+	// watchdogPolicyFile is the node policy document the leader's decision reaches
+	// this node through. Empty means "no policy": not armed.
+	watchdogPolicyFile string
 )
 
 var healthWatchCmd = &cobra.Command{
@@ -417,7 +420,7 @@ update'. Hidden because it is not an operator command.`,
 		// The docker check runs SECOND and its failure never hides the daemon verdict:
 		// the node can have a healthy control plane and a dead dockerd, which is
 		// exactly the state that took nxt-sw-3-w out of the cluster for hours.
-		if watchdogDockerSocket != "" {
+		if watchdogDockerSocket != "" && nodePolicyArmsDocker(watchdogPolicyFile) {
 			dockerState := filepath.Join(filepath.Dir(statePath), dockerWatchStateFile)
 			_, derr := watchDockerOnce(ctx, dockerState, dockerWatchDeps{
 				Probe:       func(ctx context.Context) error { return probeDockerSocket(ctx, watchdogDockerSocket) },
@@ -446,6 +449,9 @@ func init() {
 		"path to the watchdog state file (default <data_dir>/"+watchdogStateFile+")")
 	healthWatchCmd.Flags().StringVar(&watchdogProbeURL, "probe-url", defaultWatchdogProbeURL,
 		"URL probed with a "+WatchdogProbeTimeout.String()+" timeout")
+	healthWatchCmd.Flags().StringVar(&watchdogPolicyFile, "policy-file", "",
+		"node policy document written by the leader's decision; without it the docker "+
+			"check stays disarmed")
 	healthWatchCmd.Flags().StringVar(&watchdogDockerSocket, "docker-socket", "",
 		"also watch this docker socket and restart docker.service when it stops answering "+
 			"(empty = disabled; the daemon cannot restart dockerd itself)")

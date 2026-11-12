@@ -180,9 +180,15 @@ func renderWatchdogService(execStart, statePath, probeURL string) string {
 // with different remedies, and because restarting docker stops every container on the
 // node — an operator turns that on deliberately, never by upgrading.
 func renderWatchdogServiceWithDocker(execStart, statePath, probeURL, dockerSocket string) string {
+	// The socket is the CAPABILITY and the policy file is the PERMISSION. They are
+	// separate on purpose: a worker has no store to read `node_docker_restart` from,
+	// so the leader's answer reaches it through the policy document its agent writes.
+	// Gating the unit on a setting instead meant the feature silently did nothing on
+	// exactly the nodes that needed it.
 	dockerFlag := ""
 	if s := strings.TrimSpace(dockerSocket); s != "" {
-		dockerFlag = " --docker-socket " + s
+		policy := filepath.Join(filepath.Dir(statePath), nodePolicyFileName)
+		dockerFlag = " --docker-socket " + s + " --policy-file " + policy
 	}
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster health watchdog (restarts a wedged daemon)

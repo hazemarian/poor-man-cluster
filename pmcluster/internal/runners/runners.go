@@ -107,6 +107,9 @@ type Config struct {
 	SocketProxy bool
 	// SocketPath is the filtered socket the runner mounts.
 	SocketPath string
+	// NodeDockerRestart arms the node's watchdog to restart dockerd. Leader-owned:
+	// a worker cannot read the setting, so it is carried, not fetched.
+	NodeDockerRestart bool
 	// DinD gives the job its own docker daemon inside a privileged sibling
 	// container: a real, unfiltered API, removed with the job. It is the mode that
 	// makes `docker compose` and testcontainers work at all.
@@ -134,19 +137,20 @@ type Config struct {
 // LoadConfig reads the runner settings from the store.
 func LoadConfig(ctx context.Context, st *store.Store, node string) Config {
 	return Config{
-		Enabled:         cluster.LoadGitHubRunnersEnabled(ctx, st),
-		Org:             cluster.LoadGitHubRunnerOrg(ctx, st),
-		Group:           cluster.LoadGitHubRunnerGroup(ctx, st),
-		Nodes:           ParseNodes(cluster.LoadGitHubRunnerNodes(ctx, st)),
-		SocketProxy:     cluster.LoadGitHubRunnerSocketProxy(ctx, st),
-		DinD:            cluster.LoadGitHubRunnerDinD(ctx, st),
-		SocketPath:      cluster.LoadGitHubRunnerSocketPath(ctx, st),
-		Memory:          cluster.LoadGitHubRunnerMemory(ctx, st),
-		NodeMemory:      ParseNodeMemory(cluster.LoadGitHubRunnerNodeMemory(ctx, st)),
-		AllowLeader:     cluster.LoadGitHubRunnerAllowLeader(ctx, st),
-		IntervalSeconds: cluster.LoadGitHubRunnerAssignmentInterval(ctx, st),
-		Node:            node,
-		Image:           DefaultImage,
+		Enabled:           cluster.LoadGitHubRunnersEnabled(ctx, st),
+		Org:               cluster.LoadGitHubRunnerOrg(ctx, st),
+		Group:             cluster.LoadGitHubRunnerGroup(ctx, st),
+		Nodes:             ParseNodes(cluster.LoadGitHubRunnerNodes(ctx, st)),
+		SocketProxy:       cluster.LoadGitHubRunnerSocketProxy(ctx, st),
+		DinD:              cluster.LoadGitHubRunnerDinD(ctx, st),
+		NodeDockerRestart: cluster.LoadNodeDockerRestart(ctx, st),
+		SocketPath:        cluster.LoadGitHubRunnerSocketPath(ctx, st),
+		Memory:            cluster.LoadGitHubRunnerMemory(ctx, st),
+		NodeMemory:        ParseNodeMemory(cluster.LoadGitHubRunnerNodeMemory(ctx, st)),
+		AllowLeader:       cluster.LoadGitHubRunnerAllowLeader(ctx, st),
+		IntervalSeconds:   cluster.LoadGitHubRunnerAssignmentInterval(ctx, st),
+		Node:              node,
+		Image:             DefaultImage,
 	}
 }
 
