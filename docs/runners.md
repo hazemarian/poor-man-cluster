@@ -299,6 +299,28 @@ its *siblings*, outside that cgroup, so a `docker build` could still OOM the hos
 creates lives inside the capped container, and one number finally bounds the whole
 tree.
 
+## Who starts a runner on which node
+
+A runner is a **local container**, so only the node itself can create it. That makes the
+delivery path — not the placement rule — the thing that decides whether a manager can ever
+host one:
+
+| Node | Where its decision comes from |
+| --- | --- |
+| the leader | its own store: `runRunnerLoop` reconciles from the settings |
+| a worker | the leader's assignment, over the swarm's mTLS channel |
+| a **following manager** | the leader's assignment, same as a worker |
+
+The third row is the one that used to be missing. A follower's store answers "standing
+by" — settings are current only on the leader — so selecting another manager in the
+console produced nothing at all: no error, no log, no container. Allowing managers in the
+placement rule was necessary and not sufficient; the node also needs somebody to tell it.
+
+The leader never fetches from itself: `runRunnerLoop` owns it, and an assignment loop
+applying a second answer there would race over one container. The loop checks per pass
+whether this node leads, because the loops deliberately start before leadership is
+resolved.
+
 ## Caches that outlive the job
 
 Everything about a runner is ephemeral except the caches, because re-downloading

@@ -69,6 +69,11 @@ type perNodeDeps struct {
 	Hostname string
 	// Container is the local container runtime the agent drives.
 	Container runners.LocalDocker
+	// Client answers "am I the leader" for a MANAGER. A follower manager cannot read
+	// the settings (they are current only on the leader), so it learns its runner
+	// decision the same way a worker does — from the leader's assignment. Nil on a
+	// worker, where the question does not arise.
+	Client runtime.Client
 	// Assignment fetches this node's assignment (nil on a manager).
 	Assignment assignmentFetcher
 	// StatePath is where the worker records the applied assignment (0600).
@@ -100,12 +105,13 @@ func (l *perNodeLoops) Fetches() int64 { return l.assignmentFetches.Load() }
 func startPerNodeLoops(ctx context.Context, d perNodeDeps) *perNodeLoops {
 	lp := &perNodeLoops{FirstAssignment: make(chan struct{})}
 
-	if d.Worker {
-		if d.Assignment == nil {
-			close(lp.FirstAssignment)
-		} else {
-			go lp.runAssignmentAgent(ctx, d)
-		}
+	// A WORKER and a FOLLOWING MANAGER both learn their runner decision from the
+	// leader: the worker because it has no store, the follower because its store is
+	// stale by design ("standing by"). Both are the same client, so both start here.
+	if d.Assignment == nil {
+		close(lp.FirstAssignment)
+	} else {
+		go lp.runAssignmentAgent(ctx, d)
 	}
 	return lp
 }
@@ -135,6 +141,18 @@ func (lp *perNodeLoops) runAssignmentAgent(ctx context.Context, d perNodeDeps) {
 		// FirstAssignment means "the first pass finished", whatever it found — a
 		// watcher waiting on it must not hang because the leader was unreachable.
 		defer markFirst()
+		// A FOLLOWING manager has no current settings — its store says "standing by" —
+		// so it takes the same path as a worker. The leader, by contrast, has the store
+		// and must not fetch from itself: runRunnerLoop() there already owns it, and two
+		// loops applying different answers would race over one container.
+		//
+		// This check runs per pass, not once at start, because the loops deliberately
+		// start BEFORE leadership is resolved (a worker never gets past that wait).
+		if d.Client != nil {
+			if leader, found, lerr := isSwarmLeader(ctx, d.Client, d.Hostname); lerr == nil && found && leader {
+				return
+			}
+		}
 		a, source, err := d.Assignment.Fetch(ctx)
 		if err != nil {
 			if errors.Is(err, runners.ErrNoSwarmCertificate) {

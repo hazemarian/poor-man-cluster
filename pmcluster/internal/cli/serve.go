@@ -260,7 +260,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			Worker:     worker,
 			Hostname:   hostname,
 			Container:  &runners.CLIDocker{},
-			Assignment: assignmentClientFor(dc, worker),
+			Assignment: assignmentClientFor(dc),
+			Client:     dc,
 			StatePath:  agentStatePath(cfg.DataDir),
 			Log:        log,
 		})

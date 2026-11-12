@@ -385,3 +385,99 @@ func (f *fakeLocalDocker) RemoveVolume(_ context.Context, name string) error {
 	f.volumesRemoved = append(f.volumesRemoved, name)
 	return nil
 }
+
+// TestFollowerManagerAppliesTheLeadersAssignment is the regression for "I can only
+// select 5, not 4". Allowing managers in the placement rule was necessary and not
+// sufficient: a FOLLOWING manager's store says "standing by", so nothing on that node ever
+// learned it had been selected, and the console offered a node that could never start a
+// runner. It now learns the decision the way a worker does.
+func TestFollowerManagerAppliesTheLeadersAssignment(t *testing.T) {
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	docker := newFakeLocalDocker()
+	fetcher := &fakeFetcher{
+		a: runners.Assignment{
+			Node: host, Enabled: true, Org: "acme", Group: "pmcluster",
+			Memory: "2560m", Mode: runners.ModeEphemeral, Labels: runners.Labels,
+			RegistrationToken: "reg-token", Reason: "selected as a runner node",
+		},
+		source: "https://10.7.224.11:9092",
+	}
+	loops := startPerNodeLoops(ctx, perNodeDeps{
+		// Not a worker: a manager. Client answers "am I the leader" — this fake says no.
+		Worker:     false,
+		Client:     &leaderFake{info: runtime.Info{SwarmLocalNodeState: "active", SwarmControlAvailable: true}},
+		Hostname:   host,
+		Container:  docker,
+		Assignment: fetcher,
+		StatePath:  filepath.Join(t.TempDir(), "runner_assignment.json"),
+		Log:        zerolog.Nop(),
+	})
+
+	select {
+	case <-loops.FirstAssignment:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a follower manager never ran an assignment loop; it can only ever sit idle")
+	}
+	if len(docker.Runs()) == 0 {
+		t.Fatal("the follower manager did not start the runner it was told to run")
+	}
+}
+
+// TestTheLeaderDoesNotFetchFromItself: the leader has the store, and runRunnerLoop owns
+// its own runner. An assignment loop that also applied there would fight it over one
+// container — so the loop stands down the moment this node becomes the leader.
+func TestTheLeaderDoesNotFetchFromItself(t *testing.T) {
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fetcher := &countingFetcher{}
+	loops := startPerNodeLoops(ctx, perNodeDeps{
+		Client: &leaderFake{
+			info: runtime.Info{SwarmLocalNodeState: "active", SwarmControlAvailable: true},
+			// The node list says this node IS the leader.
+			nodes: []runtime.Node{{Hostname: host, Role: "manager", IsLeader: true}},
+		},
+		Hostname:   host,
+		Container:  newFakeLocalDocker(),
+		Assignment: fetcher,
+		StatePath:  filepath.Join(t.TempDir(), "runner_assignment.json"),
+		Log:        zerolog.Nop(),
+	})
+	select {
+	case <-loops.FirstAssignment:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the loop never finished a pass")
+	}
+	if n := fetcher.Count(); n != 0 {
+		t.Fatalf("the leader fetched its own assignment %d times; the store loop owns it", n)
+	}
+}
+
+// countingFetcher records how often the loop asked the leader.
+type countingFetcher struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *countingFetcher) Fetch(context.Context) (runners.Assignment, string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+	return runners.Assignment{}, "", nil
+}
+
+func (c *countingFetcher) Count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}

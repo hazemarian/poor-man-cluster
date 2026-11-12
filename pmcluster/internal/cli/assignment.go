@@ -25,8 +25,12 @@ import (
 // assignmentClientFor builds the worker's fetcher. A manager gets nil: it reads
 // the settings itself, and a manager fetching its own assignment would be a
 // second code path for the same decision.
-func assignmentClientFor(dc runtime.Client, worker bool) assignmentFetcher {
-	if !worker || dc == nil {
+// assignmentClientFor builds the client every node that is NOT the leader uses to learn
+// its runner decision. That used to mean "a worker" only, which left a following manager
+// with no path at all: it has no current settings to read, so selecting it in the console
+// produced nothing, forever, with no error anywhere. The leader keeps using its store.
+func assignmentClientFor(dc runtime.Client) assignmentFetcher {
+	if dc == nil {
 		return nil
 	}
 	return &runners.Client{
