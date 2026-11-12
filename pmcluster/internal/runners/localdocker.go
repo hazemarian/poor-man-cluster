@@ -132,8 +132,14 @@ func (d *CLIDocker) RemoveVolume(ctx context.Context, name string) error {
 		return fmt.Errorf("docker volume rm: empty volume name")
 	}
 	if _, err := d.exec(ctx, "volume", "rm", name); err != nil {
-		msg := err.Error()
-		if strings.Contains(msg, "no such volume") || strings.Contains(msg, "No such volume") {
+		msg := strings.ToLower(err.Error())
+		// Docker has two ways of saying "it is not there", and they differ by version:
+		// "no such volume" from `volume inspect`, and "volume X not found" from
+		// `volume rm`. Only one of them was matched, so a first start on a node — where
+		// the dind volume does not exist yet — failed with
+		// `docker volume rm pmc-…-docker: volume pmc-…-docker not found` and the runner
+		// never started.
+		if strings.Contains(msg, "no such volume") || strings.Contains(msg, "not found") {
 			return nil
 		}
 		// "volume is in use" means a container still holds it: teardown removes the

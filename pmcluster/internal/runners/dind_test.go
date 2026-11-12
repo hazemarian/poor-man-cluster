@@ -185,3 +185,35 @@ func TestNonDinDRunnersAreUnchanged(t *testing.T) {
 		t.Fatalf("the proxy path is no longer mounted: %v", d.runCalls[0])
 	}
 }
+
+// TestRemoveVolumeTreatsBothMissingWordingsAsSuccess is the regression for the first
+// start on a fresh node: `docker volume rm` on a volume that was never created answers
+// "volume X not found", while `volume inspect` says "no such volume". Only the second
+// was recognised, so StopRunner failed before the runner ever started, with an error that
+// reads like a broken teardown.
+func TestRemoveVolumeTreatsBothMissingWordingsAsSuccess(t *testing.T) {
+	for _, msg := range []string{
+		"Error response from daemon: volume pmc-n1-org-docker not found",
+		"Error response from daemon: get pmc-n1-org-docker: no such volume",
+		"Error: No such volume: pmc-n1-org-docker",
+	} {
+		// The argument check is first: the empty-name guard must not be what makes this
+		// pass.
+		if err := roundTripRemoveVolume(t, msg); err != nil {
+			t.Fatalf("%q was treated as a real failure: %v", msg, err)
+		}
+	}
+	// A volume still IN USE is a genuine ordering bug — containers must go first — and
+	// must stay visible.
+	if err := roundTripRemoveVolume(t, "Error response from daemon: remove pmc-n1-org-docker: volume is in use - [abc]"); err == nil {
+		t.Fatal("a volume in use was reported as success")
+	}
+}
+
+func roundTripRemoveVolume(t *testing.T, daemonSays string) error {
+	t.Helper()
+	d := &CLIDocker{Exec: func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New(daemonSays)
+	}}
+	return d.RemoveVolume(context.Background(), "pmc-n1-org-docker")
+}

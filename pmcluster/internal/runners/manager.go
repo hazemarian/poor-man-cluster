@@ -238,10 +238,11 @@ func (m *Manager) Reconcile(ctx context.Context) (Result, error) {
 	return res, nil
 }
 
-// checkNodeRole refuses the pass when any selected node is a manager, and when
-// this node is the leader. It needs the live node list, which is why it is here
-// and not in the settings validator (the console's picker makes the same check
-// against the same list).
+// checkNodeRole refuses the pass when a selected node is a manager — including this
+// node when it is the leader, UNLESS `github_runner_allow_leader` is on. The switch is
+// read here through LoadConfig, so the reconcile and the console's picker reach the same
+// verdict from the same setting. It needs the live node list, which is why it is here and
+// not in the settings validator.
 func (m *Manager) checkNodeRole(ctx context.Context) error {
 	if m.Nodes == nil {
 		return nil
