@@ -160,6 +160,10 @@ const (
 	// the cluster's API with it.
 	settingGitHubRunnerNodes = "github_runner_nodes"
 
+	// settingGitHubRunnerSocketProxy is LEGACY. Runners get a daemon of their own
+	// (github_runner_dind) because the filtered socket only ever supported
+	// `docker build`; this key now matters solely for a node with dind turned off.
+	//
 	// settingGitHubRunnerSocketProxy makes runners talk to the platform's own
 	// filtered docker socket (internal/socketproxy) instead of the host's real
 	// one. Default true. The raw-socket fallback exists for debugging a build

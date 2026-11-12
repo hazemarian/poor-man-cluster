@@ -324,12 +324,21 @@ func levelRank(level string) int {
 
 // RolesOf is a small helper the console's node picker uses to render a node's
 // eligibility. It returns (isWorker, reason).
-func RolesOf(n runtime.Node) (bool, string) {
+// RolesOf answers "may this node be picked, and why not" for the console's picker.
+//
+// allowLeader mirrors `github_runner_allow_leader`. When it is on, the leader becomes
+// selectable and the returned string becomes a CAUTION rather than a refusal — the
+// picker renders it as a warning pill instead of a disabled row, because "allowed but
+// contended" and "not allowed" are different facts and an operator needs to see which.
+func RolesOf(n runtime.Node, allowLeader bool) (bool, string) {
 	if n.IsLeader {
-		return false, "the swarm leader is the control plane — a build here marks the node Down"
+		if allowLeader {
+			return true, "the leader — a heavy job competes with the control plane for CPU and memory"
+		}
+		return false, "the swarm leader is the control plane — turn on \"Allow runners on the leader\" to pick it anyway"
 	}
 	if strings.EqualFold(n.Role, "manager") {
-		return false, "managers run the control plane (1 vCPU) — a build here marks the node Down"
+		return false, "another manager holds the control plane — pick a worker, or allow the leader explicitly"
 	}
 	return true, ""
 }

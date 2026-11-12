@@ -493,8 +493,12 @@ var clusterSettingKeys = []string{
 	// Per-node memory caps are written by the same picker (it saves both keys in
 	// one submit), so this form carries it the same way and never edits it.
 	"github_runner_node_memory",
-	"github_runner_socket_proxy",
-	"github_runner_socket_path",
+	// The docker socket keys are deliberately NOT here any more. Runners get a daemon
+	// of their own (DinD), so a form field that says "filtered socket" both misdescribes
+	// what happens and invites an operator to set something that changes nothing. The
+	// keys still exist and are still honoured for a node running with dind off; they are
+	// just not something a panel should be offering as a choice.
+	"github_runner_dind",
 	"github_runner_memory",
 	"github_runner_allow_leader",
 }
@@ -506,7 +510,7 @@ var clusterBoolSettings = map[string]bool{
 	"sso_enabled":                true,
 	"edge_login_disabled":        true,
 	"github_runners_enabled":     true,
-	"github_runner_socket_proxy": true,
+	"github_runner_dind":         true,
 	"github_runner_allow_leader": true,
 }
 

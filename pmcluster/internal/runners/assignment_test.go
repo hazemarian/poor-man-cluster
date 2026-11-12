@@ -589,3 +589,66 @@ func TestAgentRemovesARunnerHeldByAnOperator(t *testing.T) {
 		t.Fatalf("a held runner was restarted on a later pass")
 	}
 }
+
+// TestCheckPlacementHonoursAllowLeader is the regression for a switch that existed and
+// did nothing: github_runner_allow_leader was read into Config, carried to the placement
+// check, and never consulted — so the console offered the toggle and the daemon refused
+// the leader anyway.
+func TestCheckPlacementHonoursAllowLeader(t *testing.T) {
+	nodes := []runtime.Node{
+		{Hostname: "nxt-sw-5-m", Role: "manager", IsLeader: true},
+		{Hostname: "nxt-sw-1-m", Role: "manager"},
+		{Hostname: "nxt-sw-6-w", Role: "worker"},
+	}
+
+	// Off: the leader is refused, as it always was.
+	off := Config{Nodes: []string{"nxt-sw-5-m"}}
+	if err := CheckPlacement(off, nodes); !errors.Is(err, ErrManagerNode) {
+		t.Fatalf("with allow-leader off, err = %v, want ErrManagerNode", err)
+	}
+
+	// On: the leader is allowed.
+	on := Config{Nodes: []string{"nxt-sw-5-m"}, AllowLeader: true}
+	if err := CheckPlacement(on, nodes); err != nil {
+		t.Fatalf("with allow-leader on, the leader was still refused: %v", err)
+	}
+
+	// On does NOT mean "any manager": a non-leader manager stays refused, because the
+	// switch is about the leader and saying otherwise would widen it silently.
+	other := Config{Nodes: []string{"nxt-sw-1-m"}, AllowLeader: true}
+	if err := CheckPlacement(other, nodes); !errors.Is(err, ErrManagerNode) {
+		t.Fatalf("allow-leader let a non-leader manager through: %v", err)
+	}
+
+	// A worker is unaffected either way.
+	worker := Config{Nodes: []string{"nxt-sw-6-w"}, AllowLeader: true}
+	if err := CheckPlacement(worker, nodes); err != nil {
+		t.Fatalf("a worker was refused: %v", err)
+	}
+}
+
+// TestRolesOfTellsAllowedFromRefused: the picker has three row states — pickable,
+// pickable-with-a-cost, refused — and the leader with the switch on is the middle one.
+func TestRolesOfTellsAllowedFromRefused(t *testing.T) {
+	leader := runtime.Node{Hostname: "nxt-sw-5-m", Role: "manager", IsLeader: true}
+
+	ok, note := RolesOf(leader, false)
+	if ok {
+		t.Fatal("the leader was selectable with allow-leader off")
+	}
+	if !strings.Contains(note, "Allow runners on the leader") {
+		t.Fatalf("the refusal does not name the switch that lifts it: %q", note)
+	}
+
+	ok, note = RolesOf(leader, true)
+	if !ok {
+		t.Fatal("the leader was refused with allow-leader on")
+	}
+	if !strings.Contains(note, "competes with the control plane") {
+		t.Fatalf("the allowed leader carries no caution: %q", note)
+	}
+
+	if ok, _ := RolesOf(runtime.Node{Hostname: "w", Role: "worker"}, false); !ok {
+		t.Fatal("a worker was refused")
+	}
+}

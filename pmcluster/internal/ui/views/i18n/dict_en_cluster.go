@@ -152,6 +152,8 @@ func init() {
 		"clustersettings.runner_group_hint":              "Created with visibility 'selected' when absent and never changed to 'all': an all-visible group would run workflow code from any repository in the org — including one an attacker can push to.",
 		"clustersettings.runner_socket_path":             "Filtered docker socket",
 		"clustersettings.runner_socket_path_hint":        "Absolute path on every node. The daemon listens here and forwards only the routes a build needs; a runner mounts this socket, never /var/run/docker.sock.",
+		"clustersettings.runner_dind":                    "Give each job its own docker daemon (DinD)",
+		"clustersettings.runner_dind_hint":               "On by default. Every job gets a private dockerd inside a privileged container, so `docker compose`, testcontainers and anything else work as they do everywhere else — and the whole tree is bounded by the memory cap above. The host's docker socket is never mounted, and the daemon, the runner and their volume are removed when the job ends. Turn it off only to fall back to the platform's filtered socket, which supports `docker build` and little else.",
 		"clustersettings.runner_socket_proxy":            "Route the runner's docker access through the filtered socket",
 		"clustersettings.runner_socket_proxy_hint":       "On by default, and the only supported mode for a workflow you do not control. Turning it off mounts the host's raw docker socket in the runner: root on that node.",
 		"clustersettings.runner_nodes_note":              "Which workers may run a runner is chosen on the Runners panel, where each node's role and free memory are shown. Managers cannot be selected. The selection is kept when this form is saved.",

@@ -150,18 +150,16 @@
         <input id="cs-runner-memory" class="finput mono" type="text" name="github_runner_memory" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_memory"}}" placeholder="2560m">
         <span class="hint">{{T "clustersettings.runner_memory_hint"}}</span>
       </div>
-      <div class="field">
-        <label for="cs-runner-socket-path">{{T "clustersettings.runner_socket_path"}}</label>
-        <input id="cs-runner-socket-path" class="finput mono" type="text" name="github_runner_socket_path" dir="ltr" autocomplete="off" spellcheck="false" value="{{index .Settings "github_runner_socket_path"}}">
-        <span class="hint">{{T "clustersettings.runner_socket_path_hint"}}</span>
-      </div>
     </div>
 
-    <label class="check">
-      <input type="checkbox" name="github_runner_socket_proxy" value="true"{{if ne (index .Settings "github_runner_socket_proxy") "false"}} checked{{end}}>
-      <span>{{T "clustersettings.runner_socket_proxy"}}</span>
+    {{/* The switch that replaced the socket fields. Runners get a docker daemon of
+         their own inside a privileged container; asking an operator to choose a socket
+         path described an arrangement that no longer exists. */}}
+    <label class="check mt-16">
+      <input type="checkbox" name="github_runner_dind" value="true"{{if ne (index .Settings "github_runner_dind") "false"}} checked{{end}}>
+      <span>{{T "clustersettings.runner_dind"}}</span>
     </label>
-    <span class="hint">{{T "clustersettings.runner_socket_proxy_hint"}}</span>
+    <span class="hint">{{T "clustersettings.runner_dind_hint"}}</span>
 
     <label class="check mt-16">
       <input type="checkbox" name="github_runner_allow_leader" value="true"{{if eq (index .Settings "github_runner_allow_leader") "true"}} checked{{end}}>

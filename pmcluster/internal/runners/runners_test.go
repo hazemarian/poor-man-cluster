@@ -418,8 +418,14 @@ func TestManagerInTheListIsRefused(t *testing.T) {
 	if !errors.Is(err, ErrManagerNode) {
 		t.Fatalf("err = %v, want ErrManagerNode", err)
 	}
-	if !strings.Contains(err.Error(), "Down") {
-		t.Fatalf("err = %q, want the evidence (a build on the manager marks the node Down)", err)
+	// The message must name the cost AND the way out. It used to claim "1 vCPU" and
+	// "marks the node Down", which was true of one 1-vCPU box and false of this fleet —
+	// a refusal an operator cannot match to their own hardware reads as a bug.
+	if !strings.Contains(err.Error(), "competes with the API and the reconcile loop") {
+		t.Fatalf("err = %q, want the cost of a build on the control plane", err)
+	}
+	if !strings.Contains(err.Error(), "github_runner_allow_leader") {
+		t.Fatalf("err = %q, want the setting that lifts the refusal", err)
 	}
 	if len(h.docker.runCalls) != 0 {
 		t.Fatal("a runner was started on a manager node")

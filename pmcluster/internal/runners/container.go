@@ -55,10 +55,13 @@ func (s Spec) ContainerName() string { return s.RunnerName }
 // without the command word "run": the caller supplies both). It is a slice
 // rather than a string so a token never passes through a shell.
 //
-// The mounts are the security decision:
-//   - with the proxy (default), the runner gets ONLY the filtered socket at
-//     SocketPath, and DOCKER_HOST points at it. It never sees /var/run/docker.sock.
-//   - without it, the runner gets the host's raw socket: root on the node.
+// The mount is the security decision, and there are three modes:
+//   - DinD (default): the runner shares a socket VOLUME with a privileged sibling
+//     container running its own dockerd. It never sees /var/run/docker.sock, and a job
+//     gets a real docker API.
+//   - the filtered proxy (legacy, dind off): ONLY the socket at SocketPath, which
+//     carries `docker build` and little else.
+//   - the raw socket (debug fallback): root on the node.
 func (s Spec) Argv() ([]string, error) {
 	if err := ValidateOrg(s.Org); err != nil {
 		return nil, err

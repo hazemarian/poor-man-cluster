@@ -152,14 +152,26 @@ func (a Assignment) Interval() time.Duration {
 	return time.Duration(secs) * time.Second
 }
 
-// CheckPlacement refuses a selection that contains a manager or the leader. It is
-// the single implementation both the reconcile (Manager.checkNodeRole, for the
-// leader's own view) and the assignment resolver use, so "exactly as the
-// reconcile does" is literally one function.
+// CheckPlacement refuses a selection that contains a manager, unless the operator
+// lifted the rule for the leader with `github_runner_allow_leader`.
+//
+// One function, used by both the reconcile (Manager.checkNodeRole, for the leader's own
+// view) and the assignment resolver, so "exactly as the reconcile does" stays literally
+// true. That mattered: the switch was read into Config, plumbed all the way here, and
+// then ignored — the console offered it, the daemon never consulted it, and an operator
+// could tick it forever without a runner appearing.
+//
+// Why the leader is still a bad default: it serves the API and the control loop, so a
+// build competes for its CPU and memory. Why it is allowed at all: on a single node
+// there is nowhere else to put a runner, and with dind a job cannot reach the swarm or
+// the host socket, so the risk is contention rather than control.
 func CheckPlacement(cfg Config, nodes []runtime.Node) error {
 	for _, sel := range cfg.Nodes {
 		for _, n := range nodes {
 			if !strings.EqualFold(n.Hostname, sel) {
+				continue
+			}
+			if n.IsLeader && cfg.AllowLeader {
 				continue
 			}
 			if strings.EqualFold(n.Role, "manager") || n.IsLeader {

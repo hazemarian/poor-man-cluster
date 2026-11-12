@@ -246,7 +246,15 @@ Consequences worth knowing:
 - **The leader is a manager**, so it is refused too. `github_runner_allow_leader`
   exists only for a single-node cluster, where there is nothing else to select.
 
-## The docker socket: what a runner may do
+## The docker socket: the legacy path (dind off)
+
+> **This section describes the fallback.** Since v0.2.292 a runner gets a docker daemon
+> of its own — see [DinD](#dind-a-docker-daemon-per-job-default). The filtered socket
+> below is what a node uses when `github_runner_dind` is turned off, and it is kept
+> because it is the narrowest surface this platform can offer a workflow. It supports
+> `docker build` and very little else: `docker compose`, testcontainers, exec and
+> attached streams are refused route by route. Do not build a workflow against it unless
+> you specifically want that narrowness.
 
 A runner has to build images, which means talking to a docker daemon. The host's
 `/var/run/docker.sock` is root on that node **and**, on a manager, the whole swarm.

@@ -5,10 +5,10 @@
      model is the list — N selected nodes = N runners), and operate the runners
      that exist (state, kill, restart).
 
-     A manager can never be chosen. It is shown greyed with the reason rather than
-     hidden, because "why is my manager not in the list" is a question the page
-     has to answer: a build on the control plane's 1-vCPU manager marks the node
-     Down and takes the cluster API with it.
+     A manager is refused unless it is the leader and `github_runner_allow_leader` is
+     on. It is shown greyed with the reason rather than hidden, because "why is my
+     manager not in the list" is a question the page has to answer: a build competes
+     with the control plane for CPU and memory, and marks the node Down under load and takes the cluster API with it.
 
      Three table states, as everywhere else in the console: rows / unknown (the
      daemon did not answer — never rendered as "empty") / empty-but-actionable.
@@ -74,7 +74,11 @@
               </td>
               <td class="pick-name"><span class="mono">{{.Hostname}}</span></td>
               <td class="pick-role" data-label="{{T "runners.col_role"}}">
-                {{if .Selectable}}<span class="pill plain">{{.Role}}</span>
+                {{/* Three states, not two: pickable · pickable-with-a-cost · refused.
+                     Collapsing the middle one into either neighbour is what made the
+                     leader impossible to select even with the switch on. */}}
+                {{if .Caution}}<span class="pill warn" data-tip="{{.Caution}}"><i class="dot"></i>{{.Role}}</span>
+                {{else if .Selectable}}<span class="pill plain">{{.Role}}</span>
                 {{else}}<span class="pill warn" data-tip="{{.Reason}}"><i class="dot"></i>{{.Role}}</span>{{end}}
               </td>
               <td class="pick-state" data-label="{{T "runners.col_node_state"}}">

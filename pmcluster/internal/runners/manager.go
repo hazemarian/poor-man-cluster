@@ -65,7 +65,7 @@ var (
 	// the control plane's 1-vCPU manager marks the node Down and takes the
 	// cluster API with it — that happened on the live cluster with the telemetry
 	// loop, which is why this is a refusal rather than a warning.
-	ErrManagerNode = errors.New("refusing to run a runner on a manager node: the manager is the control plane (1 vCPU), and a build there marks the node Down and takes the cluster API with it — select a worker")
+	ErrManagerNode = errors.New("refusing to run a runner on a manager node: the manager runs the control plane, and a job there competes with the API and the reconcile loop — select a worker, or turn on github_runner_allow_leader to allow the leader")
 )
 
 // Result is what one reconcile pass did, for the log line and the apply
