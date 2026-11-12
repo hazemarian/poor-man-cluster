@@ -364,6 +364,62 @@ which would bypass the filter by nesting a daemon. A workflow that creates one
 explicitly will fail here; plain `docker build` and `docker buildx build` against
 the daemon's own driver are the supported path.
 
+## DinD: a docker daemon per job (default)
+
+The filtered socket only ever supported `docker build`. Everything else a normal CI
+job does was refused route by route — `docker compose up` (networks, volumes, exec,
+attached streams), testcontainers, `docker exec`, anything that streams. Each one had
+to be probed, sometimes allowed, and every repository paid the cost again in its own
+workflow. Two of those workarounds are worth keeping written down because they failed
+for reasons that are not obvious:
+
+- **publishing a port does not help.** docker's DNAT rule is
+  `-A DOCKER ! -i docker0 --dport N -j DNAT …`, so traffic arriving *from* a container
+  is deliberately not redirected. It falls through to the node's `INPUT` chain, where
+  ufw drops it: from a job, `host:22` is open and `host:<published>` is closed.
+- **the default bridge's address works but is not a contract.** It changes when the
+  container is recreated, and it is shared with every other container on the node.
+
+So a runner can instead get a daemon of its own (`github_runner_dind`, default
+`true`):
+
+```
+docker:dind (privileged, --memory <cap>)      ← its own dockerd, its own /var/lib/docker
+  volume <runner>-docker → /var/run           ← the inner socket, shared with:
+runner container                              ← DOCKER_HOST=unix:///var/run/docker.sock
+```
+
+A job then has a real, unfiltered docker API: `docker compose up -d --wait`,
+testcontainers, exec, networks and volumes all behave the way their documentation
+says. The workflow needs to know nothing about sockets — a compose file and a service
+name are enough.
+
+What it does **not** do: touch the host. `/var/run/docker.sock` is never mounted, so
+the swarm, the platform's own services and other jobs' containers stay out of reach.
+The price is `--privileged` on that one container, which is why it must hold nothing
+else — see [A runner that cannot fit the node](#a-runner-that-cannot-fit-the-node).
+
+**Teardown removes all three.** The runner container, the dind container and the
+socket volume. A surviving volume is a node that fills up one job at a time with
+images and build caches nobody will ever use again. `docker network rm` has no
+`--force`, so anything that removes a network detaches its endpoints first.
+
+**It also closes a hole the memory work left open.** A cap on the runner container
+bounded the runner and nothing else: the daemon created build and test containers as
+its *siblings*, outside that cgroup, so a `docker build` could still OOM the host — a
+1839 MB node died repeatedly despite a 1200m cap. With DinD every container the job
+creates lives inside the capped container, and one number finally bounds the whole
+tree.
+
+### The failures this produced, so they are not rediscovered
+
+| Symptom | Cause |
+| --- | --- |
+| `the dind daemon in <name> never answered` | the dind container was started from **`Spec.Image`**, i.e. the runner image, which exits without a token. It must be `DefaultDinDImage` (`docker:27-dind`). |
+| the runner starts and every `docker` call fails | the runner was started before the inner daemon was listening. A container that is `running` is not a daemon that answers: start the pair, then poll `docker exec <dind> docker info`. |
+| Kill in the console leaves a container running | only the runner container was removed. Kill goes through `StopRunner`, which removes the runner, the dind container and the volume. |
+| a job's containers survive to the next job | the pair is per *node*, not per job: the runner is ephemeral, so the pair is destroyed when the job container exits, and the next job gets a fresh daemon and a fresh volume. |
+
 ## Lifecycle
 
 1. **Enable.** The settings surface refuses an enabled feature that cannot work:
