@@ -422,7 +422,7 @@ update'. Hidden because it is not an operator command.`,
 		// exactly the state that took nxt-sw-3-w out of the cluster for hours.
 		if watchdogDockerSocket != "" && nodePolicyArmsDocker(watchdogPolicyFile) {
 			dockerState := filepath.Join(filepath.Dir(statePath), dockerWatchStateFile)
-			_, derr := watchDockerOnce(ctx, dockerState, dockerWatchDeps{
+			dverdict, derr := watchDockerOnce(ctx, dockerState, dockerWatchDeps{
 				Probe:       func(ctx context.Context) error { return probeDockerSocket(ctx, watchdogDockerSocket) },
 				UnitActive:  func(ctx context.Context) (bool, error) { return unitActiveNow(ctx, "docker") },
 				Restart:     func(ctx context.Context) error { return restartUnit(ctx, "docker") },
@@ -431,6 +431,20 @@ update'. Hidden because it is not an operator command.`,
 			})
 			if derr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "docker-watch: %v\n", derr)
+			}
+			// A restart of docker steals this node's daemon with it (PartOf), and the
+			// start budget may already be spent by the outage itself. Completing the
+			// action is this run's job: nothing else starts a `failed` unit when docker
+			// comes back.
+			if dverdict == DockerVerdictRestarted || dverdict == DockerVerdictReArmed {
+				if _, herr := healControlPlaneAfterDockerRestart(ctx, healDeps{
+					UnitActive:  func(ctx context.Context) (bool, error) { return unitActiveNow(ctx, unit) },
+					ResetFailed: func(ctx context.Context) error { return resetFailedUnit(ctx, unit) },
+					Start:       func(ctx context.Context) error { return restartUnit(ctx, unit) },
+					Out:         cmd.OutOrStdout(),
+				}); herr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "docker-watch: %v\n", herr)
+				}
 			}
 		}
 		if err != nil {

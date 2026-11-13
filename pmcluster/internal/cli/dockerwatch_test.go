@@ -204,3 +204,58 @@ func TestNodePolicyArmsDockerIsFailClosed(t *testing.T) {
 		t.Fatal("an explicit true did not arm docker")
 	}
 }
+
+// TestHealControlPlaneAfterDockerRestart is the regression for the last link in the
+// docker-watchdog chain: the watchdog restarts docker, `PartOf` takes this node's
+// daemon down with it, and the outage has already spent the unit's start budget — so
+// systemd answers "start request repeated too quickly" and leaves it `failed`, and
+// nothing starts a failed unit when docker returns (nxt-sw-6-w, 2026-11-13).
+func TestHealControlPlaneAfterDockerRestart(t *testing.T) {
+	t.Run("a daemon that survived the restart is left alone", func(t *testing.T) {
+		calls := 0
+		healed, err := healControlPlaneAfterDockerRestart(context.Background(), healDeps{
+			UnitActive:  func(context.Context) (bool, error) { return true, nil },
+			ResetFailed: func(context.Context) error { calls++; return nil },
+			Start:       func(context.Context) error { calls++; return nil },
+		})
+		if err != nil || healed {
+			t.Fatalf("healed=%v err=%v, want false/nil", healed, err)
+		}
+		if calls != 0 {
+			t.Fatalf("systemd calls = %d, want 0 (an active unit is not touched)", calls)
+		}
+	})
+
+	t.Run("reset-failed runs before the start, and a reset failure is not fatal", func(t *testing.T) {
+		var order []string
+		var out bytes.Buffer
+		healed, err := healControlPlaneAfterDockerRestart(context.Background(), healDeps{
+			UnitActive:  func(context.Context) (bool, error) { return false, nil },
+			ResetFailed: func(context.Context) error { order = append(order, "reset-failed"); return errors.New("nope") },
+			Start:       func(context.Context) error { order = append(order, "start"); return nil },
+			Out:         &out,
+		})
+		if err != nil {
+			t.Fatalf("err = %v, want nil (a refused reset must not stop the start)", err)
+		}
+		if !healed {
+			t.Fatal("healed = false, want true")
+		}
+		if strings.Join(order, ",") != "reset-failed,start" {
+			t.Fatalf("order = %v, want reset-failed then start", order)
+		}
+		if !strings.Contains(out.String(), "was down after the docker restart; started it") {
+			t.Fatalf("no journal line for the heal:\n%s", out.String())
+		}
+	})
+
+	t.Run("a start that fails is reported", func(t *testing.T) {
+		_, err := healControlPlaneAfterDockerRestart(context.Background(), healDeps{
+			UnitActive: func(context.Context) (bool, error) { return false, nil },
+			Start:      func(context.Context) error { return errors.New("start request repeated too quickly") },
+		})
+		if err == nil || !strings.Contains(err.Error(), "after the docker restart") {
+			t.Fatalf("err = %v, want the start failure surfaced", err)
+		}
+	})
+}

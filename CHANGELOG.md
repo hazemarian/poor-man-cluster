@@ -3,6 +3,22 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.320 — the watchdog finishes its own action
+
+**Why:** v0.2.319 made the daemon survive a dead dockerd and keep its policy armed, and
+the third live run of the same controlled test found the last link: the watchdog
+restarted docker, `PartOf` propagated that restart to `pmcluster`, the outage had already
+spent the unit's five-starts-in-five-minutes budget, and systemd answered "start request
+repeated too quickly" — `failed`, which nothing restarts when docker comes back. The node
+that the watchdog had just rescued was left with docker and no control plane, again.
+
+- **A docker restart now completes:** when this run restarted docker
+  (`restarted`/`reset-failed-and-restarted`), the watchdog checks its own unit, and if it
+  is down it runs `reset-failed` first (a start-limited unit refuses a start, silently)
+  then starts it. Only that run may do this — the watchdog knows it just took the daemon
+  down, which no general babysitter could claim, and the docker restart itself is
+  rate-limited to once per 30 minutes.
+
 ## v0.2.319 — the docker watchdog works; the control plane has to survive it
 
 **Why:** `node_docker_restart` exists so a dead `dockerd` fixes itself. It was exercised

@@ -145,6 +145,10 @@ every 60s   GET /_ping over the docker unix socket, 5s timeout
               the node looks recoverable while nothing is retried
 after       → probe again. If it still does not answer, say so: "this node needs an
               operator". Do not report a recovery that did not happen.
+            → then check THIS node's daemon: the docker restart propagated to it
+              through `PartOf`, and the outage may already have spent its start
+              budget. `reset-failed` + start it, because nothing else starts a
+              `failed` unit when docker comes back
 30 min      floor between restarts — three times the daemon-restart floor, because
             the blast radius is three times larger
 ```

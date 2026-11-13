@@ -91,6 +91,56 @@ func (d dockerWatchDeps) now() time.Time {
 	return time.Now()
 }
 
+// healDeps are the seams for completing a docker restart: the unit that docker's
+// restart can take down with it, and the three systemd verbs needed to bring it back.
+type healDeps struct {
+	UnitActive  func(ctx context.Context) (bool, error)
+	ResetFailed func(ctx context.Context) error
+	Start       func(ctx context.Context) error
+	Out         io.Writer
+}
+
+// healControlPlaneAfterDockerRestart brings this node's daemon back when the docker
+// restart this run just performed left it down.
+//
+// Restarting docker.service propagates to pmcluster through `PartOf=` (docker.service
+// lists it in `ConsistsOf=`), so the watchdog's own remedy is a thing that stops the
+// control plane. It is also the actor that knows it just did so, which no general
+// babysitter could: an inactive unit is normally systemd's business and an operator's
+// decision. Measured on nxt-sw-6-w (2026-11-13): docker came back, pmcluster did not —
+// five starts inside the unit's five-minute window had already been spent by the kills,
+// so systemd answered "start request repeated too quickly" and left it `failed`, and a
+// `failed` unit is not started again by anything when docker returns.
+//
+// reset-failed FIRST for the same reason the docker path needs it: a start-limited unit
+// refuses a start, and that refusal is silent.
+func healControlPlaneAfterDockerRestart(ctx context.Context, d healDeps) (bool, error) {
+	out := d.Out
+	if out == nil {
+		out = io.Discard
+	}
+	if active, err := d.UnitActive(ctx); err == nil && active {
+		return false, nil // nothing to do: the restart did not take it down
+	}
+	// Best effort: on a unit that is merely inactive (not start-limited) this is a
+	// no-op, and a refusal here must not stop the start below.
+	if d.ResetFailed != nil {
+		if err := d.ResetFailed(ctx); err != nil {
+			fmt.Fprintf(out, "pmcluster-watchdog: reset-failed %s: %v (continuing to the start)\n", dockerWatchUnitName, err)
+		}
+	}
+	if err := d.Start(ctx); err != nil {
+		return true, fmt.Errorf("start %s after the docker restart: %w", dockerWatchUnitName, err)
+	}
+	fmt.Fprintf(out, "%s pmcluster-watchdog: %s was down after the docker restart; started it\n",
+		time.Now().UTC().Format(time.RFC3339), dockerWatchUnitName)
+	return true, nil
+}
+
+// dockerWatchUnitName is the daemon unit the watchdog heals; a constant so a test can
+// assert the log line without reaching into the command wiring.
+const dockerWatchUnitName = "pmcluster"
+
 // watchDockerOnce is one tick of the docker check.
 func watchDockerOnce(ctx context.Context, statePath string, d dockerWatchDeps) (dockerVerdict, error) {
 	out := d.Out
