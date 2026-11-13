@@ -896,13 +896,10 @@ func TestRunOnce_StorageFailoverEnabledMovesToHealthyAlternate(t *testing.T) {
 		t.Fatalf("RunOnce: %v", err)
 	}
 
-	want := "demo>" + f.other
-	if got := f.moveCalls(); len(got) != 1 || got[0] != want {
-		t.Fatalf("failover moves = %v, want exactly [%s]", got, want)
-	}
-
-	// The move runs detached; the goroutine records the metric and then the
-	// unacknowledged marker. Poll for the marker.
+	// The move runs detached, so nothing in this pass is visible the instant RunOnce
+	// returns: the goroutine records the metric, then the unacknowledged marker. Poll
+	// for the marker FIRST — it is the goroutine's last act, so its presence means the
+	// move call and the counter are already there too.
 	var fo *store.StackFailover
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -915,6 +912,11 @@ func TestRunOnce_StorageFailoverEnabledMovesToHealthyAlternate(t *testing.T) {
 	if fo == nil {
 		t.Fatal("failover marker was not recorded after the move")
 		return
+	}
+
+	want := "demo>" + f.other
+	if got := f.moveCalls(); len(got) != 1 || got[0] != want {
+		t.Fatalf("failover moves = %v, want exactly [%s]", got, want)
 	}
 	if fo.StackName != "demo" || fo.FromNode != f.pinned || fo.ToNode != f.other || fo.Acked {
 		t.Errorf("marker = %+v, want demo %s→%s unacknowledged", fo, f.pinned, f.other)
