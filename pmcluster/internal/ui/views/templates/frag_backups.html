@@ -14,10 +14,10 @@
 {{end}}
 
 <div class="stats">
-  {{template "stat" (dict "Class" (partial "backups_cls" .) "Label" (T "backups.stats_last_verified") "Value" (partial "backups_value" .) "Foot" (partial "backups_foot" .))}}
-  {{template "stat" (dict "Class" (partial "backups_cls2" .) "Label" (T "backups.stats_schedule") "Value" (T "backups.stats_schedule_value") "Foot" (T "backups.stats_schedule_foot"))}}
-  {{template "stat" (dict "Class" (partial "backups_cls3" .) "Label" (T "backups.stats_size") "Value" (T "backups.stats_size_value") "Foot" (T "backups.stats_size_foot"))}}
-  {{template "stat" (dict "Label" (T "backups.stats_retention") "Value" (TF "backups.stats_retention_value" (N .Limit)) "Foot" (T "backups.stats_retention_foot"))}}
+  {{template "stat" (dict "Class" (partial "backups_cls" .) "Label" (T "backups.stats_last_verified") "ValueClass" "stat-text" "Value" (partial "backups_value" .) "Foot" (partial "backups_foot" .))}}
+  {{template "stat" (dict "Class" (partial "backups_cls2" .) "Label" (T "backups.stats_schedule") "ValueClass" "stat-text" "Value" (T "backups.stats_schedule_value") "Foot" (T "backups.stats_schedule_foot"))}}
+  {{template "stat" (dict "Class" (partial "backups_cls3" .) "Label" (T "backups.stats_size") "ValueClass" "stat-text" "Value" (T "backups.stats_size_value") "Foot" (T "backups.stats_size_foot"))}}
+  {{template "stat" (dict "Label" (T "backups.stats_retention") "ValueClass" "stat-text" "Value" (TF "backups.stats_retention_value" (N .Limit)) "Foot" (T "backups.stats_retention_foot"))}}
   {{template "stat" (dict "Class" (partial "backups_cls4" .) "Label" (T "backups.stats_at_risk") "Value" (partial "backups_value2" .) "Foot" (partial "backups_foot2" .))}}
 </div>
 

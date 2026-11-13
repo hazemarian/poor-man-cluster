@@ -198,6 +198,26 @@
      what turns it on — no per-trigger attribute, no JavaScript. It is fixed and
      transparent at rest, so it can never move the layout when it appears. */}}
 <template id="view-skel">{{template "viewskeleton"}}</template>
+<template id="tab-skel"><div class="panel page-skel tab-skel" aria-hidden="true">
+  <div class="panel-head"><span class="skel-line head"></span></div>
+  <div class="panel-body skel skel-rows">
+    <span class="skel-line row"></span><span class="skel-line row w80"></span><span class="skel-line row"></span><span class="skel-line row w65"></span><span class="skel-line row w80"></span>
+  </div>
+</div></template>
+<template id="obs-skel"><div class="page-skel is-nav obs-skel" aria-hidden="true">
+  <div class="stats">
+    <div class="stat"><span class="skel-line short"></span><span class="skel-line tall"></span></div>
+    <div class="stat"><span class="skel-line short"></span><span class="skel-line tall"></span></div>
+    <div class="stat"><span class="skel-line short"></span><span class="skel-line tall"></span></div>
+    <div class="stat"><span class="skel-line short"></span><span class="skel-line tall"></span></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><span class="skel-line head"></span></div>
+    <div class="panel-body skel skel-rows">
+      <span class="skel-line row"></span><span class="skel-line row w80"></span><span class="skel-line row"></span><span class="skel-line row w65"></span><span class="skel-line row w80"></span>
+    </div>
+  </div>
+</div></template>
 
 
 <nav class="tabbar" aria-label="{{T "nav.menu"}}">
@@ -205,13 +225,12 @@
   <a href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-nav="stacks" data-tip="{{T "nav.stacks"}}">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>
   <a href="/web/services" hx-get="/web/services" hx-target="#view" hx-push-url="true" data-nav="services" data-tip="{{T "nav.services"}}">{{icon "services"}}<span>{{T "nav.services"}}</span></a>
   <a href="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" data-nav="observability" data-tip="{{T "nav.observability"}}">{{icon "chart"}}<span>{{T "nav.observability"}}</span></a>
-  <a class="tabbar-current is-active" href="#" hidden aria-current="page" onclick="return false"><span></span></a>
-  <button type="button" data-drawer-open aria-label="{{T "nav.menu"}}" data-tip="{{T "nav.menu"}}">{{icon "menu"}}<span>{{T "nav.menu"}}</span></button>
+  <a href="#" role="button" data-drawer-open aria-label="{{T "nav.menu"}}" data-tip="{{T "nav.menu"}}" onclick="return false">{{icon "menu"}}<span>{{T "nav.menu"}}</span></a>
 </nav>
 
 <div class="cmdk" id="cmdk" hidden role="dialog" aria-modal="true" aria-label="{{T "nav.jump"}}">
   <div class="cmdk-panel">
-    <div class="cmdk-input">{{icon "search"}}<input id="cmdk-q" type="text" autocomplete="off" spellcheck="false" placeholder="{{T "nav.jump"}}" aria-label="{{T "nav.jump"}}" role="combobox" aria-expanded="true" aria-controls="cmdk-list"></div>
+    <div class="cmdk-input"><label class="cmdk-field" for="cmdk-q">{{icon "search"}}<input id="cmdk-q" type="search" enterkeyhint="go" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="{{T "nav.jump"}}" aria-label="{{T "nav.jump"}}" role="combobox" aria-expanded="true" aria-controls="cmdk-list"></label><button type="button" class="cmdk-cancel" data-cmdk-close>{{T "common.cancel"}}</button></div>
     <ul class="cmdk-list" id="cmdk-list" role="listbox"></ul>
     <p class="cmdk-empty" id="cmdk-empty" hidden>{{T "nav.jump_none"}}</p>
   </div>
@@ -335,15 +354,32 @@
   });
 
   /* ---- off-canvas drawer (below 768px) ---- */
+  /* While the sheet is open the page behind it must not move: pin the body where it is, put the scroll back on close. */
+  var lockY = null;
+  function lockPage() {
+    if (lockY !== null) return;
+    lockY = window.scrollY;
+    document.body.style.top = (-lockY) + 'px';
+    document.documentElement.classList.add('nav-locked');
+  }
+  function unlockPage() {
+    if (lockY === null) return;
+    var y = lockY; lockY = null;
+    document.documentElement.classList.remove('nav-locked');
+    document.body.style.top = '';
+    window.scrollTo(0, y);
+  }
   function openDrawer() {
     document.getElementById('sidebar').classList.add('is-open');
     var s = document.querySelector('.scrim');
     if (s) s.hidden = false;
+    lockPage();
   }
   function closeDrawer() {
     document.getElementById('sidebar').classList.remove('is-open');
     var s = document.querySelector('.scrim');
     if (s) s.hidden = true;
+    unlockPage();
   }
   document.addEventListener('click', function (e) {
     if (e.target.closest('[data-drawer-open]')) openDrawer();
@@ -387,44 +423,67 @@
     var box = document.getElementById('cmdk'), q = document.getElementById('cmdk-q'),
         list = document.getElementById('cmdk-list'), empty = document.getElementById('cmdk-empty');
     if (!box || !q) return;
-    var items = [], sel = 0, prev = null;
+    var items = [], sel = 0, prev = null, RECENT = 'pmc_recent_pages', touch = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+    function recent() { try { return JSON.parse(localStorage.getItem(RECENT) || '[]'); } catch (e) { return []; } }
+    function remember(seg) { if (!seg) return; try { var r = recent().filter(function (x) { return x !== seg; }); r.unshift(seg); localStorage.setItem(RECENT, JSON.stringify(r.slice(0, 3))); } catch (e) {} }
     function collect() {
       items = [];
+      var here = navSeg();
       document.querySelectorAll('#sidebar .nav-item').forEach(function (a) {
         var label = (a.querySelector('span') || a).textContent.trim();
         var grp = a.closest('.nav-group');
         var head = grp ? grp.querySelector('.nav-label') : null;
         if (!head) { var p = a; while ((p = p.previousElementSibling)) { if (p.classList.contains('nav-label')) { head = p; break; } } }
-        items.push({ label: label, group: head ? head.textContent.trim() : '', el: a, ext: a.target === '_blank' });
+        items.push({ label: label, group: head ? head.textContent.trim() : '', el: a, ext: a.target === '_blank', seg: a.getAttribute('data-nav') || '', icon: a.querySelector('svg'), here: !!a.getAttribute('data-nav') && a.getAttribute('data-nav') === here });
       });
+    }
+    function header(text) { var h = document.createElement('li'); h.className = 'cmdk-head'; h.setAttribute('role', 'presentation'); h.textContent = text; list.appendChild(h); }
+    function row(i, n) {
+      var li = document.createElement('li');
+      li.setAttribute('role', 'option');
+      li.className = 'cmdk-item' + (n === sel ? ' is-sel' : '') + (i.here ? ' is-here' : '');
+      if (i.icon) { var ic = i.icon.cloneNode(true); ic.classList.add('cmdk-ic'); li.appendChild(ic); }
+      var a = document.createElement('span'); a.className = 'cmdk-item-label'; a.textContent = i.label; li.appendChild(a);
+      if (i.here) { var c = document.createElement('span'); c.className = 'cmdk-here'; c.setAttribute('aria-hidden', 'true'); c.textContent = '●'; li.appendChild(c); }
+      li.addEventListener('mousemove', function () { sel = n; mark(); });
+      li.addEventListener('click', function () { go(i); });
+      li._item = i; list.appendChild(li);
     }
     function render() {
       var term = q.value.trim().toLowerCase();
-      var shown = items.filter(function (i) { return !term || (i.label + ' ' + i.group).toLowerCase().indexOf(term) >= 0; });
       list.textContent = '';
-      shown.forEach(function (i, n) {
-        var li = document.createElement('li');
-        li.setAttribute('role', 'option');
-        li.className = 'cmdk-item' + (n === sel ? ' is-sel' : '');
-        var a = document.createElement('span'); a.className = 'cmdk-item-label'; a.textContent = i.label;
-        var g = document.createElement('span'); g.className = 'cmdk-item-group'; g.textContent = i.group;
-        li.appendChild(a); li.appendChild(g);
-        li.addEventListener('mousemove', function () { sel = n; mark(); });
-        li.addEventListener('click', function () { go(i); });
-        li._item = i; list.appendChild(li);
-      });
+      var n = 0, shown;
+      if (!term) {
+        // empty query: the pages you used last, then everything by section
+        var rec = recent().map(function (seg) { return items.filter(function (i) { return i.seg === seg && !i.here; })[0]; }).filter(Boolean).slice(0, 2);
+        if (rec.length) { header('{{T "nav.recent"}}'); rec.forEach(function (i) { row(i, n++); }); }
+        var last = null;
+        items.forEach(function (i) { if (i.group !== last) { header(i.group); last = i.group; } row(i, n++); });
+        shown = items;
+      } else {
+        shown = items.filter(function (i) { return (i.label + ' ' + i.group).toLowerCase().indexOf(term) >= 0; });
+        shown.forEach(function (i) { row(i, n++); });
+      }
       empty.hidden = shown.length > 0;
     }
-    function mark() { Array.prototype.forEach.call(list.children, function (li, n) { li.classList.toggle('is-sel', n === sel); if (n === sel) li.scrollIntoView({ block: 'nearest' }); }); }
-    function go(i) { close(); if (i.ext) window.open(i.el.href, '_blank', 'noopener'); else i.el.click(); }
-    function open() { collect(); sel = 0; q.value = ''; render(); prev = document.activeElement; box.hidden = false; q.focus(); }
+    function opts() { return list.querySelectorAll('.cmdk-item'); }
+    function mark() { Array.prototype.forEach.call(opts(), function (li, n) { li.classList.toggle('is-sel', n === sel); if (n === sel) li.scrollIntoView({ block: 'nearest' }); }); }
+    function go(i) { remember(i.seg); close(); if (i.ext) window.open(i.el.href, '_blank', 'noopener'); else i.el.click(); }
+    // keep the panel above the on-screen keyboard
+    function fit() {
+      var vv = window.visualViewport, h = vv ? vv.height : innerHeight, top = vv ? vv.offsetTop : 0;
+      box.style.setProperty('--cmdk-vh', Math.round(h) + 'px'); box.style.setProperty('--cmdk-top', Math.round(top) + 'px');
+    }
+    if (window.visualViewport) { visualViewport.addEventListener('resize', fit); visualViewport.addEventListener('scroll', fit); }
+    function open() { collect(); sel = touch ? -1 : 0; q.value = ''; render(); fit(); prev = document.activeElement; box.hidden = false; q.focus(); }
     function close() { box.hidden = true; if (prev && prev.focus) prev.focus(); }
-    q.addEventListener('input', function () { sel = 0; render(); });
+    box.addEventListener('click', function (e) { if (e.target.closest('[data-cmdk-close]')) close(); });
+    q.addEventListener('input', function () { sel = (q.value.trim() || !touch) ? 0 : -1; render(); });
     q.addEventListener('keydown', function (e) {
-      var n = list.children.length;
+      var n = opts().length;
       if (e.key === 'ArrowDown') { e.preventDefault(); if (n) { sel = (sel + 1) % n; mark(); } }
       else if (e.key === 'ArrowUp') { e.preventDefault(); if (n) { sel = (sel - 1 + n) % n; mark(); } }
-      else if (e.key === 'Enter') { e.preventDefault(); var li = list.children[sel]; if (li) go(li._item); }
+      else if (e.key === 'Enter') { e.preventDefault(); var li = opts()[sel < 0 ? 0 : sel]; if (li) go(li._item); }
       else if (e.key === 'Escape') { e.preventDefault(); close(); }
     });
     box.addEventListener('click', function (e) { if (e.target === box) close(); });
@@ -437,8 +496,9 @@
   /* ---- active navigation ----
      Fragments are swapped by htmx, so the shell cannot re-render its own
      active state server-side on every navigation. Keep it synced here. */
-  function syncNav(path) {
-    var seg = (path || location.pathname).replace(/^\/web\/?/, '').split('/')[0] || 'overview';
+  function navSeg(path) { return (path || location.pathname).replace(/^\/web\/?/, '').split('/')[0] || 'overview'; }
+  /* Selection only: sidebar, dock and crumb. Cheap enough to run the instant a nav link is tapped. */
+  function markNav(seg) {
     var label = null;
     document.querySelectorAll('[data-nav]').forEach(function (a) {
       var on = a.getAttribute('data-nav') === seg;
@@ -452,6 +512,19 @@
       if (crumb) crumb.textContent = label.textContent;
       document.title = label.textContent + ' · {{T "app.title"}}';
     }
+    // Phone dock: the slots never change. A page that is not one of the four pinned destinations lights up the
+    // Menu slot instead and names the page there, so the bar shows where you are without tabs coming and going.
+    var dock = document.querySelector('.tabbar'), menu = dock && dock.querySelector('[data-drawer-open]');
+    if (menu) {
+      var mlab = menu.querySelector('span'), msrc = document.querySelector('.sidebar .nav-item.is-active span');
+      if (mlab && !menu.dataset.label) menu.dataset.label = mlab.textContent;
+      var pinnedNow = dock.querySelector('a[data-nav].is-active');
+      if (!pinnedNow && msrc && mlab) { menu.classList.add('is-active'); mlab.textContent = msrc.textContent; }
+      else { menu.classList.remove('is-active'); if (mlab && menu.dataset.label) mlab.textContent = menu.dataset.label; }
+    }
+  }
+  function syncNav(path) {
+    markNav(navSeg(path));
     // Phone header: the page name in the bar would repeat the big h1 right under it, so it only appears once the h1 has scrolled away.
     (function () {
       var bar = document.querySelector('.topbar'), h1 = document.querySelector('#view h1');
@@ -464,16 +537,6 @@
       }, { rootMargin: '-64px 0px 0px 0px' });
       window.__h1io.observe(h1);
     })();
-    // Phone dock: a page that is not one of the four pinned destinations borrows a slot, so the bar always
-    // shows where you are; it goes away again as soon as you are back on a pinned page.
-    var dock = document.querySelector('.tabbar'), cur = dock && dock.querySelector('.tabbar-current');
-    if (cur) {
-      var pinned = dock.querySelector('a[data-nav].is-active'), src = document.querySelector('.sidebar .nav-item.is-active');
-      if (!pinned && src && src.querySelector('svg') && src.querySelector('span')) {
-        cur.replaceChildren(src.querySelector('svg').cloneNode(true), src.querySelector('span').cloneNode(true));
-        cur.hidden = false; dock.classList.add('has-current');
-      } else { cur.hidden = true; dock.classList.remove('has-current'); }
-    }
     document.querySelectorAll('.nav-group').forEach(function (g) {
       if (g.querySelector('.is-active')) setGroup(g, true);
     });
@@ -489,6 +552,8 @@
     if (t) setGroup(t.parentNode, !t.parentNode.classList.contains('is-open'));
   });
   /* Refresh keeps your place: scroll position, typed filters and open sections survive the content swap. */
+  /* Elements that update the page in place (Refresh, in-page tabs, search/filter forms): no skeleton, no redraw. */
+  function inPlace(el) { return !!(el && el.classList && (el.classList.contains('btn-refresh') || el.hasAttribute('data-morph'))); }
   var keep = null;
   document.addEventListener('htmx:beforeRequest', function (e) {
     var el = e.detail && e.detail.elt, view = document.getElementById('view');
@@ -521,7 +586,56 @@
   document.addEventListener('htmx:responseError', function () { var v = document.getElementById('view'); if (v) v.style.minHeight = ''; keep = null; });
   /* Navigation loading: if the next page takes more than a beat, the old page gives way to a shaped, shimmering skeleton
      (a fast response never flashes it). Refreshes update in place and never show it. */
-  var skel = { timer: null, prev: null, on: false };
+  var skel = { timer: null, prev: null, on: false, path: '' };
+  /* Each destination gets a skeleton shaped like the page it stands in for: the same header actions, tiles, tabs,
+     toolbar and panels, so the page does not change shape when the real content lands. Spec tokens:
+     a1/a2 header actions, hero, sN tiles, tabs, bar, panels p:rows, t:rows (table), f (form). */
+  var SKEL = {
+    '/web/overview': 'a2 hero s4 p3 p3', '/web/stacks': 'a2 s4 bar t6', '/web/services': 'a2 s4 t6',
+    '/web/observability': 'a1 tabs4 s4 p4', '/web/platform': 'a1 s2 p4', '/web/usage': 'a1 s3 p4 p4',
+    '/web/inventory': 'a1 tabs2 bar p2 p2', '/web/deploy': 'a2 s4 f p3', '/web/webhooks': 'a2 s4 p3 p3',
+    '/web/runners': 'a2 t4 t4', '/web/ci': 'a1 s4 t6', '/web/tls': 'a2 s4 p3 p3', '/web/backups': 'a2 s5 p3 p3',
+    '/web/users': 'a1 p4', '/web/apikeys': 'a1 f t3', '/web/settings': 'a1 p3 p3 p3'
+  };
+  function sk(cls) { var e = document.createElement('span'); e.className = 'skel-line ' + cls; return e; }
+  function skDiv(cls, kids) { var e = document.createElement('div'); e.className = cls; (kids || []).forEach(function (k) { e.appendChild(k); }); return e; }
+  function buildSkel(path) {
+    var key = String(path || '').replace(/\/$/, ''), spec = SKEL[key];
+    if (!spec && /^\/web\/(stacks|services)\/[^/]+/.test(key)) spec = 'a2 s4 tabs p4';
+    if (!spec) return null;
+    var root = skDiv('page-skel is-nav is-shaped'); root.setAttribute('aria-hidden', 'true');
+    spec.split(' ').forEach(function (tok) {
+      var m = /^([a-z]+)(\d*)$/.exec(tok), kind = m[1], n = +m[2] || 0, i, e;
+      if (kind === 'a') {
+        e = skDiv('page-head' + (n > 1 ? '' : ' single'), [skDiv('ph-text skel', [sk('title'), sk('short')]), skDiv('ph-actions', n > 1 ? [sk('btn'), sk('btn wide')] : [sk('btn')])]);
+      } else if (kind === 'hero') {
+        e = skDiv('stats skel-stats has-hero', [skDiv('stat hero', [sk('short'), sk('tall')])]);
+        e.dataset.heroOnly = '1';
+      } else if (kind === 's') {
+        var kids = []; for (i = 0; i < n; i++) kids.push(skDiv('stat', [sk('short'), sk('tall'), sk('foot')]));
+        e = skDiv('stats skel-stats', kids);
+      } else if (kind === 'tabs') {
+        var tk = []; for (i = 0; i < (n || 3); i++) tk.push(sk('tab'));
+        e = skDiv('skel-tabs' + ((n || 3) > 2 ? ' full' : ''), tk);
+      } else if (kind === 'bar') {
+        e = skDiv('skel-bar', [sk('field'), sk('btn')]);
+      } else if (kind === 'f') {
+        e = skDiv('panel', [skDiv('panel-head', [sk('head')]), skDiv('panel-body skel skel-form', [sk('label'), sk('input'), sk('label'), sk('input'), sk('input tall-input')])]);
+      } else {
+        var rows = []; for (i = 0; i < (n || 4); i++) rows.push(sk('row' + (i % 3 === 1 ? ' w80' : i % 3 === 2 ? ' w65' : '')));
+        if (kind === 't') rows.unshift(sk('thead'));
+        e = skDiv('panel', [skDiv('panel-head', [sk('head')]), skDiv('panel-body skel skel-rows', rows)]);
+      }
+      root.appendChild(e);
+    });
+    // a hero (Overview's status tile) and the tiles after it share one grid
+    var hero = root.querySelector('[data-hero-only]');
+    if (hero && hero.nextElementSibling && hero.nextElementSibling.classList.contains('skel-stats')) {
+      var next = hero.nextElementSibling; hero.firstChild.classList.add('hero'); next.insertBefore(hero.firstChild, next.firstChild); root.removeChild(hero);
+    }
+    return root;
+  }
+
   function skelClear() { clearTimeout(skel.timer); skel.timer = null; }
   function skelRestore() {
     var v = document.getElementById('view');
@@ -530,13 +644,14 @@
   }
   document.addEventListener('htmx:beforeRequest', function (e) {
     var d = e.detail || {}, v = document.getElementById('view'), el = d.elt;
-    if (!v || d.target !== v || !el || (el.classList && el.classList.contains('btn-refresh'))) return;
+    if (!v || d.target !== v || !el || inPlace(el)) return;
     if (!d.requestConfig || String(d.requestConfig.verb).toLowerCase() !== 'get' || v.querySelector('.page-skel')) return;
     skelClear();
+    skel.path = ((d.pathInfo && d.pathInfo.requestPath) || el.getAttribute('hx-get') || el.getAttribute('href') || '').split('?')[0];
     skel.timer = setTimeout(function () {
       var t = document.getElementById('view-skel'); if (!t) return;
       skel.prev = v.innerHTML; skel.on = true;
-      v.innerHTML = ''; v.appendChild(t.content.cloneNode(true)); v.setAttribute('aria-busy', 'true');
+      v.innerHTML = ''; v.appendChild(buildSkel(skel.path) || t.content.cloneNode(true)); v.setAttribute('aria-busy', 'true');
       window.scrollTo(0, 0);
     }, 160);
   });
@@ -545,19 +660,152 @@
   // history snapshots must hold the real page, never the skeleton
   document.addEventListener('htmx:beforeHistorySave', function () { if (skel.on) skelRestore(); });
 
+  /* Observability tab/range changes swap only #obs-main, so the same shaped skeleton stands in for it while it loads. */
+  var oskel = { timer: null, prev: null, on: false };
+  function oskelRestore() {
+    var m = document.getElementById('obs-main');
+    if (oskel.on && m && oskel.prev !== null) m.innerHTML = oskel.prev;
+    clearTimeout(oskel.timer); oskel.on = false; oskel.prev = null; if (m) m.removeAttribute('aria-busy');
+  }
+  document.addEventListener('htmx:beforeRequest', function (e) {
+    var d = e.detail || {}, m = document.getElementById('obs-main');
+    if (!m || d.target !== m || !d.requestConfig || String(d.requestConfig.verb).toLowerCase() !== 'get') return;
+    clearTimeout(oskel.timer);
+    oskel.timer = setTimeout(function () {
+      var t = document.getElementById('obs-skel'); if (!t || oskel.on) return;
+      oskel.prev = m.innerHTML; oskel.on = true;
+      m.innerHTML = ''; m.appendChild(t.content.cloneNode(true)); m.setAttribute('aria-busy', 'true');
+    }, 160);
+  });
+  document.addEventListener('htmx:afterRequest', function (e) {
+    var m = document.getElementById('obs-main');
+    if (e.detail && m && e.detail.target === m) { clearTimeout(oskel.timer); if (e.detail.successful) { oskel.on = false; oskel.prev = null; } else oskelRestore(); }
+  });
+  ['htmx:sendError', 'htmx:timeout', 'htmx:abort', 'htmx:responseError'].forEach(function (n) { document.addEventListener(n, oskelRestore); });
+  document.addEventListener('htmx:beforeHistorySave', function () { if (oskel.on) oskelRestore(); });
+
+  /* In-page tabs (Configs & Secrets, service detail) switch at once: the clicked tab becomes the selected one immediately,
+     and if the next tab is slow the panels under the tabs give way to a skeleton. A failed load puts everything back. */
+  var tabx = { timer: null, tab: null, prevTab: null, held: null, anchor: null, on: false };
+  function tabRestore() {
+    clearTimeout(tabx.timer);
+    if (tabx.on && tabx.anchor) {
+      var sk = tabx.anchor.parentNode && tabx.anchor.parentNode.querySelector(':scope > .tab-skel');
+      if (sk && tabx.held) { tabx.anchor.parentNode.replaceChild(tabx.held, sk); }
+    }
+    if (tabx.tab && tabx.prevTab) {
+      var tabs = tabx.tab.closest('.tabs');
+      if (tabs) tabs.querySelectorAll('.tab').forEach(function (t) {
+        var on = t === tabx.prevTab; t.classList.toggle('is-active', on); if (t.hasAttribute('aria-selected')) t.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+    }
+    tabx.on = false; tabx.held = null; tabx.tab = null; tabx.prevTab = null;
+  }
+  document.addEventListener('htmx:beforeRequest', function (e) {
+    var el = e.detail && e.detail.elt, view = document.getElementById('view');
+    if (!el || !el.classList || !el.classList.contains('tab') || !el.hasAttribute('data-morph') || !view || e.detail.target !== view) return;
+    var tabs = el.closest('.tabs'); if (!tabs) return;
+    tabRestore();
+    tabx.tab = el; tabx.prevTab = tabs.querySelector('.tab.is-active');
+    tabs.querySelectorAll('.tab').forEach(function (t) {
+      var on = t === el; t.classList.toggle('is-active', on); if (t.hasAttribute('aria-selected')) t.setAttribute('aria-selected', on ? 'true' : 'false');
+      if (on) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current');
+    });
+    tabx.anchor = tabs;
+    tabx.timer = setTimeout(function () {
+      var t = document.getElementById('tab-skel'); if (!t || !tabs.parentNode) return;
+      // everything after the tab strip (and the search bar under it, if any) is the tab's content
+      var after = tabs.nextElementSibling;
+      if (after && after.classList.contains('toolbar')) { tabx.anchor = after; after = after.nextElementSibling; }
+      var held = document.createDocumentFragment(), parent = tabs.parentNode;
+      while (after) { var nx = after.nextElementSibling; held.appendChild(after); after = nx; }
+      tabx.held = held; tabx.on = true;
+      parent.appendChild(t.content.cloneNode(true));
+    }, 160);
+  });
+  document.addEventListener('htmx:afterRequest', function (e) {
+    var el = e.detail && e.detail.elt;
+    if (!el || !tabx.tab || el !== tabx.tab) return;
+    if (e.detail.successful) { clearTimeout(tabx.timer); tabx.on = false; tabx.held = null; tabx.tab = null; tabx.prevTab = null; }
+    else tabRestore();
+  });
+  ['htmx:sendError', 'htmx:timeout', 'htmx:abort', 'htmx:responseError'].forEach(function (n) { document.addEventListener(n, function (e) { var el = e.detail && (e.detail.elt || (e.detail.requestConfig && e.detail.requestConfig.elt)); if (tabx.tab && el === tabx.tab) tabRestore(); }); });
+
+  /* Refresh feedback and recovery.
+     - While a refresh is in flight longer than a beat, the page shows a thin progress line and dims slightly.
+     - If it fails, the page stays as it was and says so, instead of the generic upstream error.
+     - Pages that go stale (overview, stacks, services, platform, usage) refresh themselves every 30s while the tab is
+       visible and nothing is being edited; localStorage pmc_autorefresh = "off" turns that off. */
+  var refreshCue = null, lastRefresh = Date.now(), refreshQuiet = false, refreshT0 = 0;
+  function isRefreshBtn(e) { var el = e && e.detail && (e.detail.elt || (e.detail.requestConfig && e.detail.requestConfig.elt)); return inPlace(el) ? el : null; }
+  document.addEventListener('htmx:beforeRequest', function (e) {
+    var rb = isRefreshBtn(e);
+    // the progress line is the Refresh button's; tabs and filters update in place without it
+    if (!rb || !rb.classList.contains('btn-refresh')) return;
+    clearTimeout(refreshCue);
+    refreshT0 = refreshQuiet ? 0 : Date.now();
+    if (refreshQuiet) return;
+    refreshCue = setTimeout(function () { document.documentElement.classList.add('is-refreshing'); }, 350);
+  });
+  function refreshDone() { clearTimeout(refreshCue); document.documentElement.classList.remove('is-refreshing'); refreshQuiet = false; lastRefresh = Date.now(); }
+  document.addEventListener('htmx:afterRequest', function (e) { if (isRefreshBtn(e)) refreshDone(); });
+  ['htmx:sendError', 'htmx:timeout', 'htmx:responseError'].forEach(function (n) {
+    document.addEventListener(n, function (e) {
+      var b = isRefreshBtn(e); if (!b) return;
+      // htmx leaves the trigger spinning and unclickable after a failed request; put it back
+      b.classList.remove('htmx-request'); b.removeAttribute('disabled');
+      var quiet = refreshQuiet; refreshDone();
+      if (!quiet) flash('{{T "common.refresh_failed"}}', 'err');
+    });
+  });
+  var AUTO = { '/web/overview': 1, '/web/stacks': 1, '/web/services': 1, '/web/platform': 1, '/web/usage': 1 };
+  function autoRefresh() {
+    var off = false; try { off = localStorage.getItem('pmc_autorefresh') === 'off'; } catch (e) {}
+    if (off || document.hidden || !AUTO[location.pathname.replace(/\/$/, '')]) return;
+    if (Date.now() - lastRefresh < 30000) return;
+    var view = document.getElementById('view'), btn = view && view.querySelector('.btn-refresh');
+    if (!btn || btn.classList.contains('htmx-request') || view.querySelector('.page-skel')) return;
+    var a = document.activeElement;
+    if (a && view.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+    if (document.querySelector('.sidebar.is-open, .modal-backdrop:not([hidden]), .cmdk:not([hidden])')) return;
+    refreshQuiet = true; lastRefresh = Date.now();
+    btn.click();
+  }
+  setInterval(autoRefresh, 5000);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) autoRefresh(); });
+
   /* Refresh updates in place: the new page is diffed against the one on screen and only what differs is touched,
      so nothing flashes and focus, scroll, typed text and open sections stay exactly as they are. */
+  /* A value that changed during a refresh gets a short surface-shade fade, so a refresh visibly did something. */
+  var reduceMotion = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)');
+  var flashOn = true;
+  function markChanged(el) {
+    if (!flashOn || !el || el.nodeType !== 1 || (reduceMotion && reduceMotion.matches) || el.closest('pre, textarea, #logs-body, .obs-logs')) return;
+    el.classList.remove('nx-changed'); void el.offsetWidth; el.classList.add('nx-changed');
+    el.addEventListener('animationend', function done() { el.classList.remove('nx-changed'); el.removeEventListener('animationend', done); });
+  }
+  // Whitespace between elements differs between a swapped-in page and a fresh response; matching by position
+  // would pair it with a real element and replace the element (a redraw), so whitespace-only text is skipped.
+  function isWs(n) { return n.nodeType === 3 && !/\S/.test(n.nodeValue); }
   function morphKids(from, to) {
     var f = from.firstChild, t = to.firstChild;
     while (t) {
       var nt = t.nextSibling;
+      // script-added indicator elements are not in the server HTML; leave them be
+      if (f && f.nodeType === 1 && f.classList.contains('seg-pill')) { f = f.nextSibling; continue; }
+      if (isWs(t) && !(f && isWs(f))) { t = nt; continue; }
+      if (f && isWs(f) && !isWs(t)) { f = f.nextSibling; continue; }
       if (!f) { from.appendChild(t); }
-      else if (f.nodeType === 3 && t.nodeType === 3) { if (f.nodeValue !== t.nodeValue) f.nodeValue = t.nodeValue; f = f.nextSibling; }
+      else if (f.nodeType === 3 && t.nodeType === 3) { if (f.nodeValue !== t.nodeValue) { f.nodeValue = t.nodeValue; markChanged(from); } f = f.nextSibling; }
       else if (f.nodeType === 1 && t.nodeType === 1 && f.tagName === t.tagName && (f.id || '') === (t.id || '')) { morphEl(f, t); f = f.nextSibling; }
+      // a copy button wraps its <pre> in .code-wrap; the fresh response has the bare <pre>
+      else if (f.nodeType === 1 && t.nodeType === 1 && t.tagName === 'PRE' && f.classList.contains('code-wrap') && f.querySelector('pre')) { morphEl(f.querySelector('pre'), t); f = f.nextSibling; }
+      // a styled dropdown wraps its <select> in .dd; the fresh response has the bare select, so compare against the one inside
+      else if (f.nodeType === 1 && t.nodeType === 1 && t.tagName === 'SELECT' && f.classList.contains('dd') && f.querySelector('select')) { morphEl(f.querySelector('select'), t); if (f._dd && f._dd.refresh) f._dd.refresh(); f = f.nextSibling; }
       else { var nf = f.nextSibling; from.replaceChild(t, f); f = nf; }
       t = nt;
     }
-    while (f) { var nx = f.nextSibling; from.removeChild(f); f = nx; }
+    while (f) { var nx = f.nextSibling; if (!isWs(f) && !(f.nodeType === 1 && f.classList.contains('seg-pill'))) from.removeChild(f); f = nx; }
   }
   function morphEl(a, b) {
     var tag = a.tagName;
@@ -565,10 +813,12 @@
       if ((tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') && (at.name === 'value' || at.name === 'checked')) return;
       if (tag === 'DETAILS' && at.name === 'open') return;
       if (at.name === 'class' && a.classList.contains('htmx-request')) { var c = at.value.split(/\s+/).concat('htmx-request').join(' '); if (a.getAttribute('class') !== c) a.setAttribute('class', c); return; }
+      if (at.name === 'class' && a.classList.contains('has-pill')) { var cc = at.value.split(/\s+/).concat('has-pill').join(' '); if (a.getAttribute('class') !== cc) a.setAttribute('class', cc); return; }
       if (a.getAttribute(at.name) !== at.value) a.setAttribute(at.name, at.value);
     });
     Array.prototype.slice.call(a.attributes).forEach(function (at) {
       if (b.hasAttribute(at.name)) return;
+      if (at.name === 'data-dd') return;
       if (tag === 'DETAILS' && at.name === 'open') return;
       if ((tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') && (at.name === 'value' || at.name === 'checked')) return;
       if (at.name === 'class' || at.name === 'disabled' || at.name === 'aria-busy') { if (at.name !== 'class') a.removeAttribute(at.name); return; }
@@ -580,15 +830,29 @@
   }
   document.addEventListener('htmx:beforeSwap', function (e) {
     var cfg = e.detail && e.detail.requestConfig, el = cfg && cfg.elt, view = document.getElementById('view');
-    if (!el || !el.classList || !el.classList.contains('btn-refresh') || !view || e.detail.target !== view) return;
+    if (!inPlace(el) || !view || e.detail.target !== view) return;
     if (e.detail.xhr.status !== 200 || !e.detail.serverResponse) return;
     var doc = new DOMParser().parseFromString('<body>' + e.detail.serverResponse + '</body>', 'text/html');
     e.detail.shouldSwap = false;
+    var pathInfo = e.detail.pathInfo;
+    // a local server answers in a few ms, so the spinner would never be seen and Refresh would feel dead: let it turn for a moment
+    var wait = (el.classList.contains('btn-refresh') && refreshT0) ? Math.max(0, 650 - (Date.now() - refreshT0)) : 0;
+    refreshT0 = 0;
+    if (wait) setTimeout(apply, wait); else apply();
+    function apply() {
     keep = null; view.style.minHeight = '';
+    flashOn = !el.hasAttribute('data-morph'); // a tab or filter switch is new content, not a changed value
     morphKids(view, doc.body);
+    flashOn = true;
+    // htmx pushes the URL inside its own swap, which this path skips; a tab or filter still gets its own history entry
+    var pu = el.getAttribute('hx-push-url'), fp = pathInfo && pathInfo.finalRequestPath;
+    if (pu && pu !== 'false' && fp && fp !== location.pathname + location.search) history.pushState({ htmx: true }, '', fp);
+    // htmx only clears the in-flight state (spinner, disabled) in its own swap, which this path skips
+    document.querySelectorAll('.htmx-request').forEach(function (n) { n.classList.remove('htmx-request'); n.removeAttribute('disabled'); });
     if (window.htmx) htmx.process(view);
     view.dispatchEvent(new CustomEvent('htmx:afterSettle', { bubbles: true }));
     syncNav(location.pathname);
+    }
   });
   document.addEventListener('htmx:afterSwap', function (e) {
     // openModal() refuses to open an empty dialog, so an onclick=openModal() that fires ahead of its
@@ -620,6 +884,110 @@
     }
     flash('{{T "err.upstream"}}', 'err');
   });
+  /* Tapping a nav link moves the selection immediately instead of waiting for the page to load; if the
+     request fails or is cancelled it snaps back to wherever the URL says you still are. */
+  document.addEventListener('click', function (e) {
+    if (e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    var a = e.target.closest && e.target.closest('a[data-nav][hx-get]');
+    if (a) { markNav(a.getAttribute('data-nav')); closeDrawer(); }
+  }, true);
+  ['htmx:responseError', 'htmx:sendError', 'htmx:timeout', 'htmx:sendAbort'].forEach(function (ev) {
+    document.addEventListener(ev, function () { markNav(navSeg(location.pathname)); });
+  });
+  /* Dock indicator: one pill that slides from the old tab to the new one (position and width), following the
+     tabs' own width animation frame by frame so it never lags behind or overshoots a moving target. */
+  (function () {
+    var dock = document.querySelector('.tabbar');
+    if (!dock) return;
+    var pill = document.createElement('span');
+    pill.className = 'tabbar-pill'; pill.setAttribute('aria-hidden', 'true');
+    dock.insertBefore(pill, dock.firstChild);
+    var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)');
+    var DUR = 380, TAIL = 520, raf = 0, from = null, t0 = 0, shown = null, last = null, calm = 0;
+    var dockBox = null; // the dock is fixed: measure it once per run instead of every frame
+    function rel(el) {
+      var r = el.getBoundingClientRect(), d = dockBox || (dockBox = dock.getBoundingClientRect());
+      return { x: r.left - d.left - dock.clientLeft, y: r.top - d.top - dock.clientTop, w: r.width, h: r.height };
+    }
+    function paint(r) {
+      pill.style.transform = 'translate3d(' + r.x + 'px,' + r.y + 'px,0)';
+      pill.style.width = r.w + 'px'; pill.style.height = r.h + 'px';
+      shown = r;
+    }
+    function ease(t) { return 1 - Math.pow(1 - t, 3); }
+    function frame(now) {
+      var a = dock.querySelector('a.is-active');
+      if (!a || !dock.offsetWidth) { pill.style.opacity = '0'; raf = 0; return; }
+      var tgt = rel(a), el = Math.max(0, now - t0), p = from ? Math.min(1, el / DUR) : 1, e = ease(p);
+      paint(from ? { x: from.x + (tgt.x - from.x) * e, y: tgt.y, w: from.w + (tgt.w - from.w) * e, h: tgt.h } : tgt);
+      pill.style.opacity = '1';
+      // keep following the target while the tabs finish resizing, then settle exactly on it; stop early once it has stopped moving
+      var still = last && Math.abs(tgt.x - last.x) < .1 && Math.abs(tgt.w - last.w) < .1; last = tgt; calm = still ? calm + 1 : 0;
+      raf = (el < DUR || (el < TAIL && calm < 4)) ? requestAnimationFrame(frame) : 0;
+    }
+    function go(animate) {
+      from = animate && shown && !(reduce && reduce.matches) ? shown : null;
+      t0 = performance.now(); dockBox = null; last = null; calm = 0;
+      if (!raf) raf = requestAnimationFrame(frame);
+    }
+    new MutationObserver(function (m) {
+      for (var i = 0; i < m.length; i++) if (m[i].attributeName === 'class') { go(true); return; }
+    }).observe(dock, { attributes: true, subtree: true, attributeFilter: ['class'] });
+    window.addEventListener('resize', function () { go(false); });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { go(false); });
+    go(false);
+  })();
+  /* Segmented tabs (.seg, .tabs): one thumb slides from the old tab to the new one instead of each tab fading its own
+     background. Containers are picked up as they appear (every page swap), the first placement never animates. */
+  (function () {
+    var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)');
+    function active(c) { return c.querySelector('.is-active') || c.querySelector('[aria-selected="true"]') || c.querySelector('[aria-current]'); }
+    function place(c, animate) {
+      var p = c._pill, a = active(c);
+      if (!p) return;
+      if (!a || !c.offsetWidth) { p.style.opacity = '0'; return; }
+      if (!animate || (reduce && reduce.matches)) p.classList.add('no-anim');
+      p.style.transform = 'translate3d(' + a.offsetLeft + 'px,' + a.offsetTop + 'px,0)';
+      p.style.width = a.offsetWidth + 'px'; p.style.height = a.offsetHeight + 'px'; p.style.opacity = '1';
+      if (!animate) { void p.offsetWidth; requestAnimationFrame(function () { p.classList.remove('no-anim'); }); }
+      else if (reduce && reduce.matches) requestAnimationFrame(function () { p.classList.remove('no-anim'); });
+    }
+    function init(c) {
+      if (c._pill) return;
+      var p = document.createElement('span'); p.className = 'seg-pill no-anim'; p.setAttribute('aria-hidden', 'true');
+      c.insertBefore(p, c.firstChild); c._pill = p; c.classList.add('has-pill');
+      place(c, false);
+      new MutationObserver(function () { place(c, true); }).observe(c, { attributes: true, childList: true, subtree: true, attributeFilter: ['class', 'aria-selected', 'aria-current'] });
+      if (window.ResizeObserver) new ResizeObserver(function () { place(c, false); }).observe(c);
+    }
+    function scan(root) { (root.querySelectorAll ? root.querySelectorAll('.seg, .tabs') : []).forEach(init); }
+    scan(document);
+    new MutationObserver(function (muts) {
+      muts.forEach(function (m) { m.addedNodes.forEach(function (n) { if (n.nodeType === 1) { if (n.matches && n.matches('.seg, .tabs')) init(n); scan(n); } }); });
+    }).observe(document.body, { childList: true, subtree: true });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { document.querySelectorAll('.seg, .tabs').forEach(function (c) { place(c, false); }); });
+  })();
+  // Desktop sidebar: the selected highlight slides between items like the dock's pill
+  (function () {
+    var nav = document.querySelector('.sidebar .nav'); if (!nav) return;
+    var pill = document.createElement('span'); pill.className = 'nav-pill no-anim'; pill.setAttribute('aria-hidden', 'true');
+    nav.insertBefore(pill, nav.firstChild);
+    var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)');
+    function place(animate) {
+      var a = nav.querySelector('.nav-item.is-active');
+      if (!a || !a.offsetHeight) { pill.style.opacity = '0'; return; }
+      var snap = !animate || pill.style.opacity !== '1' || (reduce && reduce.matches);
+      if (snap) pill.classList.add('no-anim');
+      pill.style.transform = 'translate3d(' + a.offsetLeft + 'px,' + a.offsetTop + 'px,0)';
+      pill.style.width = a.offsetWidth + 'px'; pill.style.height = a.offsetHeight + 'px'; pill.style.opacity = '1';
+      if (snap) { void pill.offsetWidth; requestAnimationFrame(function () { pill.classList.remove('no-anim'); }); }
+    }
+    place(false);
+    new MutationObserver(function () { place(true); }).observe(nav, { attributes: true, subtree: true, attributeFilter: ['class'] });
+    window.addEventListener('resize', function () { place(false); });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { place(false); });
+    nav.addEventListener('transitionend', function (e) { if (e.target !== pill) place(false); }); // groups opening/closing move the items
+  })();
   syncNav(location.pathname);
 </script>
 </body>

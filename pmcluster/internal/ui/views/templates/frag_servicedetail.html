@@ -17,8 +17,8 @@
 </div>
 
 <div class="tabs">
-  <button type="button" class="tab{{if eq .Tab "tasks"}} is-active{{end}}" hx-get="/web/services/{{.Stack}}/{{.Service}}/tasks" hx-target="#view" hx-push-url="true">{{T "services.tab_tasks"}}</button>
-  <button type="button" class="tab{{if eq .Tab "logs"}} is-active{{end}}" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true">{{T "services.tab_logs"}}</button>
+  <button type="button" class="tab{{if eq .Tab "tasks"}} is-active{{end}}" hx-get="/web/services/{{.Stack}}/{{.Service}}/tasks" hx-target="#view" hx-push-url="true" data-morph>{{T "services.tab_tasks"}}</button>
+  <button type="button" class="tab{{if eq .Tab "logs"}} is-active{{end}}" hx-get="/web/services/{{.Stack}}/{{.Service}}/logs" hx-target="#view" hx-push-url="true" data-morph>{{T "services.tab_logs"}}</button>
 </div>
 
 {{if eq .Tab "logs"}}

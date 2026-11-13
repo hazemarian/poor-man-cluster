@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -153,34 +154,44 @@ func (c Services) List(g *gin.Context) {
 // a page where everything is down cannot turn into a burst of them.
 func (c *Controller) attachTaskErrors(ctx context.Context, rows []serviceRow) []serviceRow {
 	const taskErrorLookups = 5
-	lookups := 0
+	var picked []int
 	for i := range rows {
-		if lookups >= taskErrorLookups {
+		if len(picked) >= taskErrorLookups {
 			break
 		}
 		r := &rows[i]
 		if !r.Short || r.Complete || r.Stack == "" || r.ServiceName == "" {
 			continue
 		}
-		lookups++
-		tasks, err := c.API.ServiceTasks(ctx, r.Stack, r.ServiceName)
-		if err != nil {
-			continue
-		}
-		// Newest first: the task list is returned in swarm order, so take the most
-		// recent non-empty error and let a running task win outright.
-		for _, t := range tasks {
-			if t.State == "running" {
-				r.TaskError = ""
-				break
-			}
-			if msg := strings.TrimSpace(t.Error); msg != "" {
-				r.TaskError = msg
-				r.TaskErrorShort = clip(msg, 110)
-				break
-			}
-		}
+		picked = append(picked, i)
 	}
+	// The lookups are independent, so they run side by side (still capped at taskErrorLookups): the page
+	// waits for the slowest one instead of the sum. Each goroutine writes only its own row.
+	var wg sync.WaitGroup
+	for _, i := range picked {
+		wg.Add(1)
+		go func(r *serviceRow) {
+			defer wg.Done()
+			tasks, err := c.API.ServiceTasks(ctx, r.Stack, r.ServiceName)
+			if err != nil {
+				return
+			}
+			// Newest first: the task list is returned in swarm order, so take the most
+			// recent non-empty error and let a running task win outright.
+			for _, t := range tasks {
+				if t.State == "running" {
+					r.TaskError = ""
+					break
+				}
+				if msg := strings.TrimSpace(t.Error); msg != "" {
+					r.TaskError = msg
+					r.TaskErrorShort = clip(msg, 110)
+					break
+				}
+			}
+		}(&rows[i])
+	}
+	wg.Wait()
 	return rows
 }
 
