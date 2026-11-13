@@ -6,7 +6,7 @@ func init() {
 		"obs.traces_title":         "التتبعات",
 		"obs.traces_sub":           "الطلبات المرسلة من تطبيقاتك عبر OpenTelemetry، الأحدث أولاً.",
 		"obs.traces_none_title":    "لا توجد تتبعات في هذه الفترة",
-		"obs.traces_none_body":     "أرسل تتبعات OTLP إلى المنفذ 4318 للمجمّع (http://<host>:4318/v1/traces) وحدّد service.name في تطبيقك.",
+		"obs.traces_none_body":     "أرسل OTLP إلى المجمّع من داخل العنقود (gRPC :4317 أو HTTP :4318) وحدّد service.name في تطبيقك. المنفذ منشور على القائد فقط، لذا استخدم اسم الخدمة لا عنوان عقدة.",
 		"obs.col_trace":            "التتبع",
 		"obs.col_root":             "النطاق الجذري",
 		"obs.col_spans":            "النطاقات",

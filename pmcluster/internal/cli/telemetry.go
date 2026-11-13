@@ -8,7 +8,6 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 )
 
@@ -35,11 +34,10 @@ func initCLITelemetry() func() {
 		return func() {}
 	}
 
-	// Resolution reads local docker state; bound it so a wedged daemon socket
-	// cannot delay a one-shot command.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	endpoint, _ := config.ResolveOTLPEndpoint(ctx, cfg.OTLPEndpoint, docker.NodeSelfAddr, nil)
-	cancel()
+	// A one-shot command has no role to resolve: the collector belongs to the daemon,
+	// and only the leader's daemon sits beside one. "false" means this process does not
+	// export — an explicit endpoint still overrides it, which is the operator's call.
+	endpoint, _ := config.ResolveOTLPEndpoint(cfg.OTLPEndpoint, false)
 
 	shutdown, err := telemetry.Init(context.Background(), telemetry.Options{
 		Endpoint:       endpoint,

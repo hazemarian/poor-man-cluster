@@ -65,24 +65,25 @@ func newTelemetrySupervisor(log zerolog.Logger, onFirstEndpoint func()) *telemet
 
 // Loop re-probes until ctx ends. It never blocks the caller: serve starts it in
 // a goroutine and a failed probe is a log line, not a startup failure.
-func (s *telemetrySupervisor) Loop(ctx context.Context, configured string, selfAddr config.SwarmAddrFunc) {
+func (s *telemetrySupervisor) Loop(ctx context.Context, configured string, isLeader func(context.Context) bool) {
 	t := time.NewTicker(s.interval)
 	defer t.Stop()
-	s.probe(ctx, configured, selfAddr)
+	s.probe(ctx, configured, isLeader)
 	for {
 		select {
 		case <-ctx.Done():
 			s.stop(context.Background())
 			return
 		case <-t.C:
-			s.probe(ctx, configured, selfAddr)
+			s.probe(ctx, configured, isLeader)
 		}
 	}
 }
 
 // probe resolves the endpoint once and reconciles the exporter with it.
-func (s *telemetrySupervisor) probe(ctx context.Context, configured string, selfAddr config.SwarmAddrFunc) {
-	endpoint, reason := resolveTelemetryEndpoint(ctx, configured, selfAddr, nil)
+func (s *telemetrySupervisor) probe(ctx context.Context, configured string, isLeader func(context.Context) bool) {
+	leader := isLeader != nil && isLeader(ctx)
+	endpoint, reason := resolveTelemetryEndpoint(configured, leader)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

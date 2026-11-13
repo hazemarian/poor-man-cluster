@@ -119,7 +119,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}()
 	telemetryCtl := newTelemetrySupervisor(log, func() {
 	})
-	go telemetryCtl.Loop(cmd.Context(), cfg.OTLPEndpoint, docker.NodeSelfAddr)
+	go telemetryCtl.Loop(cmd.Context(), cfg.OTLPEndpoint, func(ctx context.Context) bool {
+		leader, _, err := isSwarmLeader(ctx, dc, hostname)
+		return err == nil && leader
+	})
 	defer telemetryCtl.stop(context.Background())
 	// worker decides which runner path this node takes: a swarm WORKER cannot read
 	// cluster settings (Docker configs are manager-only), so it learns its runner

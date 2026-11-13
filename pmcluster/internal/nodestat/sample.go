@@ -312,6 +312,25 @@ func (s *Sampler) rssKB(pid int) int64 {
 	return 0
 }
 
+// Stat is the row view of a sample: what the console reads, one row per node. It used to
+// live beside the JSONL reader; the reader is gone with the file transport, and this is
+// the shape both producers agree on (a node's report, written by the leader).
+type Stat struct {
+	Hostname   string
+	Role       string
+	Cores      int
+	Load1      float64
+	Load5      float64
+	Load15     float64
+	MemTotalMB int64
+	MemUsedMB  int64
+	MemAvailMB int64
+	DockerUp   int
+	TopRSS     []Proc
+	TopCPU     []Proc
+	SampleTS   int64
+}
+
 // Stat is the row view of this sample: what the console reads, one per node.
 //
 // It lives here rather than in the reader because there are now TWO producers — the

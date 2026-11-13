@@ -7,7 +7,6 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 )
 
@@ -22,7 +21,7 @@ func TestTelemetrySupervisorRecoversWithoutARestart(t *testing.T) {
 	var endpoint atomic.Value
 	endpoint.Store("")
 	reason := ""
-	resolveTelemetryEndpoint = func(ctx context.Context, configured string, self config.SwarmAddrFunc, dial config.DialFunc) (string, string) {
+	resolveTelemetryEndpoint = func(configured string, isLeader bool) (string, string) {
 		return endpoint.Load().(string), reason
 	}
 	var inits, shutdowns, firstCalls atomic.Int32

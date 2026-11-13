@@ -219,7 +219,7 @@ expose:
   only required when `external` is not set: `expose` with `external` but no `host`
   publishes the raw swarm port with **no** Traefik router and no routing-network
   membership (this is how Traefik itself binds 80/443, and how the platform
-  publishes the OTel collector's `4318` with `mode: ingress` — the routing mesh
+  publishes the OTel collector's `4318` with `mode: host` — the port exists on the node running the collector (the leader) and nowhere else
   answers on every node, which is what the host-process daemon needs).
 - Every exposed service automatically joins `traefik-net` (so Traefik can reach it) and `monitoring-net` (so OTel can scrape it).
 - `aliases` let a customer's own domain serve the same backend alongside the canonical `${domain}` host. Each alias gets its own Traefik router sharing the same backend.
@@ -389,7 +389,7 @@ services:
     env:
       PORT: "8080"
       # the collector serves OTLP on monitoring-net as observability_otel-collector
-      # (gRPC :4317, HTTP :4318); :4318 is also published on the routing mesh
+      # (gRPC :4317, HTTP :4318); :4318 is published on the collector's node only
       # (ingress) for the host-process daemon, which cannot resolve this name
       OTEL_EXPORTER_OTLP_ENDPOINT: http://observability_otel-collector:4318
       OTEL_SERVICE_NAME: donation-campaign-api

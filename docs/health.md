@@ -188,7 +188,7 @@ nobody reads, which is worse than silence.
 ### A node with no row in Node resources
 
 The console's node panel is fed by each node's **own** daemon over OTLP, through the
-leader's collector, into `/var/stack/nodestat/nodestat.jsonl`. A node missing from
+the leader over swarm mTLS, into the `node_stats` table. A node missing from
 the table is therefore a telemetry question, not a swarm one — and it is the
 question this section exists to answer, because the panel looked broken while four
 daemons had simply given up.
@@ -207,7 +207,6 @@ every **minute** and reconciles the exporter with the answer:
 
 The node-stat sampler starts **once, on the first successful probe**, and never stops
 afterwards: a sampler with no exporter would do work nobody reads. Its own sampling
-is unconditional by node (the leader included) because the collector's file exporter
 is a sink, not a loop.
 
 Before this, the decision was taken once at startup. A node that booted while the

@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -91,27 +90,22 @@ func TestOTelCollectorIsSingleTaskPinnedToTheLeader(t *testing.T) {
 	}
 }
 
-// TestNodeStatOTLPEndpointIsTheNodesOwnSwarmAddress is the daemon half of the
-// same contract: the sample is exported to THIS node's swarm address, never to
-// localhost (a closed port on every node but the collector's) and never to the
-// overlay service name (a host process cannot resolve it).
-func TestNodeStatOTLPEndpointIsTheNodesOwnSwarmAddress(t *testing.T) {
-	endpoint, reason := config.ResolveOTLPEndpoint(context.Background(), config.OTLPAutoEndpoint,
-		func(context.Context) (string, error) { return "10.7.224.15", nil },
-		func(context.Context, string) error { return nil })
+// TestNodeStatOTLPEndpointIsTheLeadersLoopback is the daemon half of the same
+// contract. The collector follows the leader and publishes 4318 there only, so exactly
+// one daemon exports — to loopback, beside the collector. Every other node reports to the
+// leader over mTLS and exports nothing; a probe that reported that as a failure is what
+// this replaced.
+func TestNodeStatOTLPEndpointIsTheLeadersLoopback(t *testing.T) {
+	endpoint, reason := config.ResolveOTLPEndpoint(config.OTLPAutoEndpoint, true)
 	if reason != "" {
-		t.Fatalf("endpoint disabled: %s", reason)
+		t.Fatalf("the leader's endpoint was disabled: %s", reason)
 	}
-	if endpoint != "http://10.7.224.15:4318" {
-		t.Fatalf("endpoint = %q, want http://10.7.224.15:4318", endpoint)
+	if endpoint != "http://127.0.0.1:4318" {
+		t.Fatalf("endpoint = %q, want the collector beside the leader at http://127.0.0.1:4318", endpoint)
 	}
-	for _, bad := range []string{"127.0.0.1", "localhost", "observability_otel-collector"} {
-		if strings.Contains(endpoint, bad) {
-			t.Fatalf("endpoint %q names %q", endpoint, bad)
-		}
-	}
-	// And the port it dials is the one the stack publishes.
-	if config.OTLPPort != 4318 {
-		t.Fatalf("OTLPPort = %d, want 4318", config.OTLPPort)
+	// A worker exports nothing, and says why without calling it a fault.
+	ep, why := config.ResolveOTLPEndpoint(config.OTLPAutoEndpoint, false)
+	if ep != "" || why == "" {
+		t.Fatalf("worker endpoint = (%q, %q), want none with a reason", ep, why)
 	}
 }

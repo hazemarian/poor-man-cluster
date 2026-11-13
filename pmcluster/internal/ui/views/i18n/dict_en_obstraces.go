@@ -6,7 +6,7 @@ func init() {
 		"obs.traces_title":         "Traces",
 		"obs.traces_sub":           "Requests sent by your apps over OpenTelemetry, newest first.",
 		"obs.traces_none_title":    "No traces in this window",
-		"obs.traces_none_body":     "Send OTLP traces to port 4318 of the collector (http://<host>:4318/v1/traces) and set a service.name on your app.",
+		"obs.traces_none_body":     "Send OTLP to the collector from inside the cluster (gRPC :4317 or HTTP :4318) and set a service.name on your app. The port is published on the leader only, so address it by its service name, not by a node address.",
 		"obs.col_trace":            "Trace",
 		"obs.col_root":             "Root span",
 		"obs.col_spans":            "Spans",
