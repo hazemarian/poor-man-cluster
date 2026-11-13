@@ -66,6 +66,30 @@ func newTestStore(t *testing.T) *store.Store {
 	return st
 }
 
+// waitStackFailover blocks until the durable failover marker for stack exists
+// and returns it. The marker is written by the detached failover goroutine, so
+// it doubles as "that goroutine is finished" — asserting on it (rather than on
+// an in-test slice) is also the behavioural claim: a moved stack is recorded
+// with where it came from and where it went.
+func waitStackFailover(t *testing.T, st *store.Store, stack string) *store.StackFailover {
+	t.Helper()
+	ctx := context.Background()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mark, err := st.StackFailover(ctx, stack)
+		if err != nil {
+			t.Fatalf("StackFailover(%q): %v", stack, err)
+		}
+		if mark != nil {
+			return mark
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no failover marker for %q after 5s", stack)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestServiceStatus(t *testing.T) {
 	cases := []struct {
 		name string
@@ -580,6 +604,11 @@ func TestRunOnce_StorageFailoverMovesToHealthyNode(t *testing.T) {
 
 	var mu sync.Mutex
 	var moves []string
+	// The move runs in a detached goroutine (deliberate: a restore-from-S3 must
+	// not block the converge pass), so the test may not read the result the
+	// instant RunOnce returns — on a single-P run it loses that race every
+	// time. Wait on the goroutine itself instead of on the scheduler.
+	moved := make(chan struct{}, 1)
 	rec := &Reconciler{
 		Store:         st,
 		Docker:        &fakeNodesDocker{nodes: []runtime.Node{{Hostname: other, Status: "ready", Availability: "active"}}},
@@ -588,14 +617,26 @@ func TestRunOnce_StorageFailoverMovesToHealthyNode(t *testing.T) {
 		Log:           zerolog.Nop(),
 		FailoverMove: func(_ context.Context, stackName, targetNode string) error {
 			mu.Lock()
-			defer mu.Unlock()
 			moves = append(moves, stackName+">"+targetNode)
+			mu.Unlock()
+			moved <- struct{}{}
 			return nil
 		},
 	}
 
 	if err := rec.RunOnce(ctx); err != nil {
 		t.Fatalf("RunOnce (failover): %v", err)
+	}
+	select {
+	case <-moved:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("storage failover: the detached move never ran for %q (pinned %q, healthy %q)", "demo", pinned, other)
+	}
+	// The marker is the goroutine's last act: waiting for it means the store is
+	// untouched again before t.Cleanup closes it.
+	mark := waitStackFailover(t, st, "demo")
+	if mark.FromNode != pinned || mark.ToNode != other {
+		t.Fatalf("failover marker = %s>%s, want %s>%s", mark.FromNode, mark.ToNode, pinned, other)
 	}
 	mu.Lock()
 	got := append([]string(nil), moves...)

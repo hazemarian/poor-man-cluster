@@ -92,14 +92,22 @@ func seedInClusterStore(t *testing.T, cfg *config.Config) {
 }
 
 // fakeDockerBinary installs a fake `docker` script first on PATH. It records
-// the `service create` argv to `capture` (and waits for that file in `service
-// inspect` so the create argv is flushed before the mover proceeds), then
-// reports the one-shot task Complete.
+// the `service create` argv to `capture` (atomically: written to a temp name and
+// renamed into place, so the file's EXISTENCE means its content is complete),
+// and waits for that file in `service inspect` so the create argv is flushed
+// before the mover proceeds. Then it reports the one-shot task Complete.
+//
+// The rename is load-bearing. `startMoverService` treats "service inspect
+// succeeds" as "the create CLI has done its job" and kills the still-attached
+// create process on return, so a capture file that is CREATED before it is
+// WRITTEN (plain `printf … > capture`) is a race: the 10ms inspect poll can see
+// the empty file, the mover kills the create mid-write, and the assertion then
+// reads a partial argv. That is the flake this harness used to have.
 func fakeDockerBinary(t *testing.T, capture string) {
 	t.Helper()
 	script := fmt.Sprintf(`#!/bin/sh
 if [ "$1" = service ] && [ "$2" = create ]; then
-  printf '%%s\n' "$@" > %q
+  printf '%%s\n' "$@" > %q.tmp && mv %q.tmp %q
   exit 0
 fi
 if [ "$1" = service ] && [ "$2" = inspect ]; then
@@ -112,7 +120,7 @@ if [ "$1" = service ] && [ "$2" = ps ]; then
   exit 0
 fi
 exit 0
-`, capture, capture)
+`, capture, capture, capture, capture)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "docker"), []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake docker: %v", err)
