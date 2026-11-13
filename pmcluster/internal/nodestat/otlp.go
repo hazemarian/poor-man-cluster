@@ -47,8 +47,21 @@ const MetricPrefix = "pmcluster.node."
 // resource attributes at all.
 func Publish(ctx context.Context, s Sample) {
 	m := otel.Meter("github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodestat")
+	// THREE node attributes, not one, and each earns its place:
+	//   host.name          the OpenTelemetry semantic convention — generic tooling
+	//                      (dashboards, collectors, resourcedetection) looks for this
+	//   pmcluster.node.name ours, unambiguously namespaced, and the one the platform's
+	//                      own queries group by; it cannot be shadowed by a resource
+	//                      rewrite the way host.name can
+	//   node.role          what the node is, so a panel can separate managers from workers
+	//                      without joining against the swarm's node list
+	//
+	// These ride the DATAPOINT, not only the resource: on the leader's relay the resource
+	// is the leader's own, and a point that carried no node attribute would be attributed
+	// to the wrong machine — the failure mode that makes a multi-node dashboard lie.
 	base := metric.WithAttributes(
 		attribute.String("host.name", s.Hostname),
+		attribute.String("pmcluster.node.name", s.Hostname),
 		attribute.String("node.role", s.Role),
 	)
 
@@ -77,6 +90,7 @@ func Publish(ctx context.Context, s Sample) {
 		for _, p := range s.TopRSS {
 			rss.Record(ctx, p.RSSMB, metric.WithAttributes(
 				attribute.String("host.name", s.Hostname),
+				attribute.String("pmcluster.node.name", s.Hostname),
 				attribute.Int("process.pid", p.PID),
 				attribute.String("process.name", p.Name),
 			))
@@ -87,6 +101,7 @@ func Publish(ctx context.Context, s Sample) {
 		for _, p := range s.TopCPU {
 			cpu.Record(ctx, p.CPUPct, metric.WithAttributes(
 				attribute.String("host.name", s.Hostname),
+				attribute.String("pmcluster.node.name", s.Hostname),
 				attribute.Int("process.pid", p.PID),
 				attribute.String("process.name", p.Name),
 			))

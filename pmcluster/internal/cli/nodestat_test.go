@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodereport"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodestat"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -361,43 +363,59 @@ func writeProcTree(t *testing.T) string {
 	return root
 }
 
-// TestNodeStatSamplerExportsOnLeader: a daemon that IS the leader still emits
-// its own sample. The leader is the node running the collector, and the
-// collector's node-stats pipeline ends in a `file` exporter — there is no loop
-// to avoid, so silence is pure loss: the panel rendered three rows for four
-// nodes. This drives one tick with a client that reports this node as Leader
-// and asserts the exported gauge reaches a real MeterProvider, which is the
-// behaviour a reintroduced "don't export to yourself" branch would break.
-func TestNodeStatSamplerExportsOnLeader(t *testing.T) {
+// TestNodeStatTickReportsAndDoesNotPublish: the tick's job is to SEND, not to export.
+//
+// The leader is the only node with a collector, so the collector's copy of a worker's
+// numbers can only arrive through the report handler. Publishing in the tick as well
+// would double every point on the leader's own series — and publishing on a worker is a
+// no-op that looks like success while nothing reaches the pipeline.
+//
+// This pins both halves: one POST with this node's sample, and zero metrics recorded
+// locally by the sampler.
+func TestNodeStatTickReportsAndDoesNotPublish(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	prev := otel.GetMeterProvider()
 	otel.SetMeterProvider(mp)
 	t.Cleanup(func() { otel.SetMeterProvider(prev) })
 
-	// The swarm view of this host: manager, and the current leader.
 	dc := &statClient{nodes: []runtime.Node{
 		{ID: "self", Hostname: "self", Role: "manager", IsLeader: true},
-		{ID: "peer", Hostname: "nxt-sw-4-m", Role: "manager"},
 	}}
 	s := nodestat.NewSampler(writeProcTree(t), "self", "manager")
+	sender := &fakeReportSender{}
 	ctx := context.Background()
-	nodeStatTick(ctx, dc, s, zerolog.Nop())
+	nodeStatTickWith(ctx, dc, s, zerolog.Nop(), sender)
+
+	if len(sender.posts) != 1 {
+		t.Fatalf("reports sent = %d, want exactly 1", len(sender.posts))
+	}
+	if sender.posts[0] != nodereport.Path {
+		t.Fatalf("posted to %q, want the internal report path %q", sender.posts[0], nodereport.Path)
+	}
+	if !strings.Contains(string(sender.bodies[0]), `"hostname":"self"`) {
+		t.Fatalf("the report does not name this node: %s", sender.bodies[0])
+	}
 
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(ctx, &rm); err != nil {
-		t.Fatalf("collect exported metrics: %v", err)
+		t.Fatalf("collect: %v", err)
 	}
-	load, host := findGauge(rm, nodestat.MetricLoad1)
-	if !load {
-		t.Fatal("a leader daemon exported no pmcluster.node.load.1: its sample was skipped")
+	if load, _ := findGauge(rm, nodestat.MetricLoad1); load {
+		t.Fatal("the sampler published metrics directly: the report handler is the only emitter, or the leader's series doubles")
 	}
-	if host != "self" {
-		t.Fatalf("exported host.name = %q, want %q", host, "self")
-	}
-	if found, _ := findGauge(rm, nodestat.MetricProcessRSS); !found {
-		t.Fatal("a leader daemon exported no process series: its top list was skipped")
-	}
+}
+
+// fakeReportSender records what the tick would put on the wire.
+type fakeReportSender struct {
+	posts  []string
+	bodies [][]byte
+}
+
+func (f *fakeReportSender) PostJSON(_ context.Context, path string, body []byte) error {
+	f.posts = append(f.posts, path)
+	f.bodies = append(f.bodies, body)
+	return nil
 }
 
 // findGauge looks for one metric in a collected batch and returns whether it

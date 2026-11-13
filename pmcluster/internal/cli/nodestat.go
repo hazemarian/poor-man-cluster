@@ -109,7 +109,8 @@ func nodeStatTick(ctx context.Context, dc runtime.Client, s *nodestat.Sampler, l
 			smp.DockerUp = 0
 		}
 	}
-	nodestat.Publish(ctx, smp)
+	// No direct Publish: see above. A sample that cannot be delivered is simply logged
+	// (one debug line, next tick retries) rather than exported twice on the leader.
 }
 
 // localHostname prefers the swarm's name for this node over a short hostname:
@@ -368,7 +369,13 @@ func nodeReportSender(dc runtime.Client) *runners.Client {
 
 // nodeStatTickWith is nodeStatTick with the sender injected, so a test can drive one tick
 // without a leader.
-func nodeStatTickWith(ctx context.Context, dc runtime.Client, s *nodestat.Sampler, log zerolog.Logger, sender *runners.Client) {
+// reportSender is the one method the tick needs. An interface, so a test can drive one
+// tick and assert what would be sent without a leader to send it to.
+type reportSender interface {
+	PostJSON(ctx context.Context, path string, body []byte) error
+}
+
+func nodeStatTickWith(ctx context.Context, dc runtime.Client, s *nodestat.Sampler, log zerolog.Logger, sender reportSender) {
 	smp, err := s.Collect(time.Now())
 	if err != nil {
 		log.Warn().Err(err).Msg("node stat sample incomplete")
@@ -378,9 +385,9 @@ func nodeStatTickWith(ctx context.Context, dc runtime.Client, s *nodestat.Sample
 			smp.DockerUp = 0
 		}
 	}
-	// The leader's own numbers come from its exporter; every OTHER node's only path is
-	// this report. Sending from the leader too is not harmful (the row is upserted, not
-	// appended) and it keeps the two paths identical, which is what makes this testable.
+	// EVERY node reports, the leader included, and the leader's report handler is the
+	// single place that emits metrics (it is the only node with a collector). Publishing
+	// here as well would double every point on the leader's own series.
 	if sender != nil {
 		body, merr := json.Marshal(smp)
 		if merr != nil {
@@ -389,5 +396,6 @@ func nodeStatTickWith(ctx context.Context, dc runtime.Client, s *nodestat.Sample
 			log.Debug().Err(perr).Msg("node report: not delivered to the leader")
 		}
 	}
-	nodestat.Publish(ctx, smp)
+	// No direct Publish: see above. A sample that cannot be delivered is simply logged
+	// (one debug line, next tick retries) rather than exported twice on the leader.
 }

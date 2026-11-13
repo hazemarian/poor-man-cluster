@@ -14,6 +14,7 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth/swarmtls"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodereport"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodestat"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/server"
@@ -173,6 +174,12 @@ func startAssignmentListener(ctx context.Context, o assignmentListenerOptions) {
 	mux.Handle(nodereport.Path, verifier.Middleware(&nodereport.Service{
 		Store: o.Store,
 		Log:   log.With().Str("component", "node-report").Logger(),
+		// The collector runs on THIS node, so the leader is the only one that can put a
+		// report into the metrics pipeline. Every node's points carry its own name
+		// (host.name + pmcluster.node.name), so one dashboard can separate four machines.
+		Relay: func(ctx context.Context, smp nodestat.Sample) {
+			nodestat.Publish(ctx, smp)
+		},
 	}))
 
 	serveCfg := swarmtls.ServeConfig{
