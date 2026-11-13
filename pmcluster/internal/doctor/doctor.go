@@ -108,6 +108,7 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 
 	add(checkSwarm(ctx, in))
 	add(checkCollectorPlacement(ctx, in))
+	add(checkCollectorExposure(ctx, in))
 	add(checkNodeLabels(ctx, in))
 	add(checkSkew(ctx, in))
 	add(checkKit(ctx, in))
@@ -165,6 +166,44 @@ func checkSwarm(ctx context.Context, in Input) Check {
 //
 // So the check compares the running service's rendered placement with the live leader by
 // name, and names both when they disagree.
+// checkCollectorExposure answers "is the OTLP port on one node or on all of them".
+//
+// The collector publishes 4318 with `mode: host`, so it exists on the node that runs the
+// task — the leader — and nowhere else. `mode: ingress` would bind it on every node and
+// forward to the single task, which is exposure nobody needs now that nodes report over
+// mTLS; it was only ever chosen because a daemon without a local collector wrote an
+// unbounded journal flood of export failures. That class is closed at the source (bounded
+// error handler), so the publish shape can go back to the narrow one.
+//
+// A WARN here is not a broken platform: it is 4318 answering on machines that have no
+// collector, which is the state that hid the flood.
+func checkCollectorExposure(ctx context.Context, in Input) Check {
+	const name = "collector exposure"
+	if in.Docker == nil {
+		return Check{name, StatusSkip, "no docker client"}
+	}
+	svc, err := in.Docker.ServiceInspect(ctx, observabilityCollectorService)
+	if err != nil {
+		return Check{name, StatusSkip, "the observability stack is not deployed"}
+	}
+	var otlp *runtime.ServicePort
+	for i := range svc.Ports {
+		if svc.Ports[i].Target == 4318 || svc.Ports[i].Published == 4318 {
+			otlp = &svc.Ports[i]
+		}
+	}
+	switch {
+	case otlp == nil:
+		return Check{name, StatusWarn,
+			svc.Name + " publishes no OTLP port — a daemon with no local collector has nothing to export to"}
+	case otlp.Mode == "ingress":
+		return Check{name, StatusWarn,
+			fmt.Sprintf("%s OTLP 4318 is published with mode: ingress — bound on EVERY node and forwarded to one task; it should be host, on the leader only", svc.Name)}
+	}
+	return Check{name, StatusOK,
+		fmt.Sprintf("%s OTLP 4318 is published with mode: %s (the node running the task only)", svc.Name, otlp.Mode)}
+}
+
 // observabilityCollectorService is the collector's Swarm service name, the one
 // service whose placement the platform renders onto the leader.
 const observabilityCollectorService = "observability_otel-collector"

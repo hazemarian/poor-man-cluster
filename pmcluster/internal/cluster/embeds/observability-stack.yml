@@ -175,27 +175,30 @@ services:
   # is the only cleanup: the exporter holds the file open, and a reader that
   # truncated it would leave a sparse NUL-filled middle.
   #
-  # Host mode was the previous publish shape, and it was a trap worth naming. It
-  # published 4318 ONLY on the node running the task, while the daemon's endpoint
-  # was the constant http://127.0.0.1:4318 — a closed port on every other node.
-  # The OTel SDK's default error handler logs every failed export unbounded, so
-  # on 2026-11-08 node nxt-sw-4-m (1 vCPU) wrote 261,617 journal lines from one
-  # daemon boot (238,951 / 213,808 / 196,367 / 151,609 / 71,180 from other
-  # incarnations); journald writes starved docker's heartbeat, the swarm marked
-  # the node Down and leadership moved off it. 2026-10-16 was the same failure in
-  # miniature: `dial tcp 127.0.0.1:4318: connect: connection refused` on a worker
-  # running no collector.
+  # PUBLISHED ON THE LEADER ONLY (`mode: host`). The collector follows the leader by
+  # name, so its OTLP port exists on exactly one node, and only that node's daemon dials
+  # it — at its own swarm address, which host mode binds.
   #
-  # So 4318 stays ingress-published: the routing mesh binds it on EVERY node and
-  # forwards to the single task. The daemon dials THIS node's swarm address
-  # (config.ResolveOTLPEndpoint), never localhost and never the overlay name —
-  # a host process cannot resolve overlay DNS.
+  # This was `mode: ingress` before, and the reason is worth keeping: host mode shipped
+  # once WITHOUT a daemon-side guard. Every non-leader daemon kept dialling
+  # http://127.0.0.1:4318 against a port nothing bound there, the OTel SDK's default
+  # error handler logged every failed export unbounded, and on 2026-11-08 nxt-sw-4-m
+  # wrote 261,617 journal lines from one boot — journald writes starved docker's
+  # heartbeat, the swarm marked the node Down, and leadership moved off it. Ingress
+  # "fixed" that by binding 4318 on every node and forwarding to the single task.
   #
-  # 4318 is still not public: it is a documented Traefik bypass, and
-  # harden-host.sh DROPs it in DOCKER-USER for every non-private source. That
-  # rule is what makes an ingress publish acceptable — without it, ingress would
-  # put the collector on all four public interfaces, and an unauthenticated OTLP
-  # receiver is an open ingestion endpoint.
+  # Two things now close that class properly, and they are why host mode is safe:
+  #
+  #   1. telemetry.SetErrorHandler is BOUNDED (internal/telemetry/failures.go): one line
+  #      per distinct failure, then a rate-limited summary. A dead endpoint can no longer
+  #      write a journal flood regardless of how the port is published.
+  #   2. the supervisor disables the exporter when the endpoint stops answering, and
+  #      re-probes every minute (internal/cli/telemetry_supervisor.go). A node with no
+  #      local collector exports nothing and says so once.
+  #
+  # So: 4318 answers on the leader's interfaces and nowhere else. It is still not public
+  # — harden-host.sh DROPs it in DOCKER-USER for every non-private source, which is what
+  # made an ingress publish acceptable and is now simply belt and braces.
   #
   # Sizing: reserve ~the measured steady state, cap at ~3x the measured peak, and
   # keep the collector's own memory_limiter (otel-collector-config.yml) strictly
@@ -225,11 +228,10 @@ services:
     expose:
       port: 4318
       external: 4318
-      # ingress, not host: the routing mesh binds 4318 on EVERY node and forwards
-      # to this service's task wherever it runs, so a host-process daemon can
-      # dial its own node's swarm address and always reach a collector. See the
-      # long note above for what that buys and what it costs.
-      mode: ingress
+      # host, not ingress: the port belongs to the node that runs the collector, and
+      # that node is the leader. Ingress would bind 4318 on every node and forward to
+      # one task, which is exposure nobody needs now that nodes report over mTLS.
+      mode: host
     binds:
       - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"

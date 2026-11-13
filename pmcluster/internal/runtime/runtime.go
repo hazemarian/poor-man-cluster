@@ -254,10 +254,24 @@ type ServiceInspectResult struct {
 	// which is the question a rendered placement creates and a label constraint
 	// used to hide.
 	Constraints []string
+	// Ports are the service's published ports. The doctor reads them to answer "is
+	// this port on one node or on all of them", which is the difference between a
+	// host publish and a routing-mesh ingress — and the thing that once flooded a
+	// node's journal with unbounded export failures.
+	Ports []ServicePort
 	// Mounts are the service's task-template mounts. A daemon uses them to
 	// make sure the host directories a service binds exist locally before the
 	// Swarm tries to start its task (a missing bind source is a hard failure).
 	Mounts []Mount
+}
+
+// ServicePort is one published port of a cluster service.
+type ServicePort struct {
+	Target    uint32 // container port
+	Published uint32 // host/mesh port, 0 when not published
+	// Mode is "host" (bound on the node running the task) or "ingress" (bound on
+	// every node by the routing mesh).
+	Mode string
 }
 
 // Mount is one container mount from a service's task template.

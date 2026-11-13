@@ -219,6 +219,28 @@ five-node cluster showed one row.
 
 ```sh
 journalctl -u pmcluster | grep -i "self-telemetry\|OTel telemetry"
+**How the collector is exposed, and the incident behind it.** Its OTLP port is published
+`mode: host`, so 4318 exists on the node running the collector — the leader — and nowhere
+else. It was `mode: ingress` before, which binds the port on **every** node and forwards to
+the single task, and it was chosen for a reason worth remembering: with host mode and no
+daemon-side guard, every non-leader daemon dialled a port nothing bound locally, the OTel
+SDK's default error handler logged each failed export, and on 2026-11-08 one node wrote
+261,617 journal lines from a single boot until journald starved docker's heartbeat and the
+swarm marked it Down.
+
+That class is closed at the source now — `telemetry.SetErrorHandler` is bounded (one line
+per distinct failure, then a rate-limited summary) and the supervisor disables an exporter
+whose endpoint stops answering — so the narrow publish is safe again. `doctor` asserts the
+shape:
+
+```
+collector exposure   observability_otel-collector OTLP 4318 is published with mode: host
+                     (the node running the task only)
+```
+
+An `ingress` mode here is a WARN, not a fault: the platform works, but 4318 answers on
+machines that have no collector, which is exactly the state that hid the flood.
+
 **Where the collector runs, and why the check names two nodes.** The collector follows the
 **leader by name** — the same mechanism the edge, the SSO stack and the backup stack use —
 not by a label constraint. A constraint says "wherever `pmcluster.leader=true` happens to
