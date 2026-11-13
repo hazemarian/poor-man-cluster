@@ -224,16 +224,17 @@ func TestHostMemTotalMiB_ReadsProcMeminfo(t *testing.T) {
 	}
 }
 
-// TestDependencyDropInCancelsBindsTo is the regression for a silent node outage:
-// a unit rendered before v0.2.290 carries BindsTo=docker.service, an upgrade does
-// not re-render it, and systemd ignores Restart= for a stop a dependency caused —
-// so `systemctl restart docker` left the node agent dead and every docker call in
-// a CI job blocking forever (nxt-sw-6-w, 2026-11-12, a 4h20m hung job).
+// TestDependencyDropInAddsPartOf guards the half of the docker dependency a drop-in
+// can actually carry: PartOf=docker.service, the only directive that propagates a
+// RESTART of docker to this unit. Without it the node agent stays down while dockerd
+// comes back and every docker call inside a CI job blocks forever (nxt-sw-6-w,
+// 2026-11-12, a 4h20m hung job).
 //
-// The override must do BOTH things: cancel the inherited BindsTo (an empty
-// assignment is how a drop-in resets a list) and add PartOf, which is the only
-// directive that propagates a restart rather than just a stop.
-func TestDependencyDropInCancelsBindsTo(t *testing.T) {
+// This drop-in must NOT be trusted to cancel BindsTo. It used to carry an empty
+// `BindsTo=` for that, and the test asserted the text — while systemd 259 ignored it.
+// What actually removes the inherited directive is repairDaemonUnitDependency, and
+// its test is the behavioural one (TestRepairDaemonUnitDependencyRemovesBindsTo).
+func TestDependencyDropInAddsPartOf(t *testing.T) {
 	old := dependencyDropIn
 	t.Cleanup(func() { dependencyDropIn = old })
 	dependencyDropIn = filepath.Join(t.TempDir(), "docker-dependency.conf")
@@ -250,15 +251,18 @@ func TestDependencyDropInCancelsBindsTo(t *testing.T) {
 		t.Fatalf("read back: %v", err)
 	}
 	got := string(body)
-	for _, want := range []string{"[Unit]", "BindsTo=", "PartOf=docker.service"} {
+	for _, want := range []string{"[Unit]", "PartOf=docker.service"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("drop-in is missing %q:\n%s", want, got)
 		}
 	}
-	// A drop-in that set PartOf but forgot to cancel BindsTo would still be stopped
-	// by the inherited directive, which is the half-fix this test exists to prevent.
-	if !strings.Contains(got, "\nBindsTo=\n") {
-		t.Fatalf("BindsTo is not cancelled with an empty assignment:\n%s", got)
+	// An empty BindsTo= here reads as a fix and is not one; keep the DIRECTIVE out
+	// (the prose above explains why) so nobody reintroduces it believing it is
+	// guarded. A line starting with BindsTo is the only shape systemd honours.
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "BindsTo") {
+			t.Fatalf("drop-in claims a BindsTo cancellation it cannot perform:\n%s", got)
+		}
 	}
 
 	// Idempotent: the daemon rewrites this on every start and must not churn
@@ -269,5 +273,106 @@ func TestDependencyDropInCancelsBindsTo(t *testing.T) {
 	}
 	if again {
 		t.Fatal("second write reported a change; the file is not stable")
+	}
+}
+
+// TestRepairDaemonUnitDependencyRemovesBindsTo is the behavioural regression for the
+// outage the drop-in did not fix: a unit rendered before v0.2.290 binds to docker,
+// systemd turns a dockerd failure into a STOP of pmcluster and ignores Restart=always
+// for it, and the node comes back with docker and no control plane. Measured
+// end-to-end on nxt-sw-6-w (2026-11-13): the docker watchdog restored dockerd and
+// pmcluster was still `inactive` afterwards.
+func TestRepairDaemonUnitDependencyRemovesBindsTo(t *testing.T) {
+	dir := t.TempDir()
+	old := daemonUnitPath
+	t.Cleanup(func() { daemonUnitPath = old })
+	daemonUnitPath = filepath.Join(dir, "pmcluster.service")
+
+	// The shape an old node actually carries: the bind, and everything that makes the
+	// service startable (which the repair must not touch).
+	oldUnit := `[Unit]
+Description=pmcluster API Server
+After=docker.service
+BindsTo=docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=root
+Group=docker
+Environment=HOME=/root
+ExecStart=/usr/local/bin/pmcluster serve
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+WantedBy=docker.service
+`
+	if err := os.WriteFile(daemonUnitPath, []byte(oldUnit), 0o644); err != nil {
+		t.Fatalf("seed unit: %v", err)
+	}
+
+	changed, err := repairDaemonUnitDependency()
+	if err != nil {
+		t.Fatalf("repairDaemonUnitDependency: %v", err)
+	}
+	if !changed {
+		t.Fatal("repair reported no change on a unit that carries BindsTo=docker.service")
+	}
+	body, err := os.ReadFile(daemonUnitPath)
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	got := string(body)
+	if strings.Contains(got, "BindsTo=docker.service") {
+		t.Fatalf("BindsTo survived the repair:\n%s", got)
+	}
+	if strings.Contains(got, "BindsTo") {
+		t.Fatalf("the directive was emptied instead of removed (systemd keeps an empty assignment for nothing):\n%s", got)
+	}
+	for _, want := range []string{
+		"Description=pmcluster API Server",
+		"After=docker.service",
+		"User=root",
+		"Group=docker",
+		"Environment=HOME=/root",
+		"ExecStart=/usr/local/bin/pmcluster serve",
+		"Restart=always",
+		"WantedBy=docker.service",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("repair removed %q, which the node needs:\n%s", want, got)
+		}
+	}
+
+	// A unit that never had the bind is left alone, and says so: the daemon runs this
+	// on every start and a false "changed" would churn daemon-reload forever.
+	again, err := repairDaemonUnitDependency()
+	if err != nil {
+		t.Fatalf("second repair: %v", err)
+	}
+	if again {
+		t.Fatal("second repair reported a change; the unit is not stable")
+	}
+
+	// A repaired unit that still binds something else keeps that binding.
+	mixed := `[Unit]
+Description=pmcluster API Server
+BindsTo=docker.service docker.socket
+`
+	if err := os.WriteFile(daemonUnitPath, []byte(mixed), 0o644); err != nil {
+		t.Fatalf("seed mixed unit: %v", err)
+	}
+	if _, err := repairDaemonUnitDependency(); err != nil {
+		t.Fatalf("repair mixed: %v", err)
+	}
+	body, err = os.ReadFile(daemonUnitPath)
+	if err != nil {
+		t.Fatalf("read mixed: %v", err)
+	}
+	if !strings.Contains(string(body), "BindsTo=docker.socket") {
+		t.Fatalf("repair dropped an unrelated binding:\n%s", body)
 	}
 }

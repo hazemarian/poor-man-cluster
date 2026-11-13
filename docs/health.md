@@ -160,6 +160,21 @@ operator environment: no `DOCKER_HOST`, no guarantee that a `docker` binary is o
 `PATH` for the workload. `GET /_ping` over the socket path it is given has no such
 dependencies.
 
+**The restart only helps if the control plane survives it.** A unit rendered before
+v0.2.290 carries `BindsTo=docker.service`, and systemd turns a dockerd failure into a
+*stop* of `pmcluster` — `Restart=always` is not honoured for a stop a dependency
+caused. Measured end-to-end on `nxt-sw-6-w` (2026-11-13): the watchdog did its whole
+job — three failed probes, `reset-failed`, `restart docker`, docker answering again —
+and the node came back with dockerd running and **no control plane at all**, because
+`pmcluster` had been stopped at the first kill and nothing was left to start it. The
+fix is in the unit, not in the watchdog: the daemon's startup convergence now removes
+the inherited `BindsTo=docker.service` line from the unit file and `daemon-reload`s,
+and the drop-in adds `PartOf=docker.service` so an explicit docker restart still
+restarts the agent. A drop-in cannot do the removal — an empty `BindsTo=` does **not**
+reset a dependency inherited from the main unit (verified on systemd 259 with a
+scratch unit, not just assumed), which is why the earlier "BindsTo cancelled" drop-in
+was a no-op.
+
 **What it still cannot do.** It cannot recover a node that is out of memory: if the
 kernel is killing processes, the timer is not running either. It cannot reboot a
 machine, and it will not fight systemd beyond one `reset-failed` per 30 minutes. Those

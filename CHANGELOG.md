@@ -3,6 +3,34 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.319 — the docker watchdog works; the control plane has to survive it
+
+**Why:** `node_docker_restart` exists so a dead `dockerd` fixes itself. It was exercised
+end-to-end for the first time on `nxt-sw-6-w` (2026-11-13): dockerd was killed until
+systemd's `StartLimitBurst` refused to start it again — the 2026-11-12 incident state —
+and the watchdog did exactly what it promises. Three failed `/_ping` probes a minute
+apart, `reset-failed`, `restart docker`, docker answering again. The node was still
+broken: `pmcluster.service` was `inactive`.
+
+- **A unit rendered before v0.2.290 carries `BindsTo=docker.service`, and systemd
+  propagates a bound unit's failure as a STOP** — for which `Restart=always` is not
+  honoured, so the control plane went down with the first kill and nothing brought it
+  back. The startup convergence now removes that line from the unit file itself
+  (`repairDaemonUnitDependency`) and `daemon-reload`s; every other line, including the
+  `User`/`Group`/`ExecStart` the node was installed with, is preserved.
+- **An empty `BindsTo=` in a drop-in does NOT cancel it.** The v0.2.290 drop-in carried
+  one, claimed in a comment and pinned by a test that asserted the text — while systemd
+  259 kept the inherited dependency, which is why the drop-in looked like a fix for two
+  months. Verified with a minimal scratch unit; the drop-in now carries only
+  `PartOf=docker.service` and says what it cannot do.
+- **`PartOf` stays, and is the right directive for the explicit case:** `systemctl
+  restart docker` restarts the agent with it (docker.service lists it in
+  `ConsistsOf=`), which is what the deploy script and the watchdog do.
+
+Measured after the fix, same node, same test: dockerd down 2m46s, watchdog restores it,
+`pmcluster` never leaves `active` (nothing stops it any more) and the swarm node is
+`Ready` with its tasks rescheduled — no operator, no manual start.
+
 ## Unreleased — a follower stops standing by (step 2 of 5)
 
 **Why:** after step 1 the leader could serve a versioned snapshot, and nothing consumed
