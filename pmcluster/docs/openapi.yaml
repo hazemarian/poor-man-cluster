@@ -1407,6 +1407,15 @@ paths:
                     type: object
                     additionalProperties:
                       type: string
+                  secret_set:
+                    type: object
+                    additionalProperties:
+                      type: boolean
+                    description: |
+                      For each secret-ish key, whether a value is stored. The values themselves are
+                      never returned — not even to an admin bearer — because the console is a browser
+                      and nobody needs to read back a secret they already set. A masked or empty value
+                      on write means "leave it alone".
     put:
       summary: Update cluster settings
       description: >-
