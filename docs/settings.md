@@ -152,6 +152,18 @@ logs one warning line naming the rejected value and runs at `info`.
    `POST /api/update`) re-renders the affected platform configs and
    re-deploys what changed.
 
+Two destinations, two mechanisms, and they are not the same wait:
+
+- **Another manager's own store** is current within one poll (60 s). A manager that
+  is not the leader pulls `GET /internal/api/cluster/snapshot` over the swarm-mTLS
+  channel and applies settings, secrets and API tokens in one transaction. So
+  `pmcluster doctor` and the CLI on a follower read the cluster's real settings
+  instead of a copy of unknown age, and the mirror records when it applied them
+  (`sync_state`) and when each row arrived (`mirrored_at`). A leader that dies leaves
+  the mirror in place: a stale answer, never a blank one.
+- **Running containers** only change when the platform re-renders and re-deploys —
+  step 2 above. Mirroring the store does not touch a container.
+
 ## Promoting a node to storage from the console
 
 The console's storage toggle (`POST /web/nodes/<hostname>/storage`) sets the intent: the

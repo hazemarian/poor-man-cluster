@@ -228,9 +228,34 @@ follower manager mirrors so it can answer reads from its own store instead of
   migrations seed the row: a promoted leader then answers the version its adopted data
   actually has, rather than restarting at 1.
 
-**Not built yet (slices 2–5 of the ADR):** no follower polls the route, settings still
-travel in Docker configs, and the join-time key route does not exist. Slice 1 is additive
-on purpose.
+**The follower half** (`internal/cli/snapshot_mirror.go`, `Store.ApplySnapshot`) polls
+that route and applies it in ONE transaction — upsert every row, delete every row the
+snapshot does not carry, then record `sync_state`. What the code constrains:
+
+- **It starts before the leadership wait and stops before the leader's store opens.** A
+  follower manager blocks in that wait forever (the runner assignment loop has the same
+  shape for the same reason), and at promotion this node becomes the writer: the loop is
+  closed and joined, not merely cancelled, or two paths apply different answers to the
+  same rows. It also starts *after* the startup control-plane restore, which is only safe
+  because nothing has the store open at that moment.
+- **The leader never fetches from itself** — it reads its own store, and the tick checks
+  leadership every time rather than once at start.
+- **A failed poll changes nothing.** The last applied snapshot stays and the log says the
+  poll failed; a mirror that empties on a transport error turns a failover into a blank
+  console.
+- **The delete half is the point.** A row missing from the snapshot is deleted here; an
+  upsert-only mirror would keep a setting the leader removed, forever. `users` is replaced
+  rather than upserted (two unique keys, no local authority), legacy `token_id` is written
+  as NULL (it is UNIQUE when set), and `last_used_at` arrives as 0 because a follower has
+  never seen that token used.
+- **Two clocks, never mixed.** `applied_at` and `mirrored_at` are this node's; the
+  leader's `generated_at` is provenance. Age is computed from the local stamps — the
+  cache-report bug was a report stamped by one clock and aged by another, which read as
+  stale the instant it was written.
+
+**Not built yet (slices 3–5 of the ADR):** no read surface answers from the mirror yet
+(so `doctor` still says "standing by"), settings still travel in Docker configs, and the
+join-time key route does not exist.
 
 ## Leaf packages
 

@@ -1,6 +1,6 @@
 # 0003 — Cluster state reaches other managers by pull, not by Docker config
 
-Status: accepted (slice 1 landed) · Date: 2026-11-13
+Status: accepted (slices 1–2 landed) · Date: 2026-11-13
 
 ## Context
 
@@ -72,9 +72,34 @@ The rules the code must follow:
   weak comparison, the bump rules per write path, and the route's absence from the
   public API.
 
-**It changes no behaviour yet.** Settings still travel in Docker configs, followers still
-answer "standing by", and nothing polls the route. That is deliberate: slice 1 is
-additive so it can be deployed and observed before anything depends on it.
+**It changed no behaviour on its own.** Settings still travelled in Docker configs,
+followers still answered "standing by", and nothing polled the route. Deliberate: slice 1
+was additive so it could be deployed and observed before anything depended on it.
+
+## What slice 2 ships
+
+- A follower manager polls the route every 60 s on the runner-assignment cadence, from
+  `internal/cli/snapshot_mirror.go`, started BEFORE the leadership wait (a follower blocks
+  there forever) and after the startup control-plane restore (which is only safe while
+  nothing has the store open). At promotion the loop is stopped and JOINED before the
+  leader's store opens: this node becomes the writer, and two writers to one row is a race
+  whose winner nobody can predict.
+- `Store.ApplySnapshot` replaces the mirrored rows in one transaction — upsert
+  `cluster_settings` and `secrets` on their natural keys, replace `users` (two unique keys
+  and no local authority, so an upsert could stall on a name/id conflict), delete every row
+  the snapshot does not carry, then record `sync_state`.
+- `sync_state` (one row, never replicated, classified as excluded from the survivor kit)
+  carries `leader`, `version`, `generated_at`, `applied_at`. `mirrored_at` on the three
+  tables answers "did this row arrive, and when".
+- The poll is conditional on the (leader, version) pair this node applied. A bare version
+  would match another leader's identical number after a failover and answer 304 for state
+  that was never applied here.
+- A failed poll changes nothing: the last applied snapshot stays, the log says so.
+- The leader never fetches from itself; the tick checks leadership every time.
+
+Still unbuilt after this record's second slice: no read surface answers from the mirror
+(slice 3), settings still travel in Docker configs (slice 4), and there is no join-time key
+route (slice 5).
 
 ## Consequences
 
@@ -96,12 +121,10 @@ additive so it can be deployed and observed before anything depends on it.
 
 ## Handoff checklist (slices 2–5)
 
-- [ ] **2 — follower mirror.** Poll on the runner-assignment interval, started BEFORE the
-      leadership wait (`internal/cli/nodeagent.go` `startPerNodeLoops` is the shape).
-      Apply in one transaction: upsert every row, delete absent rows scoped to the
-      mirrored tables, bump `sync_state`. Schema in the brief: `mirrored_at` on `settings`
-      and `secrets`, plus the `sync_state` row carrying leader, version, generated_at,
-      applied_at. The leader must never fetch from itself.
+- [x] **2 — follower mirror.** Landed: see "What slice 2 ships". One deviation from the
+      brief's schema, stated here so it is not rediscovered: `mirrored_at` was also added
+      to `users` (the projection carries three tables, and a mirrored row that cannot
+      answer "did you arrive" is the defect the column prevents).
 - [ ] **3 — switch the readers.** Follower managers answer settings reads from the mirror;
       every answer carries `age_seconds` and the leader it came from. `doctor`'s "standing
       by" branches become real answers with an age.

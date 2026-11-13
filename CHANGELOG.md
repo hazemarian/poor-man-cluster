@@ -3,6 +3,35 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — a follower stops standing by (step 2 of 5)
+
+**Why:** after step 1 the leader could serve a versioned snapshot, and nothing consumed
+it. A manager that is not the leader still answered "standing by" — its settings were
+whatever the last control-plane kit happened to carry, which is why `doctor` cannot answer
+five of its checks on any follower. Now it pulls.
+
+- **A follower manager mirrors the snapshot every 60 s** — the runner-assignment cadence,
+  one number for every node-facing pull. `Store.ApplySnapshot` does it in ONE transaction:
+  upsert settings and secrets on their natural keys, **delete every row the snapshot does
+  not carry** (the half an upsert-only mirror gets wrong — a deleted setting would live on
+  every follower forever), then record `sync_state`.
+- **Ordering is the safety property.** The loop starts before the leadership wait (a
+  follower blocks there forever) and after the startup control-plane restore (only safe
+  while nothing has the store open); at promotion it is stopped and **joined** before the
+  leader's store opens, because this node becomes the writer and two writers to one row is
+  a race. The leader never fetches from itself.
+- **The poll is conditional on the (leader, version) pair** it applied, so a failover is a
+  200 rather than a 304 for state this node never applied, and a quiet cluster costs a few
+  dozen bytes per follower per minute.
+- **A failed poll changes nothing.** The last snapshot and its age stay; the log names the
+  failure. A leader that dies therefore leaves followers serving a stale answer, never a
+  blank one.
+- **Two clocks, never mixed.** `applied_at`/`mirrored_at` are this node's; the leader's
+  `generated_at` is provenance only.
+
+Still unbuilt: no read surface answers from the mirror yet (step 3), settings still travel
+in Docker configs (step 4), no join-time key route (step 5).
+
 ## Unreleased — cluster state learns to be pulled (step 1 of 5)
 
 **Why:** cluster settings — and the cipher key that decrypts every secret — are copied to
