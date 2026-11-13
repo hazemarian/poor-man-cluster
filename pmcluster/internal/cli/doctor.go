@@ -41,17 +41,25 @@ assumptions, one line per check:
   disk               headroom on the volume root
 
 On a node that is NOT the leader (a worker, or a follower manager) the same
-command answers the NODE-LOCAL subset instead, because cluster state is only
-current on the leader and this command will not read a stale copy:
+command answers the NODE-LOCAL subset instead:
 
   daemon             is this node's daemon listening (its /health)
   socket proxy       is the filtered docker socket present
   runner assignment  when this node last read its runner assignment, and from where
   local runner       this node's runner container, and the docker exposure it has
+  cluster mirror     the leader's settings/secrets/users as THIS node holds them,
+                     with the leader's name and how old the copy is
   disk               headroom on the volume root
 
+The mirror line is the answer to "are my cluster settings current here?", and it
+carries its age on purpose: a mirror that has not been refreshed since the leader
+died is reported as stale (a warning naming the leader), never as current and
+never as blank.
+
 Every cluster question it cannot answer is printed as a skipped line with the
-reason, so the report is never mistaken for a clean bill of health.
+reason — secret DECRYPTION (the cipher key is provisioned at join, not carried by
+the snapshot), stacks and their revisions, the last apply, and the kit drill — so
+the report is never mistaken for a clean bill of health.
 
 Exit status is non-zero when any check fails, so it can gate a deploy or run
 from cron. Nothing here writes: the kit drill extracts to a temporary

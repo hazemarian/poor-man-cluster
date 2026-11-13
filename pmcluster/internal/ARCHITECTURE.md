@@ -253,9 +253,25 @@ snapshot does not carry, then record `sync_state`. What the code constrains:
   cache-report bug was a report stamped by one clock and aged by another, which read as
   stale the instant it was written.
 
-**Not built yet (slices 3–5 of the ADR):** no read surface answers from the mirror yet
-(so `doctor` still says "standing by"), settings still travel in Docker configs, and the
-join-time key route does not exist.
+**The mirror is a read source, with its age attached** (`store.MirrorReading`). Slice 3
+switched the surfaces that used to refuse:
+
+- `doctor` on a non-leader answers a `cluster mirror` check instead of one blanket "not
+  answered here": the leader's name, the version, and the age measured on this node's
+  clock. Stale past three poll intervals is a WARN naming the leader; never-applied is a
+  WARN naming the poll. What the mirror never carries is listed separately and honestly —
+  secret decryption (the key is provisioned at join, not by the snapshot), stacks and
+  revisions, the last apply, the kit drill.
+- `cluster settings` (the READ form) is answered on a follower, prefixed with the mirror's
+  label. `set` still requires the leader: one writer, and a follower that accepted a write
+  would persist a value nothing replicates upward. The guard distinguishes them on the
+  subcommand WORD (`mirrorReadable`), because both forms are one cobra command and a scope
+  table keyed by command name cannot tell them apart.
+- The staleness threshold is derived from `clustersnapshot.PollInterval`, so the loop and
+  the read surfaces cannot disagree about what "three polls" means.
+
+**Not built yet (slices 4–5 of the ADR):** settings still travel in Docker configs (the
+mirror does not touch a container), and the join-time key route does not exist.
 
 ## Leaf packages
 

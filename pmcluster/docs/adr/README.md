@@ -11,7 +11,7 @@ decoration; the design docs carry the behaviour.
 |---|---|---|---|---|
 | [0001](0001-engine-seam.md) | Keep Swarm behind a translation layer | accepted (layers 1–2 landed) | 2026-10-27 | Placement is expressed in platform terms in `internal/engine`; engine syntax lives only in `internal/engine/<engine>` |
 | [0002](0002-telemetry-backend.md) | Telemetry store: owned query API over parquet (DuckDB), not an owned engine | proposed | 2026-11-07 | Every statement is written by `internal/observability`; the store is replaceable and no backend dialect leaks out of its adapter |
-| [0003](0003-cluster-state-by-pull.md) | Cluster state reaches other managers by pull (mTLS snapshot), not by Docker config | accepted (slices 1–2 landed) | 2026-11-13 | `internal/clustersnapshot` is the only reader of cluster state over the network; the version is a content identity stamped by the writer; the cipher key never comes from the replicated object |
+| [0003](0003-cluster-state-by-pull.md) | Cluster state reaches other managers by pull (mTLS snapshot), not by Docker config | accepted (slices 1–3 landed) | 2026-11-13 | `internal/clustersnapshot` is the only reader of cluster state over the network; the version is a content identity stamped by the writer; the cipher key never comes from the replicated object |
 
 ## Status values
 

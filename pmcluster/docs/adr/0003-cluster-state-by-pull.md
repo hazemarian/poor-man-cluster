@@ -1,6 +1,6 @@
 # 0003 — Cluster state reaches other managers by pull, not by Docker config
 
-Status: accepted (slices 1–2 landed) · Date: 2026-11-13
+Status: accepted (slices 1–3 landed) · Date: 2026-11-13
 
 ## Context
 
@@ -97,9 +97,28 @@ was additive so it could be deployed and observed before anything depended on it
 - A failed poll changes nothing: the last applied snapshot stays, the log says so.
 - The leader never fetches from itself; the tick checks leadership every time.
 
-Still unbuilt after this record's second slice: no read surface answers from the mirror
-(slice 3), settings still travel in Docker configs (slice 4), and there is no join-time key
-route (slice 5).
+## What slice 3 ships
+
+- `store.MirrorReading` — leader, version, `applied_at`, and the row counts, plus one
+  `Human()` label so every surface says the same sentence. **The age is measured from
+  `applied_at` on this node's clock and clamped at zero**: subtracting the leader's
+  `generated_at` from a local clock is the cache-report bug (fresh data read as stale), and
+  a backwards clock must not print a negative age.
+- `doctor` on a non-leader answers a `cluster mirror` check — OK with the age, WARN and
+  `STALE` past three poll intervals, WARN when nothing has ever been applied. The old
+  blanket "cluster state: not answered here" is now a specific list: secret decryption needs
+  the cipher key that slice 5 provisions, and stacks/revisions, the last apply and the kit
+  drill were never in the projection.
+- `cluster settings` reads answer on a follower, prefixed with the label; `set` still needs
+  the leader. The guard decides on the subcommand WORD, because a scope table keyed by
+  command name cannot tell the read form from the write form.
+- A follower MANAGER was being told the node list is a manager-only call. It is not; the
+  line now differs by role.
+- `clustersnapshot.PollInterval` is the channel's constant, so the loop and the staleness
+  threshold share one number.
+
+Still unbuilt: settings still travel in Docker configs (slice 4), and there is no join-time
+key route (slice 5) — so a follower can mirror secret CIPHERTEXT but cannot yet decrypt it.
 
 ## Consequences
 
@@ -125,9 +144,10 @@ route (slice 5).
       brief's schema, stated here so it is not rediscovered: `mirrored_at` was also added
       to `users` (the projection carries three tables, and a mirrored row that cannot
       answer "did you arrive" is the defect the column prevents).
-- [ ] **3 — switch the readers.** Follower managers answer settings reads from the mirror;
-      every answer carries `age_seconds` and the leader it came from. `doctor`'s "standing
-      by" branches become real answers with an age.
+- [x] **3 — switch the readers.** Landed: see "What slice 3 ships". `cluster settings`
+      reads and `doctor`'s cluster mirror line answer on a follower with `age_seconds` and
+      the leader's name. Secret decryption stays unanswerable there until slice 5 gives the
+      node a key — stated in the report rather than implied by a green tick.
 - [ ] **4 — retire the config path** (irreversible, and only after 3 has been observed for
       a day). Then the size workaround that existed for the 512 KB limit goes too, and a
       metric asserts that a write reaches every manager within one poll.

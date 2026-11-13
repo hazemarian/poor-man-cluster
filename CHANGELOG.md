@@ -82,6 +82,32 @@ rewrote its own policy as `false` so the watchdog did nothing on the next attemp
 the heal in v0.2.320 the full chain was then measured live on the same node — see that
 entry — so these three changes are verified end-to-end, not only by unit tests.
 
+## Unreleased — a follower answers, with an age (step 3 of 5)
+
+**Why:** steps 1 and 2 gave the leader a versioned snapshot and the follower a loop that
+applies it — and every read surface still refused, saying "standing by" about data the node
+was already holding. A stale answer an operator can see is worth more than a blank one.
+
+- **`doctor` on a non-leader answers a `cluster mirror` check**: the leader's name, the
+  version, the row counts, and `age_seconds`. Past three polls it is a WARN saying `STALE`
+  and naming the leader; nothing ever applied is a WARN naming the poll. The old blanket
+  "cluster state: not answered here" is now a specific list — secret decryption (the cipher
+  key arrives at join, step 5), stacks/revisions, the last apply, the kit drill.
+- **`cluster settings` reads answer on a follower**, prefixed with
+  `mirrored: from <leader>, version N, applied ... ago (age_seconds=N)`. `set` still
+  requires the leader: one writer, and its refusal now points at the readable half instead
+  of denying that settings exist on this node.
+- **The age is measured on this node's clock** from `applied_at`, clamped at zero — the
+  cache-report lesson (never subtract a remote timestamp from a local clock) and a clock
+  that steps backwards must not print a future age.
+- **A follower manager is no longer told the node list is manager-only** (it can read it);
+  the swarm line now differs by role.
+- Fixed while testing: `cmd.Context()` can be nil on a cobra command that was not executed,
+  and a nil context panics inside `database/sql` instead of falling back.
+
+Still unbuilt: settings still travel in Docker configs (step 4), no join-time key route
+(step 5) — a follower mirrors secret ciphertext but cannot yet decrypt it.
+
 ## Unreleased — a follower stops standing by (step 2 of 5)
 
 **Why:** after step 1 the leader could serve a versioned snapshot, and nothing consumed

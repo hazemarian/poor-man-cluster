@@ -157,10 +157,12 @@ Two destinations, two mechanisms, and they are not the same wait:
 - **Another manager's own store** is current within one poll (60 s). A manager that
   is not the leader pulls `GET /internal/api/cluster/snapshot` over the swarm-mTLS
   channel and applies settings, secrets and API tokens in one transaction. So
-  `pmcluster doctor` and the CLI on a follower read the cluster's real settings
-  instead of a copy of unknown age, and the mirror records when it applied them
-  (`sync_state`) and when each row arrived (`mirrored_at`). A leader that dies leaves
-  the mirror in place: a stale answer, never a blank one.
+  `pmcluster doctor` and `pmcluster cluster settings` on a follower read the cluster's
+  real settings instead of a copy of unknown age: both print `mirrored: from <leader>,
+  version N, applied … ago (age_seconds=N)` above the values, and `doctor` raises the line
+  to a warning once the copy is older than three polls. The mirror records when it applied
+  (`sync_state`) and when each row arrived (`mirrored_at`). A leader that dies leaves the
+  mirror in place: a stale answer, never a blank one. Writing still needs the leader.
 - **Running containers** only change when the platform re-renders and re-deploys —
   step 2 above. Mirroring the store does not touch a container.
 
