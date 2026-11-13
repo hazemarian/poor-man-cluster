@@ -3,7 +3,7 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
-## v0.2.319 — the docker watchdog works; the control plane has to survive it
+## Unreleased — the docker watchdog works; the control plane has to survive it
 
 **Why:** `node_docker_restart` exists so a dead `dockerd` fixes itself. It was exercised
 end-to-end for the first time on `nxt-sw-6-w` (2026-11-13): dockerd was killed until
