@@ -209,6 +209,33 @@ func TestDeleteStackBumpsWhenItTakesSecretsWithIt(t *testing.T) {
 	}
 }
 
+// TestANoOpBumpStillCommitsTheWrite: skipping the version bump must not skip the
+// commit. This is the bug the first version of the transaction helper had — the
+// no-op path returned before committing, so DeleteStack answered success while the
+// stack row survived, which three existing tests caught.
+func TestANoOpBumpStillCommitsTheWrite(t *testing.T) {
+	st := openTestStore(t)
+	ctx := context.Background()
+
+	if err := st.RecordDeploy(ctx, &StackRevision{
+		StackName: "demo", Revision: 1, SourceYAML: "app: demo", RenderedYAML: "services: {}",
+	}, ""); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+	before := version(t, st)
+	// No secrets belong to this stack, so the delete takes nothing from a mirrored
+	// table and must not move the version — but the stack itself must go.
+	if err := st.DeleteStack(ctx, "demo"); err != nil {
+		t.Fatalf("DeleteStack: %v", err)
+	}
+	if got := version(t, st); got != before {
+		t.Errorf("version = %d after a stack delete that took no secret, want %d", got, before)
+	}
+	if n := countIn(t, st.DB(), "stacks"); n != 0 {
+		t.Errorf("stacks = %d rows after a successful DeleteStack, want 0 — a skipped bump rolled the write back", n)
+	}
+}
+
 // TestSnapshotReadsTheVersionAndTheRowsTogether: the snapshot's version must be the
 // counter that describes exactly the rows in it. Two reads at the same version must
 // carry the same rows, in the same order.

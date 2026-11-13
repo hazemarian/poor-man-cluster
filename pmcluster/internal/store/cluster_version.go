@@ -64,6 +64,14 @@ func (s *Store) inTxBump(ctx context.Context, fn func(tx *sql.Tx) (changed bool,
 		return err
 	}
 	if !changed {
+		// Commit anyway: "nothing to bump" is not "nothing to keep". A delete that
+		// removed rows outside the mirrored set (a stack and its configs, say) still
+		// has to land — returning early without the commit rolled the work back while
+		// answering success, which is exactly the silent no-op class this file is
+		// meant to prevent.
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit: %w", err)
+		}
 		return nil
 	}
 	res, err := tx.ExecContext(ctx, bumpVersionSQL, time.Now().Unix())
