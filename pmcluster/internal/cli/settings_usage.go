@@ -155,7 +155,11 @@ func printMirrorLabel(cmd *cobra.Command, st *store.Store) {
 			"mirrored: no snapshot applied on this node yet — the values below are this node's own copy and may be out of date\n\n")
 		return
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "mirrored: %s (age_seconds=%d)\n\n", m.Human(), m.AgeSeconds)
+	label := fmt.Sprintf("mirrored: %s (age_seconds=%d)", m.Human(), m.AgeSeconds)
+	if content := m.ContentAge(); content != "" {
+		label += " · " + content
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s\n\n", label)
 }
 
 func printSettings(cmd *cobra.Command, s settings.Settings, showSecrets bool) error {

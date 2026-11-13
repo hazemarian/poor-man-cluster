@@ -117,6 +117,15 @@ was additive so it could be deployed and observed before anything depended on it
 - `clustersnapshot.PollInterval` is the channel's constant, so the loop and the staleness
   threshold share one number.
 
+**Amended after the first deployment.** The age was computed from `applied_at`, and
+`applied_at` only moves when a 200 changes rows — so on a healthy quiet cluster, where every
+poll is a 304, a follower reported `STALE` four minutes after it started. Migration `0032`
+adds `sync_state.checked_at` (last successful answer, 304 included) and the age is computed
+from that; `applied_at` keeps its meaning as "when the rows were written" and is reported
+beside it. The rule that survives: **an age may only be derived from a signal that moves
+when the thing it describes is still happening.** A version number (and an ETag) move when
+content changes; freshness needs a different column.
+
 Still unbuilt: settings still travel in Docker configs (slice 4), and there is no join-time
 key route (slice 5) — so a follower can mirror secret CIPHERTEXT but cannot yet decrypt it.
 

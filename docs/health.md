@@ -28,7 +28,7 @@ Same measurements over HTTP, for the console and anything that gates on them:
 | `offsite` | `/var/lib/pmcluster-backup/offsite/status.json` | an artifact this node shipped is not in the bucket |
 | `disk` | `statfs` on the volume root | under 5% free (warn under 15%) |
 | `runner memory` (node-local) | the cap in this node's applied runner assignment vs its own `/proc/meminfo` | the cap exceeds 70 % of this node's RAM: the runner would OOM the node instead of being bounded by it ([`runners.md`](runners.md#a-runner-that-cannot-fit-the-node)) |
-| `cluster mirror` (non-leader) | `sync_state` plus the row counts of the mirrored `settings`/`secrets`/`users` tables, aged on **this** node's clock | nothing has been applied yet (warn: the mirror fills within one 60 s poll), or the last apply is older than three polls (warn, `STALE`, naming the leader): the values are real but old |
+| `cluster mirror` (non-leader) | `sync_state` plus the row counts of the mirrored `settings`/`secrets`/`users` tables · **age = since the last successful poll** (a 304 counts), on this node's clock; the rows' own age is reported beside it | nothing has been applied yet (warn: the mirror fills within one 60 s poll), or the leader has not ANSWERED for three polls (warn, `STALE`, naming the leader): the values are real but old. A quiet cluster whose polls all answer 304 is **ok**, however old the rows are |
 
 **Skipped is not passed.** A check that cannot run — a worker cannot read the
 manager set, a host has no backup state dir — reports `skip` with the reason.

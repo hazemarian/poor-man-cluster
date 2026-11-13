@@ -68,6 +68,35 @@ func TestRunNodeLocalAnswersTheMirrorWithItsAge(t *testing.T) {
 	}
 }
 
+// TestRunNodeLocalDoesNotCallAHealthyQuietMirrorStale is the regression for what shipping
+// slice 3 exposed: on a cluster nobody is changing, every poll is a 304, nothing is
+// "applied" for hours, and an age measured from the last applied change warned STALE
+// within four minutes of a perfectly healthy start.
+func TestRunNodeLocalDoesNotCallAHealthyQuietMirrorStale(t *testing.T) {
+	applied := int64(1_700_000_000)
+	st := mirrorStore(t, applied)
+	// Content written 40 minutes ago, confirmed by a poll 20 seconds ago.
+	ctx := context.Background()
+	if err := st.ConfirmMirrorSync(ctx, applied+2400-20); err != nil {
+		t.Fatalf("ConfirmMirrorSync: %v", err)
+	}
+	rep := RunNodeLocal(ctx, nodeInputWithMirror(t, st, time.Unix(applied+2400, 0)))
+
+	m, ok := find(rep, "cluster mirror")
+	if !ok {
+		t.Fatal("the follower report has no cluster mirror check")
+	}
+	if m.Status != StatusOK {
+		t.Fatalf("mirror check = %+v, want OK: the leader answered 20s ago, only the CONTENT is old", m)
+	}
+	if !strings.Contains(m.Detail, "age_seconds=20") {
+		t.Errorf("the age must be the contact age: %s", m.Detail)
+	}
+	if !strings.Contains(m.Detail, "rows last written 40m00s ago") {
+		t.Errorf("an old content age must be reported beside it, not instead of it: %s", m.Detail)
+	}
+}
+
 // TestRunNodeLocalWarnsWhenTheMirrorIsStale: a mirror nobody has refreshed since the leader
 // died is a FINDING, not a green tick. This is the "killing the leader leaves followers
 // serving their mirror, labelled stale" half of the acceptance.

@@ -260,11 +260,15 @@ func checkMirrorState(ctx context.Context, in NodeInput) Check {
 		return Check{Name: "cluster mirror", Status: StatusWarn, Detail: "could not read the mirror: " + err.Error()}
 	}
 	detail := fmt.Sprintf("holds the settings/secrets/users mirror · %s (age_seconds=%d)", m.Human(), m.AgeSeconds)
+	if content := m.ContentAge(); content != "" {
+		detail += " · " + content
+	}
+	// The threshold is on CONTACT, not on content: a 304 every minute is a current mirror.
 	if m.AgeSeconds > int64(mirrorStaleAfter/time.Second) {
 		return Check{
 			Name:   "cluster mirror",
 			Status: StatusWarn,
-			Detail: fmt.Sprintf("%s — STALE: nothing applied for over %s, so the leader has not been reachable. The values are real but old; the leader it came from was %s", detail, mirrorStaleAfter, m.Leader),
+			Detail: fmt.Sprintf("%s — STALE: the leader has not ANSWERED for over %s (a poll that reaches it resets this). The values are real but old; the leader it came from was %s", detail, mirrorStaleAfter, m.Leader),
 		}
 	}
 	return Check{Name: "cluster mirror", Status: StatusOK, Detail: detail}

@@ -126,6 +126,20 @@ func TestMirrorTickAppliesTheSnapshotsAndRecordsThePair(t *testing.T) {
 	if want := clustersnapshot.ETag("nxt-sw-5-m", 4); sent[1] != want {
 		t.Errorf("second poll sent %q, want %q", sent[1], want)
 	}
+
+	// A 304 is an answer: the mirror must record the CONTACT. Without this, applied_at
+	// stays frozen on a quiet cluster and the mirror warns STALE four minutes after it
+	// last changed — deployed, and observed on 4-m at 3m40s.
+	confirmed, err := st.SyncState(context.Background())
+	if err != nil {
+		t.Fatalf("SyncState: %v", err)
+	}
+	if confirmed.CheckedAt != 1_700_000_500 {
+		t.Errorf("checked_at = %d after a 304, want the poll's clock %d", confirmed.CheckedAt, int64(1_700_000_500))
+	}
+	if confirmed.AppliedAt != 1_700_000_500 || confirmed.Version != 4 {
+		t.Errorf("a 304 changed the applied state: %+v", *confirmed)
+	}
 }
 
 // TestMirrorTickDoesNotFetchWhenThisNodeLeads is the trap written as a test: the leader

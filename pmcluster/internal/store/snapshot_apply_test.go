@@ -68,7 +68,7 @@ func TestApplySnapshotWritesTheRowsAndStampsTheirArrival(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncState: %v", err)
 	}
-	want := SyncState{Leader: "nxt-sw-5-m", Version: 7, GeneratedAt: 1_700_000_000, AppliedAt: 1_700_000_500}
+	want := SyncState{Leader: "nxt-sw-5-m", Version: 7, GeneratedAt: 1_700_000_000, AppliedAt: 1_700_000_500, CheckedAt: 1_700_000_500}
 	if *stt != want {
 		t.Errorf("sync state = %+v, want %+v", *stt, want)
 	}

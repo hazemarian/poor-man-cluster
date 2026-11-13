@@ -14,17 +14,22 @@ import (
 var ErrNeverSynced = errors.New("this node has never applied a cluster snapshot")
 
 // SyncState is the last snapshot a follower applied: which leader's state, at which
-// version, when the leader stamped it, and when this node wrote it.
+// version, when the leader stamped it, when this node wrote it, and when this node last
+// got a SUCCESSFUL answer for it.
 //
-// The two timestamps are not interchangeable. GeneratedAt came from the leader and
-// is provenance; AppliedAt is this node's clock and is the only sound basis for an
-// age. Subtracting a remote stamp from a local clock is how a fresh report reads as
-// stale forever.
+// The three timestamps answer different questions and are not interchangeable:
+//
+//   - GeneratedAt came from the leader: provenance only, never a basis for an age.
+//   - AppliedAt is this node's clock and moves only when rows are written — so it ages
+//     without bound on a quiet cluster, where every poll is a 304.
+//   - CheckedAt is this node's clock and moves on every successful poll, 304 included.
+//     That is the only sound basis for "how current is this mirror".
 type SyncState struct {
 	Leader      string
 	Version     int64
 	GeneratedAt int64
 	AppliedAt   int64
+	CheckedAt   int64
 }
 
 // SyncState reads the mirror's state. Returns ErrNeverSynced when this node has
@@ -32,8 +37,8 @@ type SyncState struct {
 func (s *Store) SyncState(ctx context.Context) (*SyncState, error) {
 	var st SyncState
 	err := s.conn().QueryRowContext(ctx,
-		`SELECT leader, version, generated_at, applied_at FROM sync_state WHERE id = 1`).
-		Scan(&st.Leader, &st.Version, &st.GeneratedAt, &st.AppliedAt)
+		`SELECT leader, version, generated_at, applied_at, checked_at FROM sync_state WHERE id = 1`).
+		Scan(&st.Leader, &st.Version, &st.GeneratedAt, &st.AppliedAt, &st.CheckedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNeverSynced
 	}
@@ -95,14 +100,15 @@ func (s *Store) ApplySnapshot(ctx context.Context, snap *Snapshot, leader string
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO sync_state (id, leader, version, generated_at, applied_at)
-		 VALUES (1, ?, ?, ?, ?)
+		`INSERT INTO sync_state (id, leader, version, generated_at, applied_at, checked_at)
+		 VALUES (1, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   leader = excluded.leader,
 		   version = excluded.version,
 		   generated_at = excluded.generated_at,
-		   applied_at = excluded.applied_at`,
-		leader, snap.Version, snap.GeneratedAt, appliedAt); err != nil {
+		   applied_at = excluded.applied_at,
+		   checked_at = excluded.checked_at`,
+		leader, snap.Version, snap.GeneratedAt, appliedAt, appliedAt); err != nil {
 		return fmt.Errorf("apply snapshot: record sync state: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

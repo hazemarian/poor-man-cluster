@@ -101,6 +101,13 @@ func mirrorTick(ctx context.Context, d mirrorDeps, st *store.Store) error {
 		return err
 	}
 	if res.NotModified {
+		// A 304 is a successful answer, and it is the steady state of a healthy cluster:
+		// record it, or the mirror's age measures "time since anything changed" and a
+		// quiet cluster warns STALE forever. That is exactly what the first deploy of
+		// this loop did, four minutes after it started.
+		if err := st.ConfirmMirrorSync(ctx, d.now().Unix()); err != nil {
+			return err
+		}
 		d.Log.Debug().Int64("version", prev.Version).Str("leader", prev.Leader).
 			Msg("cluster mirror: already at the leader's version (304)")
 		return nil

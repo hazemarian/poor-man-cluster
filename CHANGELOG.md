@@ -82,6 +82,24 @@ rewrote its own policy as `false` so the watchdog did nothing on the next attemp
 the heal in v0.2.320 the full chain was then measured live on the same node — see that
 entry — so these three changes are verified end-to-end, not only by unit tests.
 
+## v0.2.322 — the mirror's age is about contact, not about change
+
+**A defect the first deployment exposed, four minutes after it started.** v0.2.321 aged a
+follower's mirror from `applied_at`, and `applied_at` only moves when the 200 changes rows.
+The steady state of a healthy cluster is a **304 on every poll**, so within four minutes a
+follower that had just been told "you are current" reported
+`applied 3m40s ago — STALE: nothing applied for over 3m0s`. A warning that fires when
+nothing is wrong is the one kind this platform must not ship.
+
+- **`sync_state.checked_at`** (migration `0032`) records the last successful answer — 200
+  **or** 304 — and the age is computed from it. `applied_at` keeps its own meaning: when
+  the rows were written, which is provenance and normally older.
+- A 304 now records a confirmation (`Store.ConfirmMirrorSync`); the label reads
+  `confirmed 20s ago · rows last written 40m ago`, and the second clause appears only when
+  it says something the first one does not.
+- `doctor` warns **STALE** only when the leader has stopped *answering*, and says so in
+  those words.
+
 ## Unreleased — a follower answers, with an age (step 3 of 5)
 
 **Why:** steps 1 and 2 gave the leader a versioned snapshot and the follower a loop that
