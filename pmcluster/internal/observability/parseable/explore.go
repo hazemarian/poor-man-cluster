@@ -256,8 +256,8 @@ const (
 	//   zerolog JSON  "level":"info"      ← the daemon's own logs, previously counted
 	//                                        as errors because the quotes broke the match
 	//   zerolog console  ... INF ... / DBG / TRC   (abbreviated, space-delimited)
-	infoHintSQL = "regexp_like(SUBSTR(body, 1, 200), '(?i)(\\tinfo\\t|\\tdebug\\t|level[\"\x27]*[ ]*[:=][ ]*[\"\x27]*(info|debug)|(^|[ ])(INF|DBG|TRC)([ ]|$)|^[\\[(]?(info|debug)[\\]) :]|^I[0-9]{4} [0-9]|\\][ ]+(log|notice|info|statement|debug[0-9]?):)')"
-	warnHintSQL = "regexp_like(SUBSTR(body, 1, 200), '(?i)(\\twarn(ing)?\\t|level[\"\x27]*[ ]*[:=][ ]*[\"\x27]*warn(ing)?|(^|[ ])WRN([ ]|$)|^[\\[(]?warn(ing)?[\\]) :]|^W[0-9]{4} [0-9]|\\][ ]+warning:)')"
+	infoHintSQL = "regexp_like(SUBSTR(body, 1, 200), '(?i)(\\tinfo\\t|\\tdebug\\t|level=(info|debug)|\"level\"[ ]*:[ ]*\"(info|debug)\"|(^|[ ])(INF|DBG|TRC)([ ]|$)|^[\\[(]?(info|debug)[\\]) :]|^I[0-9]{4} [0-9]|\\][ ]+(log|notice|info|statement|debug[0-9]?):)')"
+	warnHintSQL = "regexp_like(SUBSTR(body, 1, 200), '(?i)(\\twarn(ing)?\\t|level=warn(ing)?|\"level\"[ ]*:[ ]*\"warn(ing)?\"|(^|[ ])WRN([ ]|$)|^[\\[(]?warn(ing)?[\\]) :]|^W[0-9]{4} [0-9]|\\][ ]+warning:)')"
 	levelSQL    = "CASE WHEN " + stderrLabelSQL + " AND " + infoHintSQL + " THEN 'info'" +
 		" WHEN " + stderrLabelSQL + " AND " + warnHintSQL + " THEN 'warn'" +
 		" WHEN " + stderrLabelSQL + " THEN 'error'" +
