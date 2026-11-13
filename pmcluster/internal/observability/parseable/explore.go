@@ -240,27 +240,20 @@ func (c *Client) redactKeepingTime(rows []observability.Row) []observability.Row
 
 var _ observability.StatsSource = (*Client)(nil)
 
-// levelSQL buckets a record into error, warn or info. Container output has no
-// level of its own and the collector labels stderr ERROR, so a record labelled
-// error that plainly carries an info or debug level in its first 200
-// characters is counted as info; counting it as an error would make a quiet
-// system look broken. The patterns mirror investigation.inferSeverity.
+// levelSQL buckets a record into error, warn or info — from severity_text, and nothing else.
+//
+// It used to guess. Container output carried no level of its own (the collector mapped
+// stdout→info, stderr→error), so this query re-derived one from the first 200 characters of
+// every body with a pile of regexes covering logfmt, bracket prefixes, glog, PostgreSQL and
+// — after three rounds of misses — zerolog's JSON and its `INF` console abbreviation. That
+// was the wrong layer: the producer knows its own level, so the level is now parsed into
+// severity at ingest (otel-collector-config.yml) and this query only reads it.
+//
+// A record that still states no level is counted as info. That is the honest reading of
+// "unknown": the previous behaviour, where an unlabelled line was an ERROR, is what turned
+// a quiet cluster into an error firehose in its own panel.
 const (
-	stderrLabelSQL = "LOWER(severity_text) IN ('error','err','fatal','critical','crit','panic','emerg','alert')"
-	// The first 200 characters carry the level in the formats the cluster's own
-	// software uses: tab-separated (OTel collector), level= (logfmt), a bracket
-	// prefix, glog (I1018), and PostgreSQL's "] LOG:" / "] WARNING:".
-	// Three families, because three libraries write the level differently and only
-	// one of them was matched:
-	//   logfmt        level=info
-	//   zerolog JSON  "level":"info"      ← the daemon's own logs, previously counted
-	//                                        as errors because the quotes broke the match
-	//   zerolog console  ... INF ... / DBG / TRC   (abbreviated, space-delimited)
-	infoHintSQL = "regexp_like(SUBSTR(body, 1, 200), '(?i)(\\tinfo\\t|\\tdebug\\t|level=(info|debug)|\"level\"[ ]*:[ ]*\"(info|debug)\"|(^|[ ])(INF|DBG|TRC)([ ]|$)|^[\\[(]?(info|debug)[\\]) :]|^I[0-9]{4} [0-9]|\\][ ]+(log|notice|info|statement|debug[0-9]?):)')"
-	warnHintSQL = "regexp_like(SUBSTR(body, 1, 200), '(?i)(\\twarn(ing)?\\t|level=warn(ing)?|\"level\"[ ]*:[ ]*\"warn(ing)?\"|(^|[ ])WRN([ ]|$)|^[\\[(]?warn(ing)?[\\]) :]|^W[0-9]{4} [0-9]|\\][ ]+warning:)')"
-	levelSQL    = "CASE WHEN " + stderrLabelSQL + " AND " + infoHintSQL + " THEN 'info'" +
-		" WHEN " + stderrLabelSQL + " AND " + warnHintSQL + " THEN 'warn'" +
-		" WHEN " + stderrLabelSQL + " THEN 'error'" +
+	levelSQL = "CASE WHEN LOWER(severity_text) IN ('error','err','fatal','critical','crit','panic','emerg','alert') THEN 'error'" +
 		" WHEN LOWER(severity_text) IN ('warn','warning') THEN 'warn' ELSE 'info' END"
 )
 

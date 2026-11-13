@@ -91,14 +91,56 @@ receivers:
               timestamp:
                 parse_from: attributes.time
                 layout: '%Y-%m-%dT%H:%M:%S.%LZ'
-              severity:
-                parse_from: attributes.stream
-                mapping: { info: stdout, error: stderr }
+              # NO severity from `stream`. Docker gives us two streams, not five
+              # levels, so mapping stderr→error made every warning, every progress
+              # line and every retry an ERROR — and the console then needed a pile of
+              # regex hints at QUERY time to guess the level back out of the text.
+              # The level belongs to the producer: it is parsed from the record below,
+              # and a line that states no level is left without one (rendered as
+              # "info", which is the honest reading of "unknown").
             # Move the parsed log message from attributes.log to body.
             - type: move
               from: attributes.log
               to: body
               if: attributes.log != nil
+            # THE LEVEL, FROM THE SOURCE. Most of this cluster's software writes
+            # zerolog JSON (`{"level":"info",...}`) or logfmt (`level=info`), so the
+            # level is in the record itself — parse it here, once, instead of guessing
+            # per query. `error_mode: ignore` keeps a non-JSON line (a shell script, a
+            # JVM, PostgreSQL) as it was rather than dropping it.
+            - type: json_parser
+              error_mode: ignore
+              parse_from: body
+              parse_to: attributes
+              if: body matches "^\\s*\\{"
+              severity:
+                parse_from: attributes.level
+                mapping:
+                  trace: trace
+                  debug: debug
+                  info: info
+                  warn: warn
+                  warning: warn
+                  error: error
+                  fatal: fatal
+                  panic: fatal
+            # logfmt fallback: `level=info` with no braces at all.
+            - type: regex_parser
+              error_mode: ignore
+              parse_from: body
+              regex: '(?i)\\blevel=(?P<level>trace|debug|info|warn|warning|error|fatal|panic)\\b'
+              if: body matches "(?i)\\blevel="
+              severity:
+                parse_from: attributes.level
+                mapping:
+                  trace: trace
+                  debug: debug
+                  info: info
+                  warn: warn
+                  warning: warn
+                  error: error
+                  fatal: fatal
+                  panic: fatal
           # Resource attributes are what make a stdout line attributable, and
           # they are declared inside `config` rather than as the receiver
           # template's own resource_attributes map: the e2e showed the

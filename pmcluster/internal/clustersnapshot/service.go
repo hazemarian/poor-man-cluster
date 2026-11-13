@@ -53,21 +53,22 @@ type Service struct {
 	Log      zerolog.Logger
 }
 
-// body is the wire shape. It is a struct rather than a map so a field cannot be
-// added to the snapshot without appearing here; the ETag is derived from the same
-// two values the body carries, so they cannot disagree.
-type body struct {
+// Body is the wire shape, shared by this handler and the follower's client so the
+// two cannot drift: a struct rather than a map, so a field cannot be added to the
+// snapshot without appearing here, and the ETag is derived from the same two values
+// the body carries, so a header and a body can never disagree.
+type Body struct {
 	Version     int64  `json:"version"`
 	GeneratedAt string `json:"generated_at"`
 	Leader      string `json:"leader"`
-	Tables      tables `json:"tables"`
+	Tables      Tables `json:"tables"`
 }
 
-// tables keeps every table ALWAYS present, empty lists included. A follower has to
+// Tables keeps every table ALWAYS present, empty lists included. A follower has to
 // be able to read "this table is empty" and delete every row it mirrors; an absent
 // or null key would be indistinguishable from "the leader did not send that table",
 // and the difference between those two is every deleted row.
-type tables struct {
+type Tables struct {
 	Settings []store.SnapshotSetting `json:"settings"`
 	Secrets  []store.SnapshotSecret  `json:"secrets"`
 	Users    []store.SnapshotUser    `json:"users"`
@@ -126,18 +127,18 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// differs, and a version-only tag would answer 304 to a follower that holds a
 	// different leader's data. A client must therefore remember the PAIR it applied,
 	// which is why the body carries `leader` beside `version`.
-	etag := etagFor(s.Hostname, snap.Version)
+	etag := ETag(s.Hostname, snap.Version)
 	w.Header().Set("ETag", etag)
 	if matchesETag(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, body{
+	writeJSON(w, http.StatusOK, Body{
 		Version:     snap.Version,
 		GeneratedAt: time.Unix(snap.GeneratedAt, 0).UTC().Format(time.RFC3339),
 		Leader:      s.Hostname,
-		Tables: tables{
+		Tables: Tables{
 			Settings: snap.Settings,
 			Secrets:  snap.Secrets,
 			Users:    snap.Users,
@@ -145,9 +146,10 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// etagFor is the one place the tag is composed, so the header and any client
-// helper derive it identically.
-func etagFor(leader string, version int64) string {
+// ETag is the one place the tag is composed, so the header and any client helper
+// derive it identically: a client that composed it differently would never match a
+// 304 and would re-download the cluster state on every poll.
+func ETag(leader string, version int64) string {
 	return `"` + leader + ":" + strconv.FormatInt(version, 10) + `"`
 }
 

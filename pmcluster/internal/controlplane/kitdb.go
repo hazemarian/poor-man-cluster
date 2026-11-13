@@ -156,6 +156,11 @@ var excludedTables = map[string]string{
 	// first pass; carrying another node's row would describe a container this
 	// node cannot see and cannot remove.
 	"github_runners": "per-node runner observations; each node writes its own row and rebuilds it on the next pass",
+	// This node's own mirror bookkeeping: which leader's version THIS node applied, and
+	// when. It is per-node by definition, and a promoted leader must NOT adopt another
+	// node's copy — it is about to become the writer those rows describe, and inheriting
+	// a mirror's "current" claim is how a leader starts lying about its own freshness.
+	"sync_state": "per-node mirror bookkeeping; a promoted leader is the writer, not a mirror",
 }
 
 // exportedDBPath writes the authoritative subset of this node's data.db into a

@@ -312,8 +312,45 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			log.Warn().Err(err).Msg("control-plane restore at startup had issues (continuing)")
 		}
 
+		// The follower's mirror (slice 2 of docs/adr/0003-cluster-state-by-pull.md):
+		// a manager that is NOT the leader pulls the leader's snapshot into its own
+		// store, so its settings stop being whatever the last control-plane kit
+		// happened to carry. Two ordering rules, both load-bearing:
+		//
+		//   * it starts BEFORE the leadership wait, because a follower manager blocks
+		//     there forever (the runner assignment loop has the same shape for the same
+		//     reason);
+		//   * it starts AFTER the control-plane restore above, which is the safe window
+		//     precisely because nothing has the store open — a mirror holding a handle
+		//     across that replacement would keep writing to a file that had been
+		//     unlinked underneath it.
+		//
+		// A WORKER does not mirror: it has no store, and opening one would seed an empty
+		// database whose answers look plausible.
+		var mirrorStop func()
+		var mirrorDone <-chan struct{}
+		if standby && !worker {
+			mirrorStop, mirrorDone = startSnapshotMirror(cmd.Context(), snapshotMirrorFor(cfg, dc, hostname, log))
+			defer func() {
+				if mirrorStop != nil {
+					mirrorStop()
+					<-mirrorDone
+				}
+			}()
+		}
+
 		if err := waitForSwarmLeadership(cmd.Context(), dc, log); err != nil {
 			return fmt.Errorf("standby: %w", err)
+		}
+
+		// This node is the leader now, so the mirror has to be gone — finished its last
+		// tick, handle closed — BEFORE the leader's own store is opened below. Two
+		// writers to one row is a race whose winner nobody can predict, and the
+		// leadership-gain restore that follows assumes nothing has the file open.
+		if mirrorStop != nil {
+			mirrorStop()
+			<-mirrorDone
+			mirrorStop = nil
 		}
 
 		// This node now leads (or Docker went away and it serves standalone). If
