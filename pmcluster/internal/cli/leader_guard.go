@@ -118,6 +118,20 @@ var bootstrapClusterSubcommands = map[string]bool{
 	"leader": true, // move leadership deliberately; needs a manager, not the leader
 }
 
+// mirrorReadable reports whether this invocation reads state a follower mirrors rather
+// than state only the leader holds. Today that is exactly `cluster settings` with no
+// argument or a `get`: its write form (`set`) is refused below.
+//
+// The check is on ARGS, not on the command, because both forms are the same cobra command:
+// a scope table keyed by command name cannot tell them apart, and treating the whole
+// command as readable would let a follower believe a write succeeded.
+func mirrorReadable(cmd *cobra.Command, args []string) bool {
+	if cmd.Name() != "settings" || cmd.Parent() == nil || cmd.Parent().Name() != "cluster" {
+		return false
+	}
+	return len(args) == 0 || args[0] == "get"
+}
+
 // detectSelf is a seam for tests; production reads the local docker socket.
 var detectSelf = docker.InspectSelf
 
@@ -152,7 +166,10 @@ func scopeOf(cmd *cobra.Command) commandScope {
 // runs BEFORE any command body, so a refusal happens before the store is opened —
 // opening it is itself what seeded an empty database on every worker and made the
 // empty answer look plausible.
-func enforceScope(cmd *cobra.Command) error {
+//
+// args matter for one command: `cluster settings` READS what a follower mirrors, and
+// only its write form needs the leader.
+func enforceScope(cmd *cobra.Command, args []string) error {
 	// Explicit remote mode: the user pointed the CLI at a daemon (usually the
 	// edge, from their own machine). This is the only case where the CLI talks
 	// HTTP, and it is always a deliberate choice.
@@ -162,12 +179,20 @@ func enforceScope(cmd *cobra.Command) error {
 	if scopeOf(cmd) != scopeLeader {
 		return nil
 	}
-	// `doctor` decides for itself: on a non-leader it answers the node-local
-	// subset (daemon, socket proxy, runner assignment, local runner, disk) and
-	// names what it will not answer. It never reads the local store there, so the
-	// refusal this guard exists to enforce — no cluster state from a stale copy —
-	// still holds.
+	// `doctor` decides for itself: on a non-leader it answers the node-local subset
+	// (daemon, socket proxy, runner assignment, local runner, disk, and since slice 3 of
+	// ADR 0003 the MIRROR it holds, labelled with its age) and names what it will not
+	// answer. The age is what keeps the guard's promise — no cluster state presented as
+	// current from a node that does not hold it — while still answering.
 	if cmd.Name() == "doctor" {
+		return nil
+	}
+
+	// Reading cluster settings is the one cluster-state answer a follower can give: its
+	// daemon mirrors the settings table and labels the answer with the leader and an age.
+	// WRITING still needs the leader, because there is exactly one writer — and `set` is
+	// the only form that writes, so the argument decides.
+	if mirrorReadable(cmd, args) {
 		return nil
 	}
 
@@ -204,6 +229,10 @@ func notLeader(cmd *cobra.Command, self docker.SelfNode) error {
 		"nodes or settings. The command is refused rather than answered from an empty or\n" +
 		"stale local store:\n\n")
 	fmt.Fprintf(&b, "  %s\n\n", cmd.CommandPath())
+	if cmd.Name() == "settings" {
+		b.WriteString("Reading is different: `pmcluster cluster settings` answers from this node's\n" +
+			"mirror of the leader's settings, labelled with its age. Only WRITING needs the leader.\n\n")
+	}
 
 	b.WriteString("Run it on the leader, or use the remote CLI from your own machine:\n")
 	fmt.Fprintf(&b, "  %s\n", remoteHint(cmd, leaderURL(self)))
@@ -270,6 +299,6 @@ func withScopeGuard() {
 				return err
 			}
 		}
-		return enforceScope(cmd)
+		return enforceScope(cmd, args)
 	}
 }

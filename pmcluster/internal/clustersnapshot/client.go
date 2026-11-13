@@ -29,6 +29,14 @@ type Doer interface {
 	Do(ctx context.Context, method, path string, header map[string]string) (status int, respHeader http.Header, body []byte, base string, err error)
 }
 
+// PollInterval is the cadence of the follower's pull, and it lives here because two
+// things depend on it and they must agree: the loop that polls (internal/cli) and the
+// staleness threshold a read surface applies when it labels a mirrored answer (three
+// intervals, in internal/doctor). It matches the runner-assignment interval — one number
+// for every node-facing pull — and it is a constant rather than a setting because the
+// follower cannot read settings, which is the whole reason it mirrors.
+const PollInterval = 60 * time.Second
+
 // Client reads the leader's snapshot. One poll, one request, close.
 type Client struct {
 	Do Doer

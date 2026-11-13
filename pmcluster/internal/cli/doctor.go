@@ -77,11 +77,19 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	// what this machine can measure, plus one skipped line per cluster question it
 	// cannot. Refusing outright left an operator with no way to ask a WORKER why
 	// its runner never started.
-	if nodeLocalOnly(cmd.Context()) {
+	if self, onFollower := followerSelf(cmd.Context()); onFollower {
 		host, _ := os.Hostname()
 		socketPath := cluster.DefaultGitHubRunnerSocketPath
 		if p := envOr("PMCLUSTER_RUNNER_SOCKET", ""); p != "" {
 			socketPath = p
+		}
+		// The mirror, if this node has one. openExistingStore never creates a database:
+		// a node that was never initialised must keep saying so, and a worker simply has
+		// nothing here (the check reports that rather than opening an empty one).
+		var mirror *store.Store
+		if s, err := openExistingStore(cfg.DBPath()); err == nil {
+			mirror = s
+			defer func() { _ = s.Close() }()
 		}
 		rep := doctor.RunNodeLocal(cmd.Context(), doctor.NodeInput{
 			Hostname:   host,
@@ -90,6 +98,8 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 			StatePath:  agentStatePath(cfg.DataDir),
 			VolumeRoot: envOr("PMCLUSTER_VOLUME_ROOT", "/var/stack/data"),
 			Docker:     &runners.CLIDocker{},
+			Store:      mirror,
+			Role:       self.Role,
 			// This machine's RAM, so the runner's cap is checked against the node
 			// that would have to survive it. Unknown (0) skips the check.
 			MemTotalMiB: hostMemTotalMiB(),
@@ -197,19 +207,24 @@ func printReport(cmd *cobra.Command, rep *doctor.Report) {
 	_ = w.Flush()
 }
 
-// nodeLocalOnly reports whether this node must answer the node-local doctor
-// subset instead of the cluster report. It is deliberately conservative: only a
-// node that PROVES it is a swarm member without leadership qualifies, so an
-// unreachable Docker or a standalone box keeps the full report it always had.
-func nodeLocalOnly(ctx context.Context) bool {
+// followerSelf returns this node's swarm identity when it is a swarm member that is NOT
+// the leader — the one case where this CLI answers from the local MIRROR instead of
+// deferring to the leader (ADR 0003, slice 3).
+//
+// It is deliberately conservative: only a node that PROVES it is a member without
+// leadership qualifies, so an unreachable Docker or a standalone box keeps the full answer
+// it always had. Remote mode is excluded for the opposite reason: the user pointed the CLI
+// at a daemon, and that daemon's own answer is the right one.
+func followerSelf(ctx context.Context) (docker.SelfNode, bool) {
 	if apiURL != "" {
-		// Remote mode: the CLI is pointed at a daemon that is the leader (or at
-		// the edge in front of it), so the full report is the right answer.
-		return false
+		return docker.SelfNode{}, false
 	}
 	self, err := detectSelf(ctx)
 	if err != nil {
-		return false
+		return docker.SelfNode{}, false
 	}
-	return self.SwarmActive && !self.IsLeader
+	if !self.SwarmActive || self.IsLeader {
+		return docker.SelfNode{}, false
+	}
+	return self, true
 }

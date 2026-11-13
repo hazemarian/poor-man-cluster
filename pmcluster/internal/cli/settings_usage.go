@@ -1,15 +1,18 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/remote"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/settings"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/usage"
 )
 
@@ -44,15 +47,19 @@ func showSecrets(cmd *cobra.Command) bool {
 	return err == nil && v
 }
 
-func backendSettings(cmd *cobra.Command) (settings.Service, func(), error) {
+// backendSettings resolves the settings service, and the LOCAL store when there is one.
+// The store comes back so the caller can label a mirrored answer with its age — the same
+// table is the leader's source of truth and a follower's mirror, and the difference has to
+// be visible on stdout.
+func backendSettings(cmd *cobra.Command) (settings.Service, *store.Store, func(), error) {
 	if rc := remoteClient(cmd); rc != nil {
-		return remote.NewClusterSettings(rc), func() {}, nil
+		return remote.NewClusterSettings(rc), nil, func() {}, nil
 	}
 	st, _, err := openStore()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return settings.NewLocal(st), func() { _ = st.Close() }, nil
+	return settings.NewLocal(st), st, func() { _ = st.Close() }, nil
 }
 
 func backendUsage(cmd *cobra.Command) (usage.Service, func(), error) {
@@ -69,11 +76,20 @@ func backendUsage(cmd *cobra.Command) (usage.Service, func(), error) {
 func runClusterSettings(cmd *cobra.Command, args []string) error {
 	defer initCLITelemetry()()
 
-	svc, closeFn, err := backendSettings(cmd)
+	svc, st, closeFn, err := backendSettings(cmd)
 	if err != nil {
 		return err
 	}
 	defer closeFn()
+
+	// A follower answers from its mirror. Say whose state it is and how old before the
+	// values, or the reader cannot tell a fresh answer from one the leader stopped
+	// refreshing an hour ago — which is the exact confusion this migration removes.
+	if isRead := len(args) == 0 || (len(args) > 0 && args[0] == "get"); isRead && st != nil {
+		if _, onFollower := followerSelf(cmd.Context()); onFollower {
+			printMirrorLabel(cmd, st)
+		}
+	}
 
 	// get <key> — print a single value.
 	if len(args) == 1 {
@@ -119,6 +135,27 @@ func runClusterSettings(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("get settings: %w", err)
 	}
 	return printSettings(cmd, all, showSecrets(cmd))
+}
+
+// printMirrorLabel names the leader and the age of the answer that follows.
+//
+// It never fails the command: an unreadable mirror means the values below are this node's
+// own copy, and saying THAT is still better than printing them as if they were current.
+func printMirrorLabel(cmd *cobra.Command, st *store.Store) {
+	// cmd.Context() is nil on a command that was not executed through cobra's Execute (a
+	// test, or a helper called directly), and a nil context does not fall back — it panics
+	// inside database/sql on ctx.Done(). Ask for one explicitly.
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	m, err := st.MirrorReading(ctx, time.Now())
+	if err != nil {
+		fmt.Fprint(cmd.OutOrStdout(),
+			"mirrored: no snapshot applied on this node yet — the values below are this node's own copy and may be out of date\n\n")
+		return
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "mirrored: %s (age_seconds=%d)\n\n", m.Human(), m.AgeSeconds)
 }
 
 func printSettings(cmd *cobra.Command, s settings.Settings, showSecrets bool) error {

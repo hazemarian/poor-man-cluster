@@ -90,7 +90,7 @@ func TestEnforceScope_RefusesOnNonLeader(t *testing.T) {
 	apiURL = ""
 	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-3-w", Role: "worker", SwarmActive: true}, nil)
 
-	err := enforceScope(stackListCmd)
+	err := enforceScope(stackListCmd, nil)
 	if err == nil {
 		t.Fatal("a worker must not answer stack state")
 	}
@@ -107,7 +107,7 @@ func TestEnforceScope_NamesTheLeader(t *testing.T) {
 	apiURL = ""
 	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-4-m", Role: "manager", SwarmActive: true, IsManager: true, LeaderHostname: "nxt-sw-1-m"}, nil)
 
-	err := enforceScope(stackListCmd)
+	err := enforceScope(stackListCmd, nil)
 	if err == nil {
 		t.Fatal("a follower must not answer stack state")
 	}
@@ -120,7 +120,7 @@ func TestEnforceScope_LeaderIsAllowed(t *testing.T) {
 	apiURL = ""
 	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-1-m", Role: "manager", SwarmActive: true, IsManager: true, IsLeader: true}, nil)
 
-	if err := enforceScope(stackListCmd); err != nil {
+	if err := enforceScope(stackListCmd, nil); err != nil {
 		t.Errorf("the leader must be allowed: %v", err)
 	}
 }
@@ -132,11 +132,11 @@ func TestEnforceScope_NodeAndBootstrapScopesSkipTheProbe(t *testing.T) {
 	stubSelf(t, docker.SelfNode{}, errors.New("docker is not installed"))
 
 	for _, cmd := range []*cobra.Command{versionCmd, initCmd, joinCmd} {
-		if err := enforceScope(cmd); err != nil {
+		if err := enforceScope(cmd, nil); err != nil {
 			t.Errorf("%s should not be leader-gated: %v", cmd.Name(), err)
 		}
 	}
-	if err := enforceScope(clusterUpCmd); err != nil {
+	if err := enforceScope(clusterUpCmd, nil); err != nil {
 		t.Errorf("cluster up is bootstrap and must run anywhere: %v", err)
 	}
 }
@@ -148,7 +148,7 @@ func TestEnforceScope_RemoteModeSkipsTheGuard(t *testing.T) {
 	t.Cleanup(func() { apiURL = "" })
 	stubSelf(t, docker.SelfNode{Hostname: "laptop", Role: "worker", SwarmActive: true}, nil)
 
-	if err := enforceScope(stackListCmd); err != nil {
+	if err := enforceScope(stackListCmd, nil); err != nil {
 		t.Errorf("remote mode must not be leader-gated: %v", err)
 	}
 }
@@ -158,7 +158,7 @@ func TestEnforceScope_ProbeFailureIsActionable(t *testing.T) {
 	apiURL = ""
 	stubSelf(t, docker.SelfNode{}, errors.New("Cannot connect to the Docker daemon"))
 
-	err := enforceScope(stackListCmd)
+	err := enforceScope(stackListCmd, nil)
 	if err == nil {
 		t.Fatal("expected a refusal when leadership cannot be determined")
 	}
@@ -178,7 +178,7 @@ func TestEnforceScope_StandaloneNodeIsNotGated(t *testing.T) {
 	stubSelf(t, docker.SelfNode{Name: "fresh-host", Hostname: "fresh-host"}, nil)
 
 	for _, cmd := range []*cobra.Command{stackListCmd, clusterUpdateCmd} {
-		if err := enforceScope(cmd); err != nil {
+		if err := enforceScope(cmd, nil); err != nil {
 			t.Errorf("%s must run on a node with no swarm: %v", cmd.Name(), err)
 		}
 	}
@@ -189,7 +189,7 @@ func TestEnforceScope_SwarmMemberWithoutLeadershipRefuses(t *testing.T) {
 	apiURL = ""
 	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-5-m", Role: "manager", SwarmActive: true, IsManager: true}, nil)
 
-	err := enforceScope(stackListCmd)
+	err := enforceScope(stackListCmd, nil)
 	if err == nil {
 		t.Fatal("a swarm member that is not the leader must refuse cluster state")
 	}

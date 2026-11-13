@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -9,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/clustersnapshot"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // The node-local report.
@@ -21,9 +24,15 @@ import (
 // left with no way to ask a worker why its runner never started — which is
 // exactly the question that stayed unanswered for a whole release.
 //
-// So the worker gets an honest subset: what THIS machine can answer, plus one line
-// naming each thing it cannot (and where to ask instead). Nothing here reads the
-// store, so it cannot answer from a stale copy.
+// So a non-leader gets an honest subset: what THIS machine can answer, plus one line
+// naming each thing it cannot (and where to ask instead).
+//
+// Since ADR 0003's slice 3 it also answers the cluster questions the follower MIRRORS:
+// the settings/secrets/users breadth, whose leader it came from, and how long ago it was
+// applied. That is a deliberate change of the old rule — the report used to refuse the
+// store entirely to avoid answering from a stale copy. Labelling the answer with its age
+// is what makes reading it safe: a stale answer an operator can see is worth more than a
+// blank one, and a blank one is what sent people to the wrong node.
 
 // NodeInput is everything the node-local checks read.
 type NodeInput struct {
@@ -45,7 +54,16 @@ type NodeInput struct {
 	// compared against the machine that would have to survive it. 0 means unknown
 	// (the check is then skipped, never guessed).
 	MemTotalMiB int64
-	// Now is the clock (tests).
+	// Store is this node's control-plane database, which on a follower manager holds the
+	// MIRROR of the leader's settings/secrets/users (ADR 0003, slice 3). Nil on a worker:
+	// a worker has no store, and a missing store is reported as such rather than opening
+	// one, which would seed an empty database whose answers look plausible.
+	Store *store.Store
+	// Role is "manager" or "worker", from the live swarm node spec. It decides what the
+	// swarm line can honestly claim: a follower MANAGER can read the node list, a worker
+	// cannot.
+	Role string
+	// Now is the clock (tests). It also ages the mirror.
 	Now time.Time
 }
 
@@ -63,10 +81,11 @@ func RunNodeLocal(ctx context.Context, in NodeInput) *Report {
 	add(checkRunnerCaches(ctx, in))
 	add(checkDisk(Input{VolumeRoot: in.VolumeRoot}))
 	add(checkSwarmNodeLocal(ctx, in))
+	add(checkMirrorState(ctx, in))
 	add(Check{
 		Name:   "cluster state",
 		Status: StatusSkip,
-		Detail: "not answered here: secrets, settings, stacks, the last apply and the control-plane kit are only current on the leader. Run `pmcluster doctor` on the leader, or from your own machine with --api-url",
+		Detail: "not mirrored, so not answered here: secret DECRYPTION (the cipher key is provisioned at join, never carried by the snapshot), stacks and their revisions, the last apply, and the control-plane kit drill. Run `pmcluster doctor` on the leader, or from your own machine with --api-url",
 	})
 
 	rep.OK = true
@@ -207,13 +226,69 @@ func checkLocalRunnerMemory(in NodeInput) Check {
 		fmt.Sprintf("a %s cap fits this node's %d MB (max %d%%)", rec.Memory, in.MemTotalMiB, runners.MemoryCeilingPercent)}
 }
 
-// checkSwarmNodeLocal reports what a worker can see of the swarm: its own state,
-// never the manager set (which is a manager-only call).
-func checkSwarmNodeLocal(_ context.Context, _ NodeInput) Check {
+// checkMirrorState answers what a follower DOES hold: the leader's settings, secrets and
+// tokens, as of an age this node measured itself.
+//
+// The age is the point of the check. "The mirror is 4 minutes old" is a finding an
+// operator can act on; a green tick next to a copy nobody has refreshed since the leader
+// died is the failure mode this replaces. Stale is a WARN, not a FAIL: the data is real,
+// just old, and the cluster may be mid-failover.
+func checkMirrorState(ctx context.Context, in NodeInput) Check {
+	if in.Store == nil {
+		return Check{
+			Name:   "cluster mirror",
+			Status: StatusSkip,
+			Detail: "no control-plane database on this node (a worker has none): the mirror exists on managers only, and a worker is told what to run by its assignment",
+		}
+	}
+	now := in.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	m, err := in.Store.MirrorReading(ctx, now)
+	switch {
+	case errors.Is(err, store.ErrNeverSynced):
+		// A follower mirrors within one poll of its daemon starting, so this is either a
+		// brand-new node or a mirror that has never once reached the leader. Both are
+		// worth saying out loud, and neither is the old blank.
+		return Check{
+			Name:   "cluster mirror",
+			Status: StatusWarn,
+			Detail: "no snapshot applied on this node yet: a follower mirrors within one poll (60 s) of its daemon starting — check the daemon log for the `cluster mirror` line",
+		}
+	case err != nil:
+		return Check{Name: "cluster mirror", Status: StatusWarn, Detail: "could not read the mirror: " + err.Error()}
+	}
+	detail := fmt.Sprintf("holds the settings/secrets/users mirror · %s (age_seconds=%d)", m.Human(), m.AgeSeconds)
+	if m.AgeSeconds > int64(mirrorStaleAfter/time.Second) {
+		return Check{
+			Name:   "cluster mirror",
+			Status: StatusWarn,
+			Detail: fmt.Sprintf("%s — STALE: nothing applied for over %s, so the leader has not been reachable. The values are real but old; the leader it came from was %s", detail, mirrorStaleAfter, m.Leader),
+		}
+	}
+	return Check{Name: "cluster mirror", Status: StatusOK, Detail: detail}
+}
+
+// mirrorStaleAfter is three poll intervals. It is derived from the channel's own constant
+// so the loop and this threshold cannot drift apart.
+const mirrorStaleAfter = 3 * clustersnapshot.PollInterval
+
+// checkSwarmNodeLocal reports what this node can see of the swarm. A follower MANAGER can
+// read the node list and quorum; a worker cannot (the call is manager-only). The old line
+// told both of them the same thing, which was wrong for half the nodes it printed on.
+func checkSwarmNodeLocal(_ context.Context, in NodeInput) Check {
+	if strings.EqualFold(strings.TrimSpace(in.Role), "manager") {
+		return Check{
+			Name:   "swarm",
+			Status: StatusSkip,
+			Detail: "the node list and quorum are readable from a manager, but the authoritative view — which managers are current, and whether quorum survives another loss — is only current on the leader. Run `pmcluster doctor` there, or with --api-url",
+		}
+	}
 	return Check{
 		Name:   "swarm",
 		Status: StatusSkip,
-		Detail: "this node is standing by: the node list and quorum are manager-only calls, so they are answered on the leader",
+		Detail: "this node is a worker: the node list and quorum are manager-only calls, so they are answered on the leader",
 	}
 }
 

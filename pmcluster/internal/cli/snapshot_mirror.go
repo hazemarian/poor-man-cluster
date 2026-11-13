@@ -35,13 +35,6 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
-// snapshotMirrorInterval paces the poll. It matches the runner-assignment interval:
-// one cadence for every node-facing pull, so an operator reasoning about "how fresh is
-// a follower" reasons about one number. It is a constant rather than a setting on
-// purpose — the follower cannot read settings, which is the whole reason it is
-// mirroring.
-const snapshotMirrorInterval = 60 * time.Second
-
 // mirrorDeps is the loop's whole surface. Every field is a seam a test drives: no
 // docker, no TLS and no clock leaks into the tick logic.
 type mirrorDeps struct {
@@ -66,7 +59,7 @@ func (d mirrorDeps) interval() time.Duration {
 	if d.Interval > 0 {
 		return d.Interval
 	}
-	return snapshotMirrorInterval
+	return clustersnapshot.PollInterval
 }
 
 func (d mirrorDeps) now() time.Time {
@@ -147,7 +140,7 @@ func snapshotMirrorFor(cfg *config.Config, dc runtime.Client, hostname string, l
 	return mirrorDeps{
 		// Its own handle, opened lazily: on a follower the daemon holds no store at all
 		// (a standby must not serve a stale one), and this loop is the only writer.
-		Store: func() (*store.Store, error) { return openMirroredStore(cfg.DBPath()) },
+		Store: func() (*store.Store, error) { return openExistingStore(cfg.DBPath()) },
 		Fetch: client.Fetch,
 		Leads: func(ctx context.Context) bool {
 			leader, _, err := isSwarmLeader(ctx, dc, hostname)
@@ -157,7 +150,9 @@ func snapshotMirrorFor(cfg *config.Config, dc runtime.Client, hostname string, l
 	}
 }
 
-// openMirroredStore opens the control-plane database ONLY if it already exists.
+// openExistingStore opens the control-plane database ONLY if it already exists. The
+// mirror loop and the CLI's mirror-labelled reads both use it, so neither can seed the
+// database the other refuses to create.
 //
 // store.Open creates a database (and its directory) when the file is missing, and on a
 // follower that would be a lie: an empty data.db is exactly what serve.go's "data
@@ -170,7 +165,7 @@ func snapshotMirrorFor(cfg *config.Config, dc runtime.Client, hostname string, l
 // concurrency-safe across processes (0001 is a plain CREATE TABLE), so an opener that
 // starts while another process is mid-migration fails once and then finds the work
 // already done.
-func openMirroredStore(dbPath string) (*store.Store, error) {
+func openExistingStore(dbPath string) (*store.Store, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil, fmt.Errorf("no control-plane database at %s yet: %w", dbPath, err)
 	}
