@@ -192,11 +192,21 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// did nothing on exactly the nodes it was written for (measured on
 		// nxt-sw-6-w: setting true, unit never gained the flag).
 		sock := defaultDockerSocket
+		// Only a store that HOLDS the decision may write the node policy. A worker's
+		// store cannot answer a leader-owned setting, and writing its default there
+		// disarmed the docker watchdog at the worst possible moment (nxt-sw-6-w,
+		// 2026-11-13: dockerd dead, the daemon restarted, the policy was rewritten as
+		// false, and the watchdog then sat through three failed probes doing nothing).
+		// On a worker the assignment carries the leader's answer — runners.Agent
+		// writes it, and that write is allowed to overwrite this file.
 		if _, statErr := os.Stat(cfg.DBPath()); statErr == nil {
 			if st, err := store.Open(cfg.DBPath()); err == nil {
-				if werr := runners.WriteNodePolicy(cfg.DataDir,
-					runners.NodePolicy{DockerRestart: cluster.LoadNodeDockerRestart(cmd.Context(), st)}); werr != nil {
-					log.Warn().Err(werr).Msg("could not write the node policy; the watchdog keeps its previous setting")
+				if armed, known := cluster.LoadNodeDockerRestartKnown(cmd.Context(), st); known {
+					if werr := runners.WriteNodePolicy(cfg.DataDir, runners.NodePolicy{DockerRestart: armed}); werr != nil {
+						log.Warn().Err(werr).Msg("could not write the node policy; the watchdog keeps its previous setting")
+					}
+				} else {
+					log.Info().Msg("node policy left alone: this store holds no node_docker_restart decision (the leader's answer arrives with the runner assignment)")
 				}
 				_ = st.Close()
 			}

@@ -114,7 +114,32 @@ func IsSwarmUnavailable(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "is not a swarm manager") ||
 		strings.Contains(msg, "does not have a leader") ||
-		strings.Contains(msg, "too few managers are online")
+		strings.Contains(msg, "too few managers are online") ||
+		// A dead or wedged dockerd: the swarm is unreadable for exactly the same
+		// reason a leaderless one is — this node cannot ask it anything. Treating it
+		// as a control-plane failure made the daemon exit, so systemd restart-looped
+		// it to `failed` on the node whose docker had just died, which is the one
+		// node that had to stay up long enough for the docker watchdog to fire
+		// (measured on nxt-sw-6-w, 2026-11-13).
+		isDockerDaemonUnavailable(msg)
+}
+
+// isDockerDaemonUnavailable matches the client's own wording for "there is no
+// daemon to talk to": an absent socket, a refused connection, or a daemon that
+// accepted the call and never answered.
+func isDockerDaemonUnavailable(msg string) bool {
+	for _, s := range []string{
+		"Cannot connect to the Docker daemon",
+		"Is the docker daemon running",
+		"connect: no such file or directory",
+		"connect: connection refused",
+		"context deadline exceeded",
+	} {
+		if strings.Contains(msg, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // Kit snapshots and restores the control-plane survivor kit via Docker

@@ -175,6 +175,22 @@ reset a dependency inherited from the main unit (verified on systemd 259 with a
 scratch unit, not just assumed), which is why the earlier "BindsTo cancelled" drop-in
 was a no-op.
 
+**Two more links in that chain, measured the same day.** With the unit repaired, the
+same test found the daemon restart-looping to `failed` — `pmcluster serve` treats an
+unreachable dockerd on the post-leadership control-plane restore as a *control-plane
+failure* and returns it, so systemd started it five times, hit `StartLimitBurst`, and
+left it failed (nothing starts a failed unit when docker comes back). An unreachable or
+wedged daemon is now classified exactly like a leaderless swarm — defer the restore,
+keep serving — because it is the same fact: this node cannot read the replicated kit.
+
+And on the way down it disarmed the watchdog: `pmcluster` rewrites
+`<data_dir>/node-policy.json` at startup from `node_docker_restart`, which is a
+leader-owned setting a worker's store does not hold — so it wrote its own default,
+`false`, over the answer the leader had already pushed to that file. The watchdog then
+probed three times, saw nothing to do, and logged nothing. The policy is now written
+only by a store that actually holds the decision; on a worker the runner assignment
+carries it, and the daemon leaves the file alone.
+
 **What it still cannot do.** It cannot recover a node that is out of memory: if the
 kernel is killing processes, the timer is not running either. It cannot reboot a
 machine, and it will not fight systemd beyond one `reset-failed` per 30 minutes. Those

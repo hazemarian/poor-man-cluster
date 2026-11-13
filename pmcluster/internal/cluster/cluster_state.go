@@ -302,6 +302,29 @@ func LoadNodeDockerRestart(ctx context.Context, st *store.Store) bool {
 	return strings.ToLower(strings.TrimSpace(st.SettingDefault(ctx, settingNodeDockerRestart, "false"))) == "true"
 }
 
+// LoadNodeDockerRestartKnown reports the same decision together with whether this
+// store could answer at all.
+//
+// The difference matters on a node that does not own the setting. `node_docker_restart`
+// is leader-owned, so a worker's store simply has no row for it and
+// LoadNodeDockerRestart answers the default "false" — the right answer for a node
+// nothing ever decided for, and the wrong one to WRITE BACK over a decision the leader
+// already pushed to the node's policy file. Measured on nxt-sw-6-w (2026-11-13): during
+// a dockerd outage the daemon restarted, rewrote the policy as false from its own
+// store, and the docker watchdog then sat through three failed probes doing nothing —
+// it had disarmed itself exactly when it was needed. Callers that persist the decision
+// must use `known`; callers that only need a value keep using the loader above.
+func LoadNodeDockerRestartKnown(ctx context.Context, st *store.Store) (armed, known bool) {
+	if st == nil {
+		return false, false
+	}
+	raw, err := st.Setting(ctx, settingNodeDockerRestart)
+	if err != nil {
+		return false, false
+	}
+	return strings.EqualFold(strings.TrimSpace(raw), "true"), true
+}
+
 func SettingGitHubRunnerMemory() string        { return settingGitHubRunnerMemory }
 func SettingGitHubRunnerNodeMemory() string    { return settingGitHubRunnerNodeMemory }
 func SettingGitHubRunnerAllowManagers() string { return settingGitHubRunnerAllowManagers }

@@ -604,6 +604,14 @@ func TestIsSwarmUnavailable(t *testing.T) {
 		{"worker node", errNotSwarmManager, true},
 		{"no raft leader", errNoLeader, true},
 		{"too few managers", errors.New("rpc error: ... too few managers are online"), true},
+		// A dead dockerd makes the swarm just as unreadable as a leaderless one,
+		// and the caller's contract is the same: defer, never exit. Measured on
+		// nxt-sw-6-w (2026-11-13): `pmcluster serve` answered this error on the
+		// post-leadership restore, returned it, and systemd restart-looped the
+		// daemon to `failed` — on the one node whose docker had just died.
+		{"daemon unreachable", errors.New("config list: Error response from daemon: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"), true},
+		{"daemon socket gone", errors.New("dial unix /var/run/docker.sock: connect: no such file or directory"), true},
+		{"daemon wedged", errors.New("config list: context deadline exceeded"), true},
 		{"missing config", errors.New("config not found: foo_v1"), false},
 		{"permission", errors.New("permission denied"), false},
 	}

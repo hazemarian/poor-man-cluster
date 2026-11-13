@@ -26,10 +26,29 @@ broken: `pmcluster.service` was `inactive`.
 - **`PartOf` stays, and is the right directive for the explicit case:** `systemctl
   restart docker` restarts the agent with it (docker.service lists it in
   `ConsistsOf=`), which is what the deploy script and the watchdog do.
+- **A dead dockerd is not a control-plane failure.** With the unit repaired, the same
+  test found `pmcluster serve` exiting on the post-leadership restore ("control-plane
+  Raft restore: … Cannot connect to the Docker daemon"), restart-looping to `failed` on
+  `StartLimitBurst` — and nothing starts a failed unit when docker comes back. An
+  unreachable or wedged daemon is now classified like a leaderless swarm: defer the
+  restore, keep serving. `IsSwarmUnavailable` is the one predicate, extended — not a
+  second check beside it.
+- **A worker no longer disarms its own watchdog.** At startup the daemon rewrote
+  `node-policy.json` from `node_docker_restart`, a leader-owned setting a worker's store
+  does not hold, so it wrote its own default `false` over the leader's answer — and the
+  watchdog then sat through three failed probes doing nothing. The policy is written
+  only by a store that holds the decision (`LoadNodeDockerRestartKnown`); on a worker
+  the runner assignment carries it.
 
-Measured after the fix, same node, same test: dockerd down 2m46s, watchdog restores it,
-`pmcluster` never leaves `active` (nothing stops it any more) and the swarm node is
-`Ready` with its tasks rescheduled — no operator, no manual start.
+Measured on the node in two runs, in this order. **Run 1, before any fix:** the watchdog
+restored dockerd after 2m46s and `pmcluster` stayed `inactive` — the restart half worked,
+the control plane did not come back. **Run 2, with the unit repaired by hand to the state
+this convergence produces:** dockerd restored again, and the two remaining links showed
+themselves — the daemon restart-looped to `failed` on the control-plane restore, and
+rewrote its own policy as `false` so the watchdog did nothing on the next attempt. The
+full chain (unit repaired, daemon keeps serving, policy left alone) is what the deploy of
+this version verifies; the three code changes are pinned by unit tests, not by a live run
+yet, and this entry will say so until it is.
 
 ## Unreleased — a follower stops standing by (step 2 of 5)
 
