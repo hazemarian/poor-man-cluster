@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -26,7 +27,12 @@ func mirrorStore(t *testing.T) *store.Store {
 
 // mirrorFake is a scripted Fetch: it answers with the configured result and records
 // what the loop sent, which is half of what these tests are about.
+//
+// Every field is behind the mutex because the loop tests read the recorder from the
+// test goroutine while the loop writes it from its own — with -race (which CI runs and a
+// plain `go test` does not) that is a test failure, and it was one.
 type mirrorFake struct {
+	mu     sync.Mutex
 	res    clustersnapshot.Result
 	err    error
 	calls  int
@@ -34,12 +40,28 @@ type mirrorFake struct {
 }
 
 func (f *mirrorFake) fetch(_ context.Context, ifNoneMatch string) (clustersnapshot.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	f.sentIn = append(f.sentIn, ifNoneMatch)
 	if f.err != nil {
 		return clustersnapshot.Result{}, f.err
 	}
 	return f.res, nil
+}
+
+// set swaps the scripted answer between calls.
+func (f *mirrorFake) set(res clustersnapshot.Result) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.res = res
+}
+
+// counts returns how many polls happened and what each one sent, as a copy.
+func (f *mirrorFake) counts() (int, []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls, append([]string(nil), f.sentIn...)
 }
 
 func depsFor(f *mirrorFake, leads bool) mirrorDeps {
@@ -77,8 +99,9 @@ func TestMirrorTickAppliesTheSnapshotsAndRecordsThePair(t *testing.T) {
 	if err := mirrorTick(context.Background(), depsFor(fake, false), st); err != nil {
 		t.Fatalf("mirrorTick: %v", err)
 	}
-	if fake.calls != 1 || fake.sentIn[0] != "" {
-		t.Fatalf("first poll sent If-None-Match %q, want the unconditional read", fake.sentIn[0])
+	calls, sent := fake.counts()
+	if calls != 1 || sent[0] != "" {
+		t.Fatalf("first poll sent If-None-Match %q, want the unconditional read", sent[0])
 	}
 	if got := st.SettingDefault(context.Background(), "domain", ""); got != "example.test" {
 		t.Errorf("setting = %q, want the mirrored value", got)
@@ -94,12 +117,13 @@ func TestMirrorTickAppliesTheSnapshotsAndRecordsThePair(t *testing.T) {
 	// The second poll must send exactly the pair that was applied. A bare version would
 	// match another leader's identical number after a failover and answer 304 for state
 	// this node never applied.
-	fake.res = clustersnapshot.Result{NotModified: true}
+	fake.set(clustersnapshot.Result{NotModified: true})
 	if err := mirrorTick(context.Background(), depsFor(fake, false), st); err != nil {
 		t.Fatalf("second mirrorTick: %v", err)
 	}
-	if want := clustersnapshot.ETag("nxt-sw-5-m", 4); fake.sentIn[1] != want {
-		t.Errorf("second poll sent %q, want %q", fake.sentIn[1], want)
+	_, sent = fake.counts()
+	if want := clustersnapshot.ETag("nxt-sw-5-m", 4); sent[1] != want {
+		t.Errorf("second poll sent %q, want %q", sent[1], want)
 	}
 }
 
@@ -112,8 +136,8 @@ func TestMirrorTickDoesNotFetchWhenThisNodeLeads(t *testing.T) {
 	if err := mirrorTick(context.Background(), depsFor(fake, true), st); err != nil {
 		t.Fatalf("mirrorTick: %v", err)
 	}
-	if fake.calls != 0 {
-		t.Fatalf("the leader fetched the snapshot %d time(s); it must read its own store", fake.calls)
+	if calls, _ := fake.counts(); calls != 0 {
+		t.Fatalf("the leader fetched the snapshot %d time(s); it must read its own store", calls)
 	}
 	if _, err := st.SyncState(context.Background()); !errors.Is(err, store.ErrNeverSynced) {
 		t.Errorf("the leader recorded a sync state: %v", err)
@@ -164,8 +188,9 @@ func TestMirrorTickAppliesAcrossALeaderChange(t *testing.T) {
 	if err := mirrorTick(context.Background(), depsFor(fake2, false), st); err != nil {
 		t.Fatalf("second mirrorTick: %v", err)
 	}
-	if want := clustersnapshot.ETag("nxt-sw-5-m", 4); fake2.sentIn[0] != want {
-		t.Errorf("poll after a leadership change sent %q, want the pair it applied %q", fake2.sentIn[0], want)
+	want := clustersnapshot.ETag("nxt-sw-5-m", 4)
+	if _, sent2 := fake2.counts(); sent2[0] != want {
+		t.Errorf("poll after a leadership change sent %q, want the pair it applied %q", sent2[0], want)
 	}
 	if got := st.SettingDefault(context.Background(), "domain", ""); got != "from-b" {
 		t.Errorf("setting = %q, want the new leader's value", got)
@@ -225,10 +250,13 @@ func TestStartSnapshotMirrorPollsThenStopsOnDemand(t *testing.T) {
 
 	stop, done := startSnapshotMirror(context.Background(), d)
 	deadline := time.Now().Add(3 * time.Second)
-	for fake.calls == 0 && time.Now().Before(deadline) {
+	for time.Now().Before(deadline) {
+		if calls, _ := fake.counts(); calls > 0 {
+			break
+		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if fake.calls == 0 {
+	if calls, _ := fake.counts(); calls == 0 {
 		stop()
 		t.Fatal("the loop never polled: a follower would wait a full interval before its first snapshot")
 	}
