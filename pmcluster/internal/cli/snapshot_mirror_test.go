@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -238,27 +239,59 @@ func TestOpenMirroredStoreRefusesToCreateADatabase(t *testing.T) {
 // only writer afterwards — so `done` must not close until the loop has really exited.
 func TestStartSnapshotMirrorPollsThenStopsOnDemand(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "loop.db")
-	fake := &mirrorFake{res: snapAt(2, "domain", "looped")}
-	d := mirrorDeps{
-		Store:    func() (*store.Store, error) { return store.Open(dbPath) },
-		Fetch:    fake.fetch,
-		Leads:    func(context.Context) bool { return false },
-		Now:      func() time.Time { return time.Unix(1_700_000_500, 0) },
-		Interval: 5 * time.Millisecond,
-		Log:      zerolog.Nop(),
+	var logs bytes.Buffer
+	// The database exists and is migrated BEFORE the loop starts, exactly as a joined
+	// node's does. Without this the test opens a second handle against a brand-new file
+	// while the loop is mid-migration and trips a real (pre-existing) hazard: the runner's
+	// 0001 is a plain CREATE TABLE, so two connections migrating the same fresh file make
+	// the loser fail "table users already exists". A follower's data.db is never fresh, and
+	// the loop retries a lost race on the next interval anyway.
+	seed, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed store: %v", err)
 	}
 
-	stop, done := startSnapshotMirror(context.Background(), d)
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if calls, _ := fake.counts(); calls > 0 {
+	fake := &mirrorFake{res: snapAt(2, "domain", "looped")}
+	d := mirrorDeps{
+		Store: func() (*store.Store, error) { return store.Open(dbPath) },
+		Fetch: fake.fetch,
+		Leads: func(context.Context) bool { return false },
+		Now:   func() time.Time { return time.Unix(1_700_000_500, 0) },
+		// ONE tick, not a stream of them: with a 5 ms interval a second poll is always in
+		// flight when stop lands, its context is cancelled mid-transaction, and the apply
+		// rolls back — correctly. Waiting for a fetch COUNT therefore observed a
+		// half-cancelled poll and made this test fail on a loaded runner while passing on a
+		// quiet one. A one-hour interval means nothing else can be in flight.
+		Interval: time.Hour,
+		// A real sink: a loop test that fails has to say what the loop said, or the next
+		// reader is left guessing which of "never polled", "poll failed", "apply failed"
+		// it was.
+		Log: zerolog.New(&logs),
+	}
+
+	ctx := context.Background()
+	stop, done := startSnapshotMirror(ctx, d)
+
+	// Wait for the tick to be APPLIED, read back through a second handle (sqlite allows
+	// it: the store uses the rollback journal precisely so the CLI can read alongside the
+	// daemon). The loop ticks immediately, so this is the only poll that will happen.
+	applied := false
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		if got := readSetting(t, dbPath, "domain"); got == "looped" {
+			applied = true
 			break
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !applied {
+		stop()
+		t.Fatalf("the loop never applied a snapshot: a follower would wait a full interval before its first one (loop log: %s)", logs.String())
 	}
 	if calls, _ := fake.counts(); calls == 0 {
-		stop()
-		t.Fatal("the loop never polled: a follower would wait a full interval before its first snapshot")
+		t.Fatal("the snapshot arrived without a poll")
 	}
 	stop()
 	select {
@@ -268,12 +301,19 @@ func TestStartSnapshotMirrorPollsThenStopsOnDemand(t *testing.T) {
 	}
 
 	// The applied rows survive the loop's shutdown — the handle is closed, not rolled back.
-	st, err := store.Open(dbPath)
-	if err != nil {
-		t.Fatalf("reopen store: %v", err)
-	}
-	defer func() { _ = st.Close() }()
-	if got := st.SettingDefault(context.Background(), "domain", ""); got != "looped" {
+	if got := readSetting(t, dbPath, "domain"); got != "looped" {
 		t.Errorf("setting after the loop stopped = %q, want the applied value", got)
 	}
+}
+
+// readSetting opens the store at dbPath just long enough to read one setting. It is how
+// these tests observe the loop's work without sharing its handle.
+func readSetting(t *testing.T, dbPath, key string) string {
+	t.Helper()
+	st, err := store.Open(dbPath)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = st.Close() }()
+	return st.SettingDefault(context.Background(), key, "")
 }

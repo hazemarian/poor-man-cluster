@@ -164,6 +164,12 @@ func snapshotMirrorFor(cfg *config.Config, dc runtime.Client, hostname string, l
 // directory not initialised — run pmcluster init" guard exists to catch, and creating it
 // here would make the guard pass on a node that was never initialised. A follower
 // mid-join simply retries next interval.
+//
+// A failure is never fatal for the same reason: the loop retries every interval, which is
+// also the answer to the one race this can lose — the migration runner is not
+// concurrency-safe across processes (0001 is a plain CREATE TABLE), so an opener that
+// starts while another process is mid-migration fails once and then finds the work
+// already done.
 func openMirroredStore(dbPath string) (*store.Store, error) {
 	if _, err := os.Stat(dbPath); err != nil {
 		return nil, fmt.Errorf("no control-plane database at %s yet: %w", dbPath, err)
