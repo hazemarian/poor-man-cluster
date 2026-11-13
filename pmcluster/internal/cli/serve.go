@@ -622,13 +622,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 			if isLeader {
 				log.Info().Msg("control loop: starting reconcile loop (leader)")
-				// Name this node as the leader BEFORE the reconcile pass: the
-				// collector's placement CONSTRAINT reads this label, so a
-				// missing label means an unschedulable collector, not a
-				// slightly misplaced one. This also covers a daemon that starts
-				// while already holding leadership — the watch emits its
-				// initial state, so this runs on that first pass too.
-				syncLeaderLabel(ctx, dc, true, log)
+				// Nothing to label: the collector follows the leader by NAME at
+				// render time, and nothing else reads pmcluster.leader.
 				// This node just gained leadership. Its data.db may be older
 				// than the newest Raft-replicated kit (the previous leader
 				// snapshotted credentials/settings this node never adopted), so
@@ -650,14 +645,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				loopCtx, loopCancel = context.WithCancel(ctx)
 				go reconciler.Loop(loopCtx)
 				go kit.Loop(loopCtx, controlPlaneSnapshotInterval())
-				// Keep the label true for as long as this node is leader. One
-				// write per election is not enough now that placement is a
-				// constraint: a write that failed during the election leaves the
-				// collector with no matching node at all.
-				go keepLeaderLabel(loopCtx, dc, log)
 			} else {
 				log.Info().Msg("control loop: stopped (not the swarm leader)")
-				syncLeaderLabel(ctx, dc, false, log)
 			}
 		}
 	}()
