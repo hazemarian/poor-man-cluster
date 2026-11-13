@@ -107,6 +107,12 @@ const (
 // The zero Selector is CopyAll: a table is copied verbatim unless it says
 // otherwise, so adding an authoritative table is one line here.
 var kitTables = []store.CopyPlan{
+	// FIRST, and with the replace selector: the migration seeds this table's single
+	// row, so a plain copy would collide on the primary key and fail the whole
+	// export. It carries the cluster version a follower mirrors by, and it must
+	// describe the data in this kit rather than restart at 1 — a leader promoted
+	// through this kit then answers the version its content actually has.
+	{Table: "cluster_version", Selector: store.CopyReplace},
 	{Table: "users"},
 	{Table: "managed_credentials"},
 	{Table: "stacks"},

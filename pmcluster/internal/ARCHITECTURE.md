@@ -151,9 +151,13 @@ node's runner half:
 - Authenticated by **mutual TLS with the swarm node certificate**
   (`internal/auth/swarmtls`): chain to the swarm CA, `O` = this swarm's ID, `CN` = a
   node ID in the live node list (that is the revocation path), not expired. The
-  middleware is mounted on this route **and nothing else** — not on `/api/*`, not on
-  `/metrics`, not on the console — so a compromised worker gains no second readable
-  endpoint. `?node=` is ignored: identity comes from the certificate only.
+  middleware is mounted **per route** on this listener and never around a mux; the
+  listener carries three node-facing routes — this one, the node report
+  (`/internal/api/cluster/report`) and the cluster snapshot
+  (`/internal/api/cluster/snapshot`) — and none of them is mounted on `/api/*`, on
+  `/metrics`, or on the console, so a compromised worker gains no second readable
+  endpoint. `?node=` is ignored: identity comes from the certificate only, and each
+  route answers the projection that certificate entitles it to.
 - The leader resolves the same decision the reconcile makes (switch, org, node list,
   manager/leader refusal, `selected` group visibility) and sends the **resolved
   spec**: org, group, socket path/proxy, memory, labels, poll interval, a `reason`,
@@ -195,6 +199,38 @@ container/registration agreement (ghosts, offline runners, raw sockets), and the
 missing `organization_self_hosted_runners: write` permission that would otherwise
 appear as a bare 403. On a worker it answers the node-local subset (daemon, socket
 proxy, last assignment fetched, local runner, disk) instead of refusing.
+
+## Cluster state: one writer, readers that pull
+
+`internal/clustersnapshot` serves `GET /internal/api/cluster/snapshot` — the state a
+follower manager mirrors so it can answer reads from its own store instead of
+"standing by". The decision, its alternatives and its costs are in
+`docs/adr/0003-cluster-state-by-pull.md`; what the code constrains:
+
+- **The version is a content identity, not a clock.** One `cluster_version` row is bumped
+  inside the same transaction as every settings/secret/user write that changes
+  something, and stamped at that moment by the store — never by the handler at read
+  time, so two reads of one version report one `generated_at` and the age a follower
+  shows is the age of the data. Rewriting a value that is already stored does not bump:
+  reconcile reapplies settings every pass, and a bump per pass would make every poll a
+  full body.
+- **The ETag is `"<leader>:<version>"`.** A version alone is meaningless across a
+  leadership change, where a different store can answer the same number for different
+  content. A client must remember the PAIR it applied.
+- **A projection, to managers only.** `settings`, `secrets` (ciphertext, never plaintext)
+  and `users` — the API-key table — always present as arrays, so an empty table is `[]`
+  and never `null`: a follower has to be able to tell "no rows" from "not sent", and the
+  difference is every deleted row. `last_used_at`, logs, backup history, the CI board
+  cache, metrics and per-node observations are deliberately absent. A worker certificate
+  is refused: it has no store to mirror into and is told what to do through the
+  assignment.
+- **`cluster_version` rides the control-plane kit** with `store.CopyReplace`, because the
+  migrations seed the row: a promoted leader then answers the version its adopted data
+  actually has, rather than restarting at 1.
+
+**Not built yet (slices 2–5 of the ADR):** no follower polls the route, settings still
+travel in Docker configs, and the join-time key route does not exist. Slice 1 is additive
+on purpose.
 
 ## Leaf packages
 

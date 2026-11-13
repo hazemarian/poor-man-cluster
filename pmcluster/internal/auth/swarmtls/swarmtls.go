@@ -21,12 +21,20 @@
 //
 // What this package deliberately is NOT, so it does not grow into one:
 //
-//   - It is not a second control plane. It authenticates ONE read-only pull
-//     (the runner assignment) and is mounted on that route only. If a later
-//     change wants a second endpoint over this channel, that is a redesign, not
-//     an extension — see the comment at the mount site.
-//   - It does not carry settings, credentials or secrets. The handler's response
-//     schema is the assignment spec and nothing else.
+//   - It is not a second control plane. It authenticates the node-facing routes on
+//     ONE listener and is mounted per route, never around a mux: the runner
+//     assignment, the node report, and the cluster snapshot. That listener is the
+//     only place it appears — never on /api, never on /metrics, never on the console.
+//   - It authenticates; it does not authorize. Each handler decides what its caller
+//     may see, and each answer is a projection of what THAT node needs, keyed off
+//     the identity here (role included) — a worker and a manager get different
+//     answers, and the snapshot refuses a worker outright.
+//   - The cluster snapshot IS cluster state: settings, secret ciphertext and API
+//     tokens, to managers only, because that is what a mirror needs. That is a
+//     deliberate widening of what crosses this channel, decided in
+//     pmcluster/docs/adr/0003-cluster-state-by-pull.md — the alternative was the
+//     Docker config it replaces, which carried the same material to the same class
+//     of node through a 512 KB object any manager could read.
 //   - It does not authenticate users, mutate anything, push to workers, or hold
 //     a long-lived connection. One request, one answer, close.
 //

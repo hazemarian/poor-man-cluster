@@ -343,10 +343,18 @@ func TestKitDB_EveryTableIsClassified(t *testing.T) {
 // everyRowPlans returns the kit's table list with every history cap removed:
 // the "pack the history too" comparison the size test uses as its teeth. It is
 // built from kitTables so a table added to the kit is automatically included.
+//
+// CopyReplace survives the stripping, because it is not a cap: cluster_version's
+// destination row is seeded by the migrations, so dropping the selector would make
+// this comparison fail on a primary-key collision instead of measuring size.
 func everyRowPlans() []store.CopyPlan {
 	plans := make([]store.CopyPlan, 0, len(kitTables))
 	for _, c := range kitTables {
-		plans = append(plans, store.CopyPlan{Table: c.Table})
+		plan := store.CopyPlan{Table: c.Table}
+		if c.Selector == store.CopyReplace {
+			plan.Selector = store.CopyReplace
+		}
+		plans = append(plans, plan)
 	}
 	return plans
 }

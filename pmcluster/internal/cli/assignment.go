@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth/swarmtls"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/clustersnapshot"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodereport"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodestat"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
@@ -86,15 +87,17 @@ type assignmentListenerOptions struct {
 	KeyFile  string
 }
 
-// startAssignmentListener serves GET /api/github/runners/assignment to nodes of
-// this swarm, over mutual TLS, on a dedicated listener bound to this node's
-// swarm data-path address.
+// startAssignmentListener serves the node-facing routes — the runner assignment,
+// the node report, and the cluster snapshot — to nodes of this swarm, over mutual
+// TLS, on a dedicated listener bound to this node's swarm data-path address.
 //
 // Three properties this function is responsible for, each of which used to be a
 // gap:
 //
-//  1. It is the ONLY route on this listener and the ONLY place swarmtls is
-//     mounted. A compromised worker gets one read-only answer, not a second API.
+//  1. It is the ONLY listener swarmtls is mounted on, and every route on it is
+//     behind the verifier. Not on /api/*, not on /metrics, not on the console:
+//     a compromised worker gets three projections of what its own certificate
+//     entitles it to, not a second API.
 //  2. It binds the node's overlay address (from `docker info`), never a public
 //     host port. The port is in harden-host.sh's restricted list so the WAN
 //     cannot reach it even if a bind is ever widened.
@@ -162,8 +165,11 @@ func startAssignmentListener(ctx context.Context, o assignmentListenerOptions) {
 		},
 		Log: log,
 	}
-	// ONE route. The middleware wraps the assignment handler and nothing else (see
-	// the comment at the call site in serve.go).
+	// The node-facing routes, ALL of them behind this verifier and none of them
+	// reachable anywhere else. Since the settings-snapshot work there are three, and
+	// the rule they share is the one that matters: this listener is the ONLY place
+	// swarmtls is mounted, so a compromised worker gains no second readable API, and
+	// each route answers a projection of what THIS caller needs.
 	mux := http.NewServeMux()
 	mux.Handle(runners.AssignmentPath, verifier.Middleware(svc))
 	// Node reports travel on the SAME listener and behind the SAME verifier: the console
@@ -181,6 +187,15 @@ func startAssignmentListener(ctx context.Context, o assignmentListenerOptions) {
 			nodestat.Publish(ctx, smp)
 		},
 	}))
+	// The cluster snapshot: the read half of the pull-based replication that replaces
+	// writing settings into docker configs (pmcluster/docs/adr/0003-cluster-state-by-pull.md).
+	// The handler refuses anything but a MANAGER certificate — a worker has no store to
+	// mirror into — and answers a version + ETag so an unchanged poll is a 304.
+	mux.Handle(clustersnapshot.Path, verifier.Middleware(&clustersnapshot.Service{
+		Store:    o.Store,
+		Hostname: o.Hostname,
+		Log:      log.With().Str("component", "cluster-snapshot").Logger(),
+	}))
 
 	serveCfg := swarmtls.ServeConfig{
 		Addr:     addr,
@@ -196,8 +211,9 @@ func startAssignmentListener(ctx context.Context, o assignmentListenerOptions) {
 			log.Warn().Err(err).Str("addr", addr).Msg("runner assignment endpoint stopped")
 		}
 	}()
-	log.Info().Str("addr", addr).Str("ca", caPath).Str("path", runners.AssignmentPath).
-		Msg("runner assignment endpoint listening (swarm mutual TLS, this route only)")
+	log.Info().Str("addr", addr).Str("ca", caPath).
+		Strs("paths", []string{runners.AssignmentPath, nodereport.Path, clustersnapshot.Path}).
+		Msg("node endpoint listening (swarm mutual TLS, these routes only)")
 }
 
 // selfSwarmAddr is this node's swarm data-path address, or "" when it has none

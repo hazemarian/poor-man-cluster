@@ -1,0 +1,115 @@
+# 0003 — Cluster state reaches other managers by pull, not by Docker config
+
+Status: accepted (slice 1 landed) · Date: 2026-11-13
+
+## Context
+
+Today the leader copies cluster state — settings, and with them the cipher key that
+decrypts secrets — to every node by writing it into **Docker configs**. Four things
+follow from that, each observed rather than predicted:
+
+- **The key lives in the replicated object.** `~/.pmcluster/.encryption_key` is material
+  in a config, so anything with manager access can read what decrypts every secret value
+  in the store. Encryption at rest is only as strong as the channel that carries the key.
+- **Every settings write is a Raft config rotation** against Docker's 512,000-byte config
+  ceiling. The control-plane survivor kit already occupies 84,740 of those bytes, and it
+  grew over the cap once (stack_revisions alone reached 5.2 MB of file, 538 KB gzipped),
+  which refused every publish for days.
+- **A follower manager's store answers "standing by".** Its settings are not current, and
+  the code paths that read settings are written as if they were. Two shipped bugs came
+  from exactly that: a non-leader manager could not be selected as a runner (nothing on
+  it could hear the decision), and `pmcluster doctor` cannot answer five of its checks on
+  any follower.
+- **Nothing verifies reach.** "The config is on every node" is a claim about a write, not
+  an observation of the reader.
+
+## Decision
+
+**One writer, many readers that pull.** The leader's store is the only writer. Every
+other node pulls the current snapshot over the swarm-mTLS channel the daemon already
+serves, mirrors it into its own store, and serves reads locally **with an age**. Docker
+configs stop carrying settings, and never carry the cipher key again.
+
+The rules the code must follow:
+
+1. **One channel, one direction.** The route lives under `/internal/api/...` on the
+   swarm-mTLS listener, behind `swarmtls.Verifier`, and never on the public `/api`
+   router. The caller's identity comes from its node certificate — never a query
+   parameter, never a body field.
+2. **Answer a projection, not the document.** What THIS node needs, keyed off that
+   certificate. A worker has no store to mirror into and is refused; a manager gets the
+   three mirrored tables and nothing else.
+3. **The version is a content identity, not a clock.** One row, bumped inside the same
+   transaction as the write it describes, stamped by the store. It is the ETag together
+   with the leader's name, so a follower compares *equality* against the pair it applied.
+   A numerically lower version is not "older" — a leader that adopted a control-plane kit
+   answers with a version it has used before for different content.
+4. **The cipher key must not come from the thing being replicated.** It is provisioned
+   once at join, over mTLS, identified by the certificate, answered `409` to a node that
+   already holds one, written `0600` outside the store. The snapshot carries a `key_id`
+   so a node can notice its key is older than the material it is decrypting.
+5. **Full snapshots, not deltas.** These tables are tens of rows, and a row absent from a
+   full snapshot is deleted locally — free. A delta cannot express a delete without
+   tombstones.
+
+## What slice 1 ships (this record's claim, and its limits)
+
+- `GET /internal/api/cluster/snapshot` on the leader's mTLS listener, managers only,
+  answering `version`, `generated_at`, `leader` and `tables` for `settings`, `secrets`
+  and `users`. The store type maps those names to `cluster_settings`, `secrets` and
+  `users` (which is also the API-key table; `storage_nodes` is a settings key, not a
+  table).
+- `cluster_version` — one row, seeded by migration, bumped in the writer's transaction
+  by every settings, secret and user write that actually changes something. A rewrite of
+  the same value does not bump: the reconcile loop reapplies settings every pass, and a
+  bump per pass would invalidate every follower's ETag forever, which is 304 forever dead.
+- `If-None-Match` → `304` with no body, matching weakly (`W/`, lists, `*`).
+- `cluster_version` rides the control-plane survivor kit (`store.CopyReplace`), so a
+  promoted leader's version describes the data it adopted instead of restarting at 1.
+- Tests: the closed table set, the 304, the write that invalidates it, a stable
+  `generated_at` per version, a delete visible as an absence, empty tables as `[]` not
+  `null`, the worker refusal, GET-only, 503 without a store, the leader+version ETag, the
+  weak comparison, the bump rules per write path, and the route's absence from the
+  public API.
+
+**It changes no behaviour yet.** Settings still travel in Docker configs, followers still
+answer "standing by", and nothing polls the route. That is deliberate: slice 1 is
+additive so it can be deployed and observed before anything depends on it.
+
+## Consequences
+
+- **Costs, stated plainly.** A manager now receives, over one route, the material the
+  config path already gave it — including secret **ciphertext**, never plaintext, and the
+  argon2id token hashes. That is not a new class of reader; it is the same class, through
+  a channel with a revocation story (`docker node rm` drops the certificate) instead of an
+  object any manager can read at will. Workers are refused, so the audience narrows.
+- A settings write reaches a follower within one poll interval (60 s, the runner
+  assignment's), not instantly. Every read surface must therefore carry an age — a blank
+  answer is not acceptable, a stale one is.
+- Polling costs one request per follower per interval, and a 304 is a few dozen bytes. It
+  does not scale down to nothing: the poll is the liveness signal as well as the sync.
+- The mirror is a **second copy of secret ciphertext** on every manager's disk. It is the
+  same copy the kit writes today; a key rotation must reach every node, which is why the
+  snapshot carries `key_id`.
+- `cluster_version` is now a table the schema-classification test demands an answer for,
+  and the kit carries it with a selector that exists for exactly one table.
+
+## Handoff checklist (slices 2–5)
+
+- [ ] **2 — follower mirror.** Poll on the runner-assignment interval, started BEFORE the
+      leadership wait (`internal/cli/nodeagent.go` `startPerNodeLoops` is the shape).
+      Apply in one transaction: upsert every row, delete absent rows scoped to the
+      mirrored tables, bump `sync_state`. Schema in the brief: `mirrored_at` on `settings`
+      and `secrets`, plus the `sync_state` row carrying leader, version, generated_at,
+      applied_at. The leader must never fetch from itself.
+- [ ] **3 — switch the readers.** Follower managers answer settings reads from the mirror;
+      every answer carries `age_seconds` and the leader it came from. `doctor`'s "standing
+      by" branches become real answers with an age.
+- [ ] **4 — retire the config path** (irreversible, and only after 3 has been observed for
+      a day). Then the size workaround that existed for the 512 KB limit goes too, and a
+      metric asserts that a write reaches every manager within one poll.
+- [ ] **5 — the cipher key.** `POST /internal/api/join/key`, `200` once, `409` after,
+      `0600` outside the store; then rotate everything that ever lived in a config: the
+      S3 access key and secret, the SSO client secret, the SeaweedFS store secret.
+- [ ] Rolling upgrade: a node on the old binary must keep working throughout — the route
+      is additive, and nothing may require it until the whole fleet has it.

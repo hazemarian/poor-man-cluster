@@ -3,6 +3,35 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — cluster state learns to be pulled (step 1 of 5)
+
+**Why:** cluster settings — and the cipher key that decrypts every secret — are copied to
+every node by writing them into Docker configs. So the key sits in a Raft-replicated
+object any manager can read, every settings write is a config rotation against a 512 KB
+ceiling (the survivor kit already uses 84,740 of it), and a follower manager's store
+answers "standing by", which has already cost a runner selection and five `doctor` checks.
+The target is one writer (the leader) and readers that pull. Full reasoning in
+`pmcluster/docs/adr/0003-cluster-state-by-pull.md`.
+
+- **`GET /internal/api/cluster/snapshot`** on the leader's swarm-mTLS listener, behind the
+  existing node-certificate verifier and never on the public API (a test asserts the 404
+  there). It answers `settings`, `secrets` (ciphertext — the key never crosses this
+  channel) and `users`, always as arrays so an empty table is `[]` and never `null`:
+  a follower must tell "no rows" from "not sent". A **worker** certificate is refused —
+  a worker has no store to mirror into.
+- **A version that means content, not time.** One `cluster_version` row is bumped inside
+  the same transaction as the settings/secret/user write it describes, and stamped by the
+  store, so two reads of one version report one `generated_at`. It doubles as the ETag
+  (`leader:version`, weak comparison), so an unchanged poll is a **304 with no body**.
+  Rewriting a value that is already stored does not bump — reconcile reapplies settings
+  every pass, and a bump per pass would keep every follower re-fetching forever.
+- **It survives failover.** `cluster_version` rides the control-plane survivor kit via a
+  new `store.CopyReplace` selector (the migrations seed the row, so a verbatim copy would
+  collide), which keeps a promoted leader's version describing the data it adopted.
+- **Changes no behaviour yet.** Settings still travel in Docker configs, no follower polls
+  the route, and the join-time key route (step 5) does not exist. Additive so it can be
+  observed on the fleet before anything depends on it.
+
 ## Unreleased — the console can answer "what is my CI doing"
 
 - **A CI board at `/web/ci`.** One row per repository: newest workflow run, state,

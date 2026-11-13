@@ -280,18 +280,42 @@ func (s *Store) ListStackErrors(ctx context.Context, stackName string, limit int
 // foreign key) and every service-scope config + secret the stack owns (a stack
 // owns those rows — deleting a stack must not leave orphaned configs/secrets).
 // Returns ErrStackNotFound when no such stack exists.
+//
+// All three deletes run in ONE transaction, and the secret delete bumps the cluster
+// version: `secrets` is a table a follower mirrors, so a stack torn down here with
+// no bump leaves the follower decrypting secret material the leader no longer has.
+// The behaviour on a missing stack is unchanged — the owned rows are still cleaned
+// up, and the not-found error is returned after the commit rather than rolling the
+// cleanup back.
 func (s *Store) DeleteStack(ctx context.Context, name string) error {
-	if _, err := s.conn().ExecContext(ctx, `DELETE FROM configs WHERE stack = ?`, name); err != nil {
-		return fmt.Errorf("delete stack configs: %w", err)
-	}
-	if _, err := s.conn().ExecContext(ctx, `DELETE FROM secrets WHERE stack = ?`, name); err != nil {
-		return fmt.Errorf("delete stack secrets: %w", err)
-	}
-	res, err := s.conn().ExecContext(ctx, `DELETE FROM stacks WHERE name = ?`, name)
+	var notFound bool
+	err := s.inTxBump(ctx, func(tx *sql.Tx) (bool, error) {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM configs WHERE stack = ?`, name); err != nil {
+			return false, fmt.Errorf("delete stack configs: %w", err)
+		}
+		res, err := tx.ExecContext(ctx, `DELETE FROM secrets WHERE stack = ?`, name)
+		if err != nil {
+			return false, fmt.Errorf("delete stack secrets: %w", err)
+		}
+		removedSecrets, err := res.RowsAffected()
+		if err != nil {
+			return false, fmt.Errorf("rows affected deleting stack secrets: %w", err)
+		}
+		stackRes, err := tx.ExecContext(ctx, `DELETE FROM stacks WHERE name = ?`, name)
+		if err != nil {
+			return false, fmt.Errorf("delete stack %s: %w", name, err)
+		}
+		removedStacks, err := stackRes.RowsAffected()
+		if err != nil {
+			return false, fmt.Errorf("rows affected deleting stack %s: %w", name, err)
+		}
+		notFound = removedStacks == 0
+		return removedSecrets > 0, nil
+	})
 	if err != nil {
-		return fmt.Errorf("delete stack %s: %w", name, err)
+		return err
 	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
+	if notFound {
 		return ErrStackNotFound
 	}
 	return nil
