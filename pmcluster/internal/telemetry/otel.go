@@ -25,9 +25,11 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -41,6 +43,16 @@ import (
 
 // Options configures the SDK. Endpoint empty disables everything.
 type Options struct {
+	// Node is this daemon's swarm hostname. It becomes a RESOURCE attribute, which is
+	// the only place that covers every signal at once: metrics, logs and spans all
+	// inherit the resource, so one field gives a node identity to all three.
+	//
+	// Without it, a cluster's telemetry is a pile of records with no machine attached:
+	// a log line and a span cannot be attributed to the node that emitted them, and the
+	// leader's relay — where the resource belongs to the leader — would file another
+	// node's data under its own name.
+	Node string
+
 	// Endpoint is the base URL of the OTLP/HTTP receiver, e.g.
 	// "http://10.7.224.15:4318" — always this node's swarm address, resolved
 	// by config.ResolveOTLPEndpoint. Empty disables self-telemetry.
@@ -99,11 +111,7 @@ func Init(ctx context.Context, opts Options) (Shutdown, error) {
 
 	res, err := resource.Merge(
 		resource.Default(),
-		resource.NewSchemaless(
-			semconv.ServiceName(opts.ServiceName),
-			semconv.ServiceNamespace(opts.ServiceNamespace),
-			semconv.ServiceVersion(opts.ServiceVersion),
-		),
+		resource.NewSchemaless(nodeResourceAttrs(opts)...),
 	)
 	if err != nil {
 		return noopShutdown, fmt.Errorf("telemetry: build resource: %w", err)
@@ -209,3 +217,30 @@ func insecureLogOpt(secure bool) otlploghttp.Option {
 }
 
 func noopShutdown(context.Context) error { return nil }
+
+// nodeResourceAttrs is the identity every signal carries.
+//
+// Three attributes, and each has a different consumer:
+//
+//	service.instance.id     the OTel semantic convention for "which instance of this
+//	                        service" — generic tooling groups by it
+//	host.name               the semantic convention for the machine
+//	pmcluster.node.name     ours; unambiguous, and what the platform's own queries use
+//
+// They ride the RESOURCE rather than individual records, so a log line, a metric and a
+// span emitted in the same process agree without every call site remembering to add them.
+func nodeResourceAttrs(opts Options) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		semconv.ServiceName(opts.ServiceName),
+		semconv.ServiceNamespace(opts.ServiceNamespace),
+		semconv.ServiceVersion(opts.ServiceVersion),
+	}
+	if node := strings.TrimSpace(opts.Node); node != "" {
+		attrs = append(attrs,
+			semconv.ServiceInstanceID(node),
+			semconv.HostName(node),
+			attribute.String("pmcluster.node.name", node),
+		)
+	}
+	return attrs
+}

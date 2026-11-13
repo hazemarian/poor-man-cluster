@@ -117,7 +117,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			startNodeStatSampler(cmd.Context(), dc, log)
 		}
 	}()
-	telemetryCtl := newTelemetrySupervisor(log, func() {
+	telemetryCtl := newTelemetrySupervisor(log, hostname, func() {
 	})
 	go telemetryCtl.Loop(cmd.Context(), cfg.OTLPEndpoint, func(ctx context.Context) bool {
 		leader, _, err := isSwarmLeader(ctx, dc, hostname)

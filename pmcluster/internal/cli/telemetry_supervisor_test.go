@@ -34,7 +34,7 @@ func TestTelemetrySupervisorRecoversWithoutARestart(t *testing.T) {
 	}
 
 	first := make(chan struct{}, 4)
-	s := newTelemetrySupervisor(zerolog.Nop(), func() { firstCalls.Add(1); first <- struct{}{} })
+	s := newTelemetrySupervisor(zerolog.Nop(), "nxt-sw-6-w", func() { firstCalls.Add(1); first <- struct{}{} })
 	s.interval = 0
 
 	probe := func() { s.probe(context.Background(), "auto", nil) }

@@ -49,14 +49,17 @@ type telemetrySupervisor struct {
 	shutdown telemetry.Shutdown
 	started  bool
 	log      zerolog.Logger
+	// node is this daemon's swarm hostname, stamped onto every signal's resource.
+	node string
 	// onFirstEndpoint is nil after it has run once.
 	onFirstEndpoint func()
 	interval        time.Duration
 }
 
 // newTelemetrySupervisor returns a supervisor that is not yet running.
-func newTelemetrySupervisor(log zerolog.Logger, onFirstEndpoint func()) *telemetrySupervisor {
+func newTelemetrySupervisor(log zerolog.Logger, node string, onFirstEndpoint func()) *telemetrySupervisor {
 	return &telemetrySupervisor{
+		node:            node,
 		log:             log.With().Str("component", "telemetry").Logger(),
 		onFirstEndpoint: onFirstEndpoint,
 		interval:        telemetryReprobeInterval,
@@ -111,7 +114,10 @@ func (s *telemetrySupervisor) probe(ctx context.Context, configured string, isLe
 		Endpoint:       endpoint,
 		ServiceName:    serviceName(),
 		ServiceVersion: buildinfo.Version,
-		Failures:       telemetryFailureLogger(s.log),
+		// The node rides the RESOURCE, so logs and spans carry it too — not just the
+		// metrics, which add it per datapoint on their own.
+		Node:     s.node,
+		Failures: telemetryFailureLogger(s.log),
 	})
 	if err != nil {
 		s.log.Warn().Err(err).Str("endpoint", endpoint).Msg("OTel telemetry disabled")
