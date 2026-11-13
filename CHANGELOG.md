@@ -19,6 +19,23 @@ that the watchdog had just rescued was left with docker and no control plane, ag
   down, which no general babysitter could claim, and the docker restart itself is
   rate-limited to once per 30 minutes.
 
+Measured live on `nxt-sw-6-w` (2026-11-13, v0.2.320), one journal, no operator:
+
+```
+18:07:41  docker did not answer probe 1/3: … connection refused
+18:08:46  docker did not answer probe 2/3: … connection refused
+18:09:50  docker did not answer probe 3/3: … connection refused
+18:09:50  restarting docker after 3 consecutive failed probes — EVERY container on this
+          node will stop
+18:09:50  docker answers again after the restart
+18:09:52  pmcluster was down after the docker restart; started it
+```
+
+dockerd was down 2m54s and the control plane ~2s; the daemon served `/health` 200 for
+the whole docker outage, the node came back `Ready`, its storage task and its runner
+container were rescheduled, and the setting was then put back to `false` and the node's
+policy flipped with it.
+
 ## v0.2.319 — the docker watchdog works; the control plane has to survive it
 
 **Why:** `node_docker_restart` exists so a dead `dockerd` fixes itself. It was exercised
@@ -61,10 +78,9 @@ restored dockerd after 2m46s and `pmcluster` stayed `inactive` — the restart h
 the control plane did not come back. **Run 2, with the unit repaired by hand to the state
 this convergence produces:** dockerd restored again, and the two remaining links showed
 themselves — the daemon restart-looped to `failed` on the control-plane restore, and
-rewrote its own policy as `false` so the watchdog did nothing on the next attempt. The
-full chain (unit repaired, daemon keeps serving, policy left alone) is what the deploy of
-this version verifies; the three code changes are pinned by unit tests, not by a live run
-yet, and this entry will say so until it is.
+rewrote its own policy as `false` so the watchdog did nothing on the next attempt. With
+the heal in v0.2.320 the full chain was then measured live on the same node — see that
+entry — so these three changes are verified end-to-end, not only by unit tests.
 
 ## Unreleased — a follower stops standing by (step 2 of 5)
 
