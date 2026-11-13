@@ -22,6 +22,8 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -145,7 +147,7 @@ func snapshotMirrorFor(cfg *config.Config, dc runtime.Client, hostname string, l
 	return mirrorDeps{
 		// Its own handle, opened lazily: on a follower the daemon holds no store at all
 		// (a standby must not serve a stale one), and this loop is the only writer.
-		Store: func() (*store.Store, error) { return store.Open(cfg.DBPath()) },
+		Store: func() (*store.Store, error) { return openMirroredStore(cfg.DBPath()) },
 		Fetch: client.Fetch,
 		Leads: func(ctx context.Context) bool {
 			leader, _, err := isSwarmLeader(ctx, dc, hostname)
@@ -153,6 +155,20 @@ func snapshotMirrorFor(cfg *config.Config, dc runtime.Client, hostname string, l
 		},
 		Log: componentLog,
 	}
+}
+
+// openMirroredStore opens the control-plane database ONLY if it already exists.
+//
+// store.Open creates a database (and its directory) when the file is missing, and on a
+// follower that would be a lie: an empty data.db is exactly what serve.go's "data
+// directory not initialised — run pmcluster init" guard exists to catch, and creating it
+// here would make the guard pass on a node that was never initialised. A follower
+// mid-join simply retries next interval.
+func openMirroredStore(dbPath string) (*store.Store, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("no control-plane database at %s yet: %w", dbPath, err)
+	}
+	return store.Open(dbPath)
 }
 
 // startSnapshotMirror runs the poll loop until stop is called (or ctx ends), and

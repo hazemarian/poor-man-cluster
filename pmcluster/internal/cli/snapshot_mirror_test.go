@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -176,6 +177,35 @@ func TestMirrorTickAppliesAcrossALeaderChange(t *testing.T) {
 	if state.Leader != "nxt-sw-4-m" {
 		t.Errorf("sync leader = %q, want the new leader", state.Leader)
 	}
+}
+
+// TestOpenMirroredStoreRefusesToCreateADatabase: a follower that was never initialised
+// must stay uninitialised. store.Open would create data.db (and its directory) on any
+// path handed to it, which would make serve.go's "run pmcluster init" guard pass on a
+// node that has no control plane — and the mirror would then serve an empty one.
+func TestOpenMirroredStoreRefusesToCreateADatabase(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nested", "data.db")
+	if _, err := openMirroredStore(missing); err == nil {
+		t.Fatal("openMirroredStore created a database: the uninitialised-node guard is defeated")
+	}
+	if _, statErr := os.Stat(missing); !os.IsNotExist(statErr) {
+		t.Errorf("openMirroredStore left a file behind at %s", missing)
+	}
+
+	// An existing database opens normally.
+	existing := filepath.Join(t.TempDir(), "data.db")
+	seed, err := store.Open(existing)
+	if err != nil {
+		t.Fatalf("seed store: %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("close seed: %v", err)
+	}
+	st, err := openMirroredStore(existing)
+	if err != nil {
+		t.Fatalf("openMirroredStore on an existing database: %v", err)
+	}
+	_ = st.Close()
 }
 
 // TestStartSnapshotMirrorPollsThenStopsOnDemand: the loop applies at least one snapshot
