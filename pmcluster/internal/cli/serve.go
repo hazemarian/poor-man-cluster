@@ -108,8 +108,16 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// reconsidered, leaving a five-node cluster showing one row in the console.
 	// Started here (docker client in hand) and still well before the leadership
 	// wait, so a standby manager and a worker both keep reporting.
+	// The sampler starts HERE, not from the telemetry supervisor's first-endpoint hook:
+	// after the collector became leader-only, a worker has no local endpoint to wait for,
+	// and gating the sampler on one is how four nodes vanished from the panel. Its OTLP
+	// half is a no-op without an exporter; its report half needs no collector at all.
+	go func() {
+		if dc != nil {
+			startNodeStatSampler(cmd.Context(), dc, log)
+		}
+	}()
 	telemetryCtl := newTelemetrySupervisor(log, func() {
-		startNodeStatSampler(cmd.Context(), dc, log)
 	})
 	go telemetryCtl.Loop(cmd.Context(), cfg.OTLPEndpoint, docker.NodeSelfAddr)
 	defer telemetryCtl.stop(context.Background())

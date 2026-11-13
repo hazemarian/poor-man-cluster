@@ -17,11 +17,15 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodereport"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodestat"
@@ -60,10 +64,12 @@ func nodeStatFilePath() string {
 
 // startNodeStatSampler runs the /proc sampler for this node until ctx ends.
 //
-// It is started on EVERY node (not just the leader): the whole point is that
-// each node describes itself. It is started only when a collector endpoint
-// resolved — publishing into the void would be pure waste, and the daemon
-// already logs once why telemetry is off.
+// It is started on EVERY node (not just the leader): the whole point is that each node
+// describes itself. It no longer waits for a collector endpoint — after the collector
+// became leader-only, a worker has nothing local to export to, and waiting for one is
+// exactly how four nodes went missing from the panel. The sample is POSTed to the leader
+// on the swarm mTLS channel instead; the OTLP publish is still attempted and is a no-op
+// where there is no exporter.
 func startNodeStatSampler(ctx context.Context, dc runtime.Client, log zerolog.Logger) {
 	go func() {
 		host := nodeStatHostname(ctx, dc, log)
@@ -89,6 +95,7 @@ func startNodeStatSampler(ctx context.Context, dc runtime.Client, log zerolog.Lo
 // Suppressing the leader's own sample was the bug that left the leader without
 // a row in the Node resources panel.
 func nodeStatTick(ctx context.Context, dc runtime.Client, s *nodestat.Sampler, log zerolog.Logger) {
+	nodeStatTickWith(ctx, dc, s, log, nodeReportSender(dc))
 	smp, err := s.Collect(time.Now())
 	if err != nil {
 		// A partial /proc (a racing exit, a restricted mount) must not stop
@@ -345,4 +352,42 @@ func replaceNodeStatCollector(ctx context.Context, dc runtime.Client, log zerolo
 	}
 	log.Info().Str("service", nodeStatCollectorService).
 		Msg("collector re-placed on the new leader")
+}
+
+// nodeReportSender builds the client a node uses to report itself to the leader. It is
+// the same transport the runner assignment uses: swarm mTLS, manager addresses from the
+// live swarm, no published port and no shared secret.
+func nodeReportSender(dc runtime.Client) *runners.Client {
+	if dc == nil {
+		return nil
+	}
+	return &runners.Client{Managers: func(ctx context.Context) ([]string, error) {
+		return managerHosts(ctx, dc)
+	}}
+}
+
+// nodeStatTickWith is nodeStatTick with the sender injected, so a test can drive one tick
+// without a leader.
+func nodeStatTickWith(ctx context.Context, dc runtime.Client, s *nodestat.Sampler, log zerolog.Logger, sender *runners.Client) {
+	smp, err := s.Collect(time.Now())
+	if err != nil {
+		log.Warn().Err(err).Msg("node stat sample incomplete")
+	}
+	if dc != nil {
+		if _, err := dc.Info(ctx); err != nil {
+			smp.DockerUp = 0
+		}
+	}
+	// The leader's own numbers come from its exporter; every OTHER node's only path is
+	// this report. Sending from the leader too is not harmful (the row is upserted, not
+	// appended) and it keeps the two paths identical, which is what makes this testable.
+	if sender != nil {
+		body, merr := json.Marshal(smp)
+		if merr != nil {
+			log.Warn().Err(merr).Msg("node report: encode")
+		} else if perr := sender.PostJSON(ctx, nodereport.Path, body); perr != nil {
+			log.Debug().Err(perr).Msg("node report: not delivered to the leader")
+		}
+	}
+	nodestat.Publish(ctx, smp)
 }

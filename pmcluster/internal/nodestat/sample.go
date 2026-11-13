@@ -311,3 +311,26 @@ func (s *Sampler) rssKB(pid int) int64 {
 	}
 	return 0
 }
+
+// Stat is the row view of this sample: what the console reads, one per node.
+//
+// It lives here rather than in the reader because there are now TWO producers — the
+// collector's JSONL file (the leader's own pipeline) and a node reporting itself over
+// mTLS — and a second copy of this mapping is how a field silently stops arriving.
+func (s Sample) Stat() Stat {
+	return Stat{
+		Hostname:   s.Hostname,
+		Role:       s.Role,
+		Cores:      s.Cores,
+		Load1:      s.Load1,
+		Load5:      s.Load5,
+		Load15:     s.Load15,
+		MemTotalMB: s.MemTotalMB,
+		MemUsedMB:  s.MemUsedMB,
+		MemAvailMB: s.MemAvailMB,
+		DockerUp:   s.DockerUp,
+		TopRSS:     s.TopRSS,
+		TopCPU:     s.TopCPU,
+		SampleTS:   s.TS,
+	}
+}

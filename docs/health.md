@@ -219,6 +219,27 @@ five-node cluster showed one row.
 
 ```sh
 journalctl -u pmcluster | grep -i "self-telemetry\|OTel telemetry"
+**How a node's numbers reach the leader.** The console is served by the leader; the
+numbers belong to the node that runs the workload. A host process cannot reach an
+overlay-only service, so the leader can measure exactly one machine — itself. Each node
+therefore POSTs its own sample to the leader on the swarm-mTLS listener:
+
+```
+POST /internal/api/cluster/report      (node certificate, never a token)
+     {"hostname":…,"cores":…,"load1":…,"mem_total_mb":…,"docker_up":…,"top_rss":[…],"ts":…}
+```
+
+`/internal/api` and not `/api`: these routes are for nodes, and the public API's token auth
+must never be the thing standing between a node and its own measurement. The hostname is
+taken from the **certificate**, not the body — a node that claims another's name is
+corrected and logged, because otherwise one machine overwrites another's row and every
+panel built on it lies.
+
+The leader upserts one row per node (never a history: the control-plane SQLite file is what
+every request reads). So the overview and the runner panel keep working when the collector
+is down or Parseable is being upgraded — the store holds the current values, the collector
+holds the history.
+
 **How the collector is exposed, and the incident behind it.** Its OTLP port is published
 `mode: host`, so 4318 exists on the node running the collector — the leader — and nowhere
 else. It was `mode: ingress` before, which binds the port on **every** node and forwards to

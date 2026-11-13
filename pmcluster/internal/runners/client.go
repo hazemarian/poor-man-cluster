@@ -301,9 +301,36 @@ func (c *Client) ReportCaches(ctx context.Context, caches []CacheUsage) error {
 	return fmt.Errorf("could not report cache sizes (%s)", strings.Join(errs, "; "))
 }
 
+// PostJSON sends one JSON body to path on the leader, over the same transport the
+// assignment fetch uses. It is the small, general half of the node → leader channel: the
+// cache report and the node report both speak it.
+func (c *Client) PostJSON(ctx context.Context, path string, body []byte) error {
+	client, bases, err := c.transport(ctx)
+	if err != nil {
+		return err
+	}
+	var errs []string
+	for _, base := range bases {
+		if perr := c.postPath(ctx, client, base, path, body); perr == nil {
+			return nil
+		} else {
+			errs = append(errs, fmt.Sprintf("%s: %v", base, perr))
+		}
+	}
+	if len(errs) == 0 {
+		return errors.New("no candidate address for the leader")
+	}
+	return fmt.Errorf("could not post %s (%s)", path, strings.Join(errs, "; "))
+}
+
 // post performs one POST against one candidate.
 func (c *Client) post(ctx context.Context, client *http.Client, base string, body []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+AssignmentPath, bytes.NewReader(body))
+	return c.postPath(ctx, client, base, AssignmentPath, body)
+}
+
+// postPath performs one POST against one candidate at one path.
+func (c *Client) postPath(ctx context.Context, client *http.Client, base, path string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

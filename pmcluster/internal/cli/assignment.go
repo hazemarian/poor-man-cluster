@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth/swarmtls"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodereport"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/server"
@@ -164,6 +165,15 @@ func startAssignmentListener(ctx context.Context, o assignmentListenerOptions) {
 	// the comment at the call site in serve.go).
 	mux := http.NewServeMux()
 	mux.Handle(runners.AssignmentPath, verifier.Middleware(svc))
+	// Node reports travel on the SAME listener and behind the SAME verifier: the console
+	// is served by the leader, the numbers belong to the node that runs the workload, and
+	// this is the only authenticated channel between them. /internal/api and not /api:
+	// these routes are for nodes, and the public API's token auth must never be the thing
+	// that stands between a node and its own measurement.
+	mux.Handle(nodereport.Path, verifier.Middleware(&nodereport.Service{
+		Store: o.Store,
+		Log:   log.With().Str("component", "node-report").Logger(),
+	}))
 
 	serveCfg := swarmtls.ServeConfig{
 		Addr:     addr,
