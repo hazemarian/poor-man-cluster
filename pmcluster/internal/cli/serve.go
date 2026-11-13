@@ -628,9 +628,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				// slightly misplaced one. This also covers a daemon that starts
 				// while already holding leadership — the watch emits its
 				// initial state, so this runs on that first pass too.
-				if syncLeaderLabel(ctx, dc, true, log) {
-					replaceNodeStatCollector(ctx, dc, log)
-				}
+				syncLeaderLabel(ctx, dc, true, log)
 				// This node just gained leadership. Its data.db may be older
 				// than the newest Raft-replicated kit (the previous leader
 				// snapshotted credentials/settings this node never adopted), so
@@ -652,9 +650,6 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				loopCtx, loopCancel = context.WithCancel(ctx)
 				go reconciler.Loop(loopCtx)
 				go kit.Loop(loopCtx, controlPlaneSnapshotInterval())
-				// The collector writes its node-stats JSONL on the leader's
-				// disk; only this daemon can turn it into rows for the console.
-				go runNodeStatTailer(loopCtx, st, dc, log)
 				// Keep the label true for as long as this node is leader. One
 				// write per election is not enough now that placement is a
 				// constraint: a write that failed during the election leaves the

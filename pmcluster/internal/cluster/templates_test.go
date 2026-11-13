@@ -634,7 +634,7 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 	// The metrics pipeline keeps its invariant (memory_limiter first, batch
 	// last) and gained one filter: node-stats series are ingested by
 	// metrics/nodestat instead, so a second copy must not reach Parseable.
-	for _, want := range []string{"memory_limiter, resourcedetection, transform/metrics", "filter/drop_nodestat, batch]"} {
+	for _, want := range []string{"memory_limiter, resourcedetection, transform/metrics", "batch]"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("metrics pipeline must contain %q", want)
 		}

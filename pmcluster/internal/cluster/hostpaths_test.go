@@ -157,58 +157,6 @@ func TestNodeStatHostDirIsTheDocumentedPath(t *testing.T) {
 	}
 }
 
-// TestRenderedNodeStatBindSourceIsTheEnsuredHostDir is the anti-drift test: the
-// rendered bind source, the directory the helper is given, and the collector
-// config's exporter path must all be the same value. If any of them is
-// re-spelled by hand, a task is rejected or the JSONL is written outside the
-// mount — both silent on the deploy.
-func TestRenderedNodeStatBindSourceIsTheEnsuredHostDir(t *testing.T) {
-	doc := renderNodeStatStack(t)
-	svc, ok := doc.Services["otel-collector"]
-	if !ok {
-		t.Fatal("rendered stack has no otel-collector service")
-	}
-	var srcs []string
-	for _, v := range svc.Volumes {
-		if strings.Contains(v, "nodestat") {
-			src, _, found := strings.Cut(v, ":")
-			if !found {
-				t.Fatalf("nodestat volume %q has no container target", v)
-			}
-			srcs = append(srcs, src)
-		}
-	}
-	if len(srcs) != 1 {
-		t.Fatalf("otel-collector nodestat binds = %v, want exactly one", svc.Volumes)
-	}
-	if srcs[0] != NodeStatHostDir {
-		t.Fatalf("rendered bind source = %q, want cluster.NodeStatHostDir %q — the mount and the mkdir have drifted",
-			srcs[0], NodeStatHostDir)
-	}
-
-	// The workflow is given exactly that path.
-	if dirs := platformHostDirs(); len(dirs) != 1 || dirs[0] != srcs[0] {
-		t.Fatalf("platformHostDirs() = %v, want [%s] (the rendered bind source)", dirs, srcs[0])
-	}
-
-	// And the exporter writes INSIDE the mounted directory, at the file the
-	// daemon's reader tails.
-	cfg, err := RenderOTelCollectorConfig(RenderInput{
-		ObservabilityAdminEmail: "admin@example.com",
-		ObservabilityBasicAuth:  observabilityBasicAuth("admin@example.com", "pw"),
-	})
-	if err != nil {
-		t.Fatalf("render collector config: %v", err)
-	}
-	want := "path: " + NodeStatHostDir + "/" + NodeStatFileName
-	if !strings.Contains(string(cfg), want) {
-		t.Fatalf("collector config has no %q:\n%s", want, cfg)
-	}
-	if strings.Contains(string(cfg), "[[") {
-		t.Errorf("collector config still contains an unexpanded template action")
-	}
-}
-
 // TestUp_CreatesPlatformHostDirsBeforeTheObservabilityDeploy drives Up far
 // enough to observe the call, and pins the ORDER: a bind source created after
 // the deploy would be created too late to help.

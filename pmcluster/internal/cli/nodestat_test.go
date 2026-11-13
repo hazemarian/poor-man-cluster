@@ -18,7 +18,6 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodereport"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodestat"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // statLine writes one collector-shaped JSONL line for a node. The fixture is
@@ -224,115 +223,6 @@ func TestKeepLeaderLabel_ReassertsWhileLeader(t *testing.T) {
 func TestSyncLeaderLabel_NilClientIsSafe(t *testing.T) {
 	if syncLeaderLabel(context.Background(), nil, true, zerolog.Nop()) {
 		t.Fatal("a nil client cannot have changed anything")
-	}
-}
-
-// TestReplaceNodeStatCollector_ForcesOneRestart: a placement PREFERENCE is only
-// read when a task is created, so the leadership label moving must be followed by
-// exactly one force-update of the collector service.
-func TestReplaceNodeStatCollector_ForcesOneRestart(t *testing.T) {
-	dc := &statClient{nodes: []runtime.Node{{ID: "self", Hostname: "self", Role: "manager"}}}
-	dc.nodes[0].Labels = map[string]string{}
-	replaceNodeStatCollector(context.Background(), dc, zerolog.Nop())
-	if restarts := dc.restartSnapshot(); len(restarts) != 1 || restarts[0] != "observability_otel-collector" {
-		t.Fatalf("restarts = %v, want exactly the collector service", restarts)
-	}
-	// Nil client is a no-op, never a panic: standalone mode has no collector.
-	replaceNodeStatCollector(context.Background(), nil, zerolog.Nop())
-}
-
-// TestTailNodeStatsOnce_UpsertsAndPrunes drives the leader's whole read path
-// against a real store and a real file.
-func TestTailNodeStatsOnce_UpsertsAndPrunes(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "nodestat.jsonl")
-	body := statLine("n1", "manager", 1000, 9.96) + "\n" + statLine("n2", "worker", 1000, 0.4) + "\n"
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-
-	st, err := store.Open(filepath.Join(dir, "data.db"))
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	ctx := context.Background()
-
-	dc := &statClient{nodes: []runtime.Node{
-		{ID: "1", Hostname: "n1", Role: "manager"},
-		{ID: "2", Hostname: "n2", Role: "worker"},
-	}}
-	r := nodestat.NewReader(path)
-	res := tailNodeStatsOnce(ctx, r, st, dc, zerolog.Nop())
-	if len(res.Stats) != 2 {
-		t.Fatalf("read stats = %d, want 2", len(res.Stats))
-	}
-
-	rows, err := st.ListNodeStats(ctx)
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d, want 2", len(rows))
-	}
-	if rows[0].Hostname != "n1" || rows[0].Load1 != 9.96 || rows[0].MemTotalMB != 1839 || rows[0].Cores != 1 {
-		t.Fatalf("n1 row = %+v", rows[0])
-	}
-
-	// An unchanged file writes nothing new and keeps exactly two rows.
-	res = tailNodeStatsOnce(ctx, r, st, dc, zerolog.Nop())
-	if len(res.Stats) != 0 {
-		t.Fatalf("second tick parsed %d stats, want 0", len(res.Stats))
-	}
-	rows, _ = st.ListNodeStats(ctx)
-	if len(rows) != 2 {
-		t.Fatalf("rows after idle tick = %d, want 2", len(rows))
-	}
-
-	// n2 leaves the swarm: its row is pruned; n1's stays.
-	dc.nodes = dc.nodes[:1]
-	tailNodeStatsOnce(ctx, r, st, dc, zerolog.Nop())
-	rows, _ = st.ListNodeStats(ctx)
-	if len(rows) != 1 || rows[0].Hostname != "n1" {
-		t.Fatalf("rows after prune = %+v, want only n1", rows)
-	}
-}
-
-// TestTailNodeStatsOnce_NodeListFailureKeepsRows is the guard against a
-// transient manager outage wiping the panel.
-func TestTailNodeStatsOnce_NodeListFailureKeepsRows(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "nodestat.jsonl")
-	if err := os.WriteFile(path, []byte(statLine("n1", "manager", 1, 1)+"\n"), 0o600); err != nil {
-		t.Fatalf("fixture: %v", err)
-	}
-	st, err := store.Open(filepath.Join(dir, "data.db"))
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	ctx := context.Background()
-
-	dc := &statClient{nodes: []runtime.Node{{ID: "1", Hostname: "n1"}}}
-	r := nodestat.NewReader(path)
-	tailNodeStatsOnce(ctx, r, st, dc, zerolog.Nop())
-
-	dc.nodeErr = context.DeadlineExceeded
-	tailNodeStatsOnce(ctx, r, st, dc, zerolog.Nop())
-	rows, _ := st.ListNodeStats(ctx)
-	if len(rows) != 1 {
-		t.Fatalf("rows = %d after a failed node list, want the row kept", len(rows))
-	}
-}
-
-func TestNodeStatFilePath_EnvOverride(t *testing.T) {
-	t.Setenv(nodeStatPathEnv, "/tmp/custom-nodestat.jsonl")
-	if got := nodeStatFilePath(); got != "/tmp/custom-nodestat.jsonl" {
-		t.Fatalf("path = %q", got)
-	}
-	t.Setenv(nodeStatPathEnv, "")
-	if got := nodeStatFilePath(); got != nodeStatDefaultPath {
-		t.Fatalf("path = %q, want the /var/stack default", got)
 	}
 }
 

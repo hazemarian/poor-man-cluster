@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -27,10 +26,8 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodereport"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodestat"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 const (
@@ -41,26 +38,10 @@ const (
 	// nodeStatTailInterval paces the leader's read of the collector's file.
 	// Independent of the sample interval on purpose: a slow sample must not
 	// delay a read, and a read must never trigger a sample.
-	nodeStatTailInterval = 15 * time.Second
 
 	// nodeStatPathEnv overrides the path for tests and for a host whose
 	// /var/stack lives elsewhere.
-	nodeStatPathEnv = "PMCLUSTER_NODESTAT_PATH"
 )
-
-// nodeStatDefaultPath is where the collector's file exporter writes, and where
-// the stack bind-mounts it. Derived from cluster.NodeStatHostDir — the same
-// constant `cluster up` / `cluster update` mkdir and the stack renders — so the
-// reader cannot look somewhere the mount does not cover.
-var nodeStatDefaultPath = cluster.NodeStatFilePath()
-
-// nodeStatFilePath returns the collector's JSONL path.
-func nodeStatFilePath() string {
-	if p := strings.TrimSpace(os.Getenv(nodeStatPathEnv)); p != "" {
-		return p
-	}
-	return nodeStatDefaultPath
-}
 
 // startNodeStatSampler runs the /proc sampler for this node until ctx ends.
 //
@@ -147,92 +128,6 @@ func localRole(ctx context.Context, dc runtime.Client) string {
 		}
 	}
 	return ""
-}
-
-// runNodeStatTailer reads the collector's file and keeps node_stats current.
-//
-// It is leader-only: the collector is pinned to node.labels.pmcluster.leader by a
-// hard constraint, so the file exists on the leader's disk and only the leader's
-// daemon is the one the console talks to.
-func runNodeStatTailer(ctx context.Context, st *store.Store, dc runtime.Client, log zerolog.Logger) {
-	if st == nil {
-		return
-	}
-	path := nodeStatFilePath()
-	r := nodestat.NewReader(path)
-	log.Info().Str("path", path).Msg("node stats: tailing the collector's file")
-
-	t := time.NewTicker(nodeStatTailInterval)
-	defer t.Stop()
-	missingLogged := false
-	for {
-		if res := tailNodeStatsOnce(ctx, r, st, dc, log); res.Missing && !missingLogged {
-			log.Info().Str("path", path).Msg("node stats: file not written yet (collector deploying?)")
-			missingLogged = true
-		} else if !res.Missing {
-			missingLogged = false
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
-}
-
-// tailNodeStatsOnce is one read → upsert → prune cycle. Split out of the loop
-// so the whole path is exercised by tests without waiting for a ticker.
-func tailNodeStatsOnce(ctx context.Context, r *nodestat.Reader, st *store.Store, dc runtime.Client, log zerolog.Logger) nodestat.ReadResult {
-	res, err := r.Read()
-	if err != nil {
-		log.Warn().Err(err).Msg("node stats: read failed")
-		return res
-	}
-	if res.Missing {
-		return res
-	}
-	if res.Malformed > 0 {
-		log.Warn().Int("skipped", res.Malformed).Int("total", r.MalformedLines()).
-			Msg("node stats: skipped unparseable lines in the collector output")
-	}
-	if len(res.Stats) > 0 {
-		if err := st.UpsertNodeStats(ctx, res.Stats, time.Now().Unix()); err != nil {
-			log.Warn().Err(err).Msg("node stats: upsert failed")
-		}
-	}
-	pruneNodeStats(ctx, st, dc, log)
-	return res
-}
-
-// pruneNodeStats deletes rows for nodes no longer in the swarm.
-//
-// A node list failure SKIPS the prune instead of running it with an empty list:
-// a transient manager outage must never wipe the panel's rows. The reader's own
-// per-node memory is untouched here — a node that merely went quiet keeps its
-// last row, which is the difference between "stopped reporting" (grey, aged)
-// and "left the swarm" (gone).
-func pruneNodeStats(ctx context.Context, st *store.Store, dc runtime.Client, log zerolog.Logger) {
-	if dc == nil {
-		return
-	}
-	nodes, err := dc.NodeList(ctx)
-	if err != nil {
-		return
-	}
-	keep := make([]string, 0, len(nodes))
-	for _, n := range nodes {
-		if n.Hostname != "" {
-			keep = append(keep, n.Hostname)
-		}
-	}
-	if len(keep) == 0 {
-		return
-	}
-	if n, err := st.DeleteNodeStatsExcept(ctx, keep); err != nil {
-		log.Warn().Err(err).Msg("node stats: prune failed")
-	} else if n > 0 {
-		log.Info().Int64("rows", n).Msg("node stats: pruned rows for nodes no longer in the swarm")
-	}
 }
 
 // syncLeaderLabel makes pmcluster.leader authoritative on THIS node — stamped
@@ -325,34 +220,6 @@ func keepLeaderLabel(ctx context.Context, dc runtime.Client, log zerolog.Logger)
 			syncLeaderLabel(ctx, dc, true, log)
 		}
 	}
-}
-
-// nodeStatCollectorService is the collector's Swarm service name
-// (`<stack>_<service>`). It is a constant here because the restart below is the
-// one place the daemon names a platform service directly.
-const nodeStatCollectorService = "observability_otel-collector"
-
-// replaceNodeStatCollector forces the collector task to be scheduled again after
-// the leadership label moved.
-//
-// Placement is only evaluated when a task is CREATED: a running task stays where
-// it is until the service is updated or restarted, even when the constraint that
-// selected its node no longer matches. So a leadership change alone would leave
-// the collector on the old leader while the node-stats file it writes sits on a
-// node whose daemon no longer reads it. One force-update per real label change
-// closes that gap; it is best-effort because on a first boot the stack may not be
-// deployed yet (the reconcile pass deploys it with the label already in place).
-func replaceNodeStatCollector(ctx context.Context, dc runtime.Client, log zerolog.Logger) {
-	if dc == nil {
-		return
-	}
-	if err := dc.ServiceRestart(ctx, nodeStatCollectorService); err != nil {
-		log.Debug().Err(err).Str("service", nodeStatCollectorService).
-			Msg("collector re-placement skipped (service not deployed yet?)")
-		return
-	}
-	log.Info().Str("service", nodeStatCollectorService).
-		Msg("collector re-placed on the new leader")
 }
 
 // nodeReportSender builds the client a node uses to report itself to the leader. It is
