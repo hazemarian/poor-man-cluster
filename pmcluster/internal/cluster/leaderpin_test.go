@@ -182,3 +182,51 @@ func staleCollectorRender(t *testing.T, fresh []byte) []byte {
 	}
 	return out
 }
+
+// TestUpdate_RedeploysWhenOnlyTheLeaderChanged is the guard for the failure that made this
+// whole thread possible to miss: the collector follows the leader by NAME, so a leadership
+// change alters nothing in the stack except one string — and a deploy path that keys on
+// "did the config change" will happily skip it. The signature is silent: the collector
+// keeps running on the old node, the new leader's daemon finds nothing on its socket, and
+// only the panels go quiet.
+//
+// So: deploy once, move the leader, deploy again, and require that observability is
+// re-deployed. No drift, no config edit, no version bump — one node name.
+func TestUpdate_RedeploysWhenOnlyTheLeaderChanged(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	f := deps.Docker.(*fakeDocker)
+
+	deploy := func() []string {
+		t.Helper()
+		rec := &recordingDeployer{}
+		deps.Deployer = rec
+		if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		names := make([]string, 0, len(rec.deployedStacks))
+		for _, d := range rec.deployedStacks {
+			names = append(names, d.Name)
+		}
+		return names
+	}
+
+	f.nodes = []runtime.Node{{ID: "m1", Hostname: "nxt-sw-5-m", Role: "manager", IsLeader: true}}
+	deploy()
+
+	// Leadership moves. Nothing else changes: same binary, same settings, same certs.
+	f.nodes = []runtime.Node{
+		{ID: "m1", Hostname: "nxt-sw-5-m", Role: "manager"},
+		{ID: "m2", Hostname: "nxt-sw-1-m", Role: "manager", IsLeader: true},
+	}
+	got := deploy()
+	var observability bool
+	for _, n := range got {
+		if n == "observability" {
+			observability = true
+		}
+	}
+	if !observability {
+		t.Fatalf("a change of leader did not redeploy the observability stack (deployed: %v); the collector would stay on the old node", got)
+	}
+}
