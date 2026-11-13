@@ -234,6 +234,17 @@ func checkLocalRunnerMemory(in NodeInput) Check {
 // died is the failure mode this replaces. Stale is a WARN, not a FAIL: the data is real,
 // just old, and the cluster may be mid-failover.
 func checkMirrorState(ctx context.Context, in NodeInput) Check {
+	// Role first, and before the store: a worker HAS a data.db (join creates it), so a
+	// store-based check answers "never synced" and warns about a mirror a worker will never
+	// have. Measured on 6-w after the first deploy: "no snapshot applied on this node yet —
+	// a follower mirrors within one poll", on a node where the poll loop never starts.
+	if strings.EqualFold(strings.TrimSpace(in.Role), "worker") {
+		return Check{
+			Name:   "cluster mirror",
+			Status: StatusSkip,
+			Detail: "this node is a worker: it holds no mirror by design. The leader's settings are mirrored on managers, and a worker is told what to run by its runner assignment",
+		}
+	}
 	if in.Store == nil {
 		return Check{
 			Name:   "cluster mirror",

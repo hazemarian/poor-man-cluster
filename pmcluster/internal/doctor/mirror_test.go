@@ -145,25 +145,39 @@ func TestRunNodeLocalWarnsWhenTheMirrorHasNeverSynced(t *testing.T) {
 	}
 }
 
-// TestRunNodeLocalWorkerHasNoMirror: a worker has no store, and the check says so. Opening
-// one there would seed an empty database whose answers look plausible.
+// TestRunNodeLocalWorkerHasNoMirror: a worker has no mirror BY DESIGN, and the check says
+// so.
+//
+// The store is passed deliberately, because a real worker HAS a data.db (join creates one):
+// the first deployed version checked the store first, found no sync_state row, and warned
+// "no snapshot applied on this node yet — a follower mirrors within one poll" on a node
+// whose poll loop never starts. A warning about something the node will never do is the
+// same defect as a warning that fires when nothing is wrong.
 func TestRunNodeLocalWorkerHasNoMirror(t *testing.T) {
-	in := NodeInput{
-		Hostname:   "nxt-sw-6-w",
-		ListenAddr: "127.0.0.1:9090",
-		VolumeRoot: t.TempDir(),
-		Role:       "worker",
-		Health:     func(context.Context, string) (int, error) { return 200, nil },
-	}
-	m, ok := find(RunNodeLocal(context.Background(), in), "cluster mirror")
-	if !ok {
-		t.Fatal("the worker report has no cluster mirror line")
-	}
-	if m.Status != StatusSkip {
-		t.Fatalf("worker mirror check = %+v, want SKIP", m)
-	}
-	if !strings.Contains(m.Detail, "worker") {
-		t.Errorf("the skip must say why: %s", m.Detail)
+	for name, store := range map[string]*store.Store{
+		"no store":   nil,
+		"with store": mirrorStore(t, 1_700_000_000),
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := NodeInput{
+				Hostname:   "nxt-sw-6-w",
+				ListenAddr: "127.0.0.1:9090",
+				VolumeRoot: t.TempDir(),
+				Role:       "worker",
+				Store:      store,
+				Health:     func(context.Context, string) (int, error) { return 200, nil },
+			}
+			m, ok := find(RunNodeLocal(context.Background(), in), "cluster mirror")
+			if !ok {
+				t.Fatal("the worker report has no cluster mirror line")
+			}
+			if m.Status != StatusSkip {
+				t.Fatalf("worker mirror check = %+v, want SKIP", m)
+			}
+			if !strings.Contains(m.Detail, "worker") || !strings.Contains(m.Detail, "by design") {
+				t.Errorf("the skip must say a worker has none by design: %s", m.Detail)
+			}
+		})
 	}
 }
 

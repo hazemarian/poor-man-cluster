@@ -95,9 +95,13 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 		// a node that was never initialised must keep saying so, and a worker simply has
 		// nothing here (the check reports that rather than opening an empty one).
 		var mirror *store.Store
-		if s, err := openExistingStore(cfg.DBPath()); err == nil {
-			mirror = s
-			defer func() { _ = s.Close() }()
+		// Managers only. A worker has a data.db too (join creates one), but no mirror and no
+		// poll loop, so opening it here would only let a check misread absence as staleness.
+		if self.IsManager {
+			if s, err := openExistingStore(cfg.DBPath()); err == nil {
+				mirror = s
+				defer func() { _ = s.Close() }()
+			}
 		}
 		rep := doctor.RunNodeLocal(cmd.Context(), doctor.NodeInput{
 			Hostname:   host,
