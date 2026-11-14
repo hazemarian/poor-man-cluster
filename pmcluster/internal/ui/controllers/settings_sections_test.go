@@ -529,3 +529,29 @@ func TestNodeDockerRestartIsAConsoleSwitch(t *testing.T) {
 		t.Errorf("default = %q, want false", got)
 	}
 }
+
+// TestControllers_DockerRestartSwitchRendersInAdvanced reads the page an operator
+// actually sees. The unit assertions above pin the key lists; this one catches the
+// template half, which is the half that was missing for a release.
+func TestControllers_DockerRestartSwitchRendersInAdvanced(t *testing.T) {
+	h := settingsPageAs(t, store.RoleAdmin)
+	rr := h.get(t, "/web/settings/cluster")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /web/settings/cluster = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `name="node_docker_restart"`) {
+		t.Fatal("the Advanced section renders no node_docker_restart input")
+	}
+	if !strings.Contains(body, "Restart docker automatically") {
+		t.Error("the switch has no label")
+	}
+	// The hint is the only place the operator is told what the cure costs, so it
+	// has to be on the page next to the switch.
+	if !strings.Contains(body, "three failed probes") {
+		t.Error("the switch renders without its consequence")
+	}
+	if !strings.Contains(body, `id="sect-advanced"`) {
+		t.Fatal("no advanced section")
+	}
+}
