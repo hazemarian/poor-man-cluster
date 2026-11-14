@@ -907,7 +907,22 @@ func TestRenderOTelCollectorConfigIsValidYAML(t *testing.T) {
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		t.Fatalf("rendered collector config is not valid YAML: %v", err)
 	}
-	for _, want := range []string{"otlphttp/parseable-logs", "otlphttp/parseable-metrics", "otlphttp/parseable-traces"} {
+	// The transform must guard EACH attribute with its own condition. Measured on
+	// 0.165.0: assigning a missing resource attribute (our daemons set service.name but
+	// not stack.name) makes the processor discard the datapoint silently, which is how
+	// every daemon metric disappeared while container metrics kept flowing.
+	for _, want := range []string{
+		`conditions:`,
+		`- 'resource.attributes["service.name"] != nil'`,
+		`- 'resource.attributes["stack.name"] != nil'`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("transform/metrics must guard service.name and stack.name separately: missing %q", want)
+		}
+	}
+
+	// otlp_http, not otlphttp: 0.165.0 deprecates the old alias with a warning.
+	for _, want := range []string{"otlp_http/parseable-logs", "otlp_http/parseable-metrics", "otlp_http/parseable-traces"} {
 		if _, ok := doc.Exporters[want]; !ok {
 			t.Errorf("rendered config is missing exporter %q", want)
 		}

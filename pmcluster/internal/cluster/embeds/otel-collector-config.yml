@@ -275,6 +275,12 @@ processors:
   # Parseable stores metric fields separately). Logs need no equivalent: the
   # filelog receiver sets these names on the resource itself, and an OTLP sender
   # already carries the service.name IT chose — this guard leaves those alone.
+  # ONE statement per attribute, each guarded by its OWN condition. This is not style:
+  # measured on 0.165.0, a statement that assigns a MISSING resource attribute to a
+  # datapoint attribute (our daemons set service.name but never stack.name) makes the
+  # processor DISCARD the datapoint — no error, no log, nothing in the exporter. The
+  # symptom was every daemon metric vanishing while container metrics flowed, because a
+  # container resource carries both attributes and the daemon resource only one.
   transform/metrics:
     metric_statements:
       - context: datapoint
@@ -282,6 +288,10 @@ processors:
           - 'resource.attributes["service.name"] != nil'
         statements:
           - set(attributes["service.name"], resource.attributes["service.name"])
+      - context: datapoint
+        conditions:
+          - 'resource.attributes["stack.name"] != nil'
+        statements:
           - set(attributes["stack.name"], resource.attributes["stack.name"])
 
   # ORDER MATTERS, and it is the whole reason a per-node view was broken.
@@ -320,7 +330,7 @@ exporters:
   # ever lands here.
   # retry_on_failure + sending_queue are bounded so a Parseable outage can
   # never make the collector grow without limit.
-  otlphttp/parseable-logs:
+  otlp_http/parseable-logs:
     logs_endpoint: "http://observability_parseable:8000/v1/logs"
     encoding: json
     timeout: 10s
@@ -338,7 +348,7 @@ exporters:
       X-P-Stream: "pmcluster-logs"
       X-P-Log-Source: "otel-logs"
 
-  otlphttp/parseable-metrics:
+  otlp_http/parseable-metrics:
     metrics_endpoint: "http://observability_parseable:8000/v1/metrics"
     encoding: json
     timeout: 10s
@@ -356,7 +366,7 @@ exporters:
       X-P-Stream: "pmcluster-metrics"
       X-P-Log-Source: "otel-metrics"
 
-  otlphttp/parseable-traces:
+  otlp_http/parseable-traces:
     traces_endpoint: "http://observability_parseable:8000/v1/traces"
     encoding: json
     timeout: 10s
@@ -383,11 +393,11 @@ service:
     logs:
       receivers:  [receiver_creator, otlp]
       processors: [memory_limiter, resourcedetection, filter/skip_filelog, batch]
-      exporters:  [otlphttp/parseable-logs]
+      exporters:  [otlp_http/parseable-logs]
     metrics:
       receivers:  [docker_stats, otlp]
       processors: [memory_limiter, resourcedetection, transform/metrics, batch]
-      exporters:  [otlphttp/parseable-metrics]
+      exporters:  [otlp_http/parseable-metrics]
     # Node metrics used to need a pipeline of their own: the daemon's samples were
     # written to a host-bound file that the leader's daemon tailed into SQLite. They now
     # travel node → leader over mTLS and the leader records them, so the pipeline is the
@@ -395,4 +405,4 @@ service:
     traces:
       receivers:  [otlp]
       processors: [memory_limiter, filter/drop_docker_api_spans, batch]
-      exporters:  [otlphttp/parseable-traces]
+      exporters:  [otlp_http/parseable-traces]
