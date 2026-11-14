@@ -175,8 +175,18 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// blocks in waitForSwarmLeadership below, so the loop starts here and
 		// touches the runtime client only, never the store.
 		startVolumeRepairLoop(cmd.Context(), dc, cluster.NewDockerCLIDeployer(os.Stderr), func() string {
-			s, _ := storageRoot.Load().(string)
-			return s
+			if s, _ := storageRoot.Load().(string); s != "" {
+				return s
+			}
+			// storageRoot is only published once the local store is open, which
+			// only the leader does — so on a follower this used to be "". An
+			// empty root makes every bind path fall outside the managed layout,
+			// which silently turned off the bind half of the repair exactly on
+			// the nodes that do not have a store to read the setting from.
+			if v := os.Getenv("PMCLUSTER_VOLUME_ROOT"); v != "" {
+				return v
+			}
+			return manifest.DefaultVolumeRoot
 		}, log)
 
 		// Publish this node's backup plan: the hourly agent archives directories,
