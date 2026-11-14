@@ -26,7 +26,7 @@ services:
     # (Docker Hub's last tag is v2.8.0, May 2026), and every release after it — the
     # ones that fix the query-side duplication where the same row is returned once
     # per overlapping staging file — exists only here.
-    image: quay.io/parseablehq/parseable:v2.9.5
+    image: quay.io/parseablehq/parseable:v3.2.6
     replicas: 1
     placement: "[[ if .ObservabilityNode ]][[.ObservabilityNode]][[ else if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
     # Published on the HOST, not the routing mesh: the port is bound only on the

@@ -590,7 +590,10 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 		default:
 			// No drift: the stored manifest still renders to the
 			// already-deployed hash AND the live swarm matches.
-			s.Log.Info().Str("stack", stackName).Int64("revision", latest.Revision).
+			// Debug, not Info: this fires once per stack per pass, and a pass over
+			// ~18 in-sync stacks every minute is 26k identical lines a day that say
+			// only "nothing changed". The pass line already reports that it ran.
+			s.Log.Debug().Str("stack", stackName).Int64("revision", latest.Revision).
 				Msg("sync — no drift, rendered hash unchanged (nothing to apply)")
 		}
 		telemetry.RecordReconcile(ctx, stackName, telemetry.ReconcileInSync)

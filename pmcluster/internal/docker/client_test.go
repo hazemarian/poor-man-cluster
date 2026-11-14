@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/api/types/events"
+
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
@@ -503,5 +505,26 @@ func TestFakeClient_ServiceOps(t *testing.T) {
 	}
 	if list, err := f.ServiceList(context.Background()); err != nil || len(list) != 1 || list[0].Stack != "demo" {
 		t.Errorf("ServiceList = %+v, %v", list, err)
+	}
+}
+
+// TestEventNoiseDropsHealthcheckExecs pins the filter that stopped the reconcile
+// loop from re-rendering every stack on every healthcheck probe: docker emits
+// exec_create/exec_start/exec_die for each probe, and each one armed a 2s debounce.
+// Real task lifecycle events must still wake the loop.
+func TestEventNoiseDropsHealthcheckExecs(t *testing.T) {
+	noise := []string{"exec_create: wget --spider", "exec_start: wget --spider", "exec_die", "exec_detach", "health_status: healthy", "health_status: unhealthy"}
+	for _, a := range noise {
+		if !isEventNoise(events.Message{Action: events.Action(a), Type: "container"}) {
+			t.Errorf("%q should be dropped: it cannot change what the pass converges", a)
+		}
+	}
+	for _, a := range []string{"die", "oom", "kill", "start", "stop", "update", "create", "remove"} {
+		if isEventNoise(events.Message{Action: events.Action(a), Type: "container"}) {
+			t.Errorf("%q is a real lifecycle event and must still wake the reconcile loop", a)
+		}
+	}
+	if isEventNoise(events.Message{Action: events.Action("update"), Type: "service"}) {
+		t.Error("a service update must wake the loop")
 	}
 }

@@ -1185,6 +1185,16 @@ func (r *realClient) Events(ctx context.Context, since time.Time) (<-chan runtim
 				if !ok {
 					return
 				}
+				// Healthchecks and execs are not changes to what anything
+				// converges to, and docker emits three events per healthcheck
+				// probe (exec_create, exec_start, exec_die) for every container
+				// that has one. Measured on the live cluster: without this drop,
+				// the leader ran a full reconcile pass — re-rendering 18 stacks
+				// — every ~3.1 s, and the same stream is what made the OTel
+				// collector rebuild a filelog receiver roughly once a second.
+				if isEventNoise(msg) {
+					continue
+				}
 				ev := eventFromMessage(msg)
 				select {
 				case evCh <- ev:
@@ -1219,6 +1229,21 @@ func (r *realClient) Events(ctx context.Context, since time.Time) (<-chan runtim
 	}()
 
 	return evCh, outErrs
+}
+
+// isEventNoise reports the events that cannot change what the reconcile pass
+// converges. A healthcheck is an exec inside a running container: it changes no
+// image, no config, no replica count, no health of the SWARM — only the
+// container's health field, which docker reports as `health_status: …`.
+//
+// Kept to the exact prefixes rather than "anything container-ish" so a real task
+// death (die, oom, kill) still wakes the loop.
+func isEventNoise(msg events.Message) bool {
+	a := string(msg.Action)
+	if strings.HasPrefix(a, "exec_") || strings.HasPrefix(a, "health_status") {
+		return true
+	}
+	return false
 }
 
 // isNotFoundString is a fallback for older daemons whose error doesn't
