@@ -208,7 +208,7 @@ services:
   # BELOW this cap so the limiter sheds load while the process still has room
   # instead of the cgroup OOM-killing it.
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.157.0
+    image: otel/opentelemetry-collector-contrib:0.165.0
     # One task on the leader. NOT global: see the block above for why, and for
     # why the leader is a hard constraint rather than a preference.
     replicas: 1

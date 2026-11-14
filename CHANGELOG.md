@@ -3,6 +3,22 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.327 — collector 0.165.0 (and what the churn actually was)
+
+The filelog receivers are rebuilt ~0.9 times a second, and each rebuild re-emits the tail it
+scans, so a busy line is stored dozens of times (54 for the daemon, 13 for a busy web app, 1
+for a quiet container). The trigger is not the log file: every container healthcheck is an
+`exec_create` / `exec_start` / `exec_die` event on the docker socket, `docker_observer`
+surfaces each one as a container change, and `receiver_creator` tears the receiver down and
+builds a new one. Measured: 3,240 receiver starts an hour, steady.
+
+- Collector `0.157.0` → `0.165.0`, validated against the rendered config before the bump
+  (`validate --config` exits 0). This release is a MEASUREMENT: if the churn survives the
+  upgrade it is a design problem in the observer/creator pair, not a version bug, and the
+  next decision is whether the filelog leg earns its keep at all.
+- Offsets are checkpointed (`v0.2.326`), so a recreation or a reschedule resumes instead of
+  re-reading — that is correct regardless of what the measurement says.
+
 ## v0.2.326 — one producer per series, and log receivers that resume
 
 Two collector-side defects, both measured on the live leader before they were changed.
