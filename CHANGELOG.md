@@ -3,6 +3,34 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.326 — one producer per series, and log receivers that resume
+
+Two collector-side defects, both measured on the live leader before they were changed.
+
+**The filelog receivers churned, and every line was stored dozens of times.** The docker
+observer re-announces a container and the creator tears down its filelog receiver and builds
+a new one; with `start_at: end` and no checkpoint, several instances created in the same
+second each tail the same file. Measured: **3,240 receiver starts an hour** (0.9/s, steady
+for 6 h) and a single daemon line stored **72 times** — the copy count tracked how many
+instances were alive when it was written (72 newest, 54 ten seconds earlier, 36 before
+that). The Logs view was dominated by `sync — no drift` repeated fifty-odd times per
+interval, and Parseable held ~60 copies of everything.
+
+- A `file_storage` extension now checkpoints offsets, on a volume
+  (`otel_file_storage:/var/lib/otelcol/file_storage`) so a rescheduled collector resumes
+  instead of re-tailing. A recreated receiver continues where the last one stopped.
+
+**The leader had two producers for the same three series.** `hostmetrics` scraped the
+leader's own `/proc` through `HOST_PROC`/`HOST_SYS`, while the leader's daemon published the
+same three names for the same host — one bucket averaging two producers.
+
+- `hostmetrics` is removed, with its `/proc` and `/sys` bind mounts and its `HOST_PROC`/
+  `HOST_SYS` env. Its scrapers were cpu, memory and load only: exactly the three series every
+  node's daemon now publishes for itself. Nothing enabled is lost, and the collector stops
+  re-collecting what a node already measured — one producer per series, on every node.
+- If a series is wanted later (network, disk, per-state CPU), the daemon is where it belongs:
+  it exists on every node, not only the leader.
+
 ## v0.2.325 — node resource metrics reach Parseable for every node
 
 The daemon sampled its node's `/proc` every 15 s and reported it to the leader, but the

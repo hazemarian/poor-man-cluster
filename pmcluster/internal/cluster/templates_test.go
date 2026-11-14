@@ -967,9 +967,13 @@ func TestRenderOTelCollectorConfig_PerContainerFilelog(t *testing.T) {
 		"docker_observer:",
 		"watch_observers: [docker_observer]",
 		"receivers:  [receiver_creator, otlp]",
-		"extensions: [health_check, docker_observer]",
+		"extensions: [health_check, docker_observer, file_storage]",
 		"/var/lib/docker/containers/`container_id`/*-json.log",
 		"start_at: end",
+		// Checkpoints, so a recreated receiver resumes instead of re-tailing: without
+		// them the observer's churn multiplies every line by the number of instances
+		// alive when it was written (measured: one line stored 72 times).
+		"storage: file_storage",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered config missing %q", want)

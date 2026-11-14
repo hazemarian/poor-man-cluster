@@ -17,6 +17,9 @@ networks:
 volumes:
   parseable_data: ""
   parseable_staging: ""
+  # Filelog checkpoints. On a volume rather than the writable layer so a rescheduled
+  # collector resumes each container's offset instead of re-tailing its file.
+  otel_file_storage: ""
 services:
   parseable:
     image: parseable/parseable:v2.8.0
@@ -221,10 +224,6 @@ services:
     restart: any
     restart_delay: 5s
     command: ["--config=/etc/otel-collector-config.yaml"]
-    env:
-      # gopsutil reads these to locate the HOST's proc/sys rather than its own.
-      HOST_PROC: "/hostfs/proc"
-      HOST_SYS: "/hostfs/sys"
     expose:
       port: 4318
       external: 4318
@@ -236,11 +235,11 @@ services:
       - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/etc/localtime:/etc/localtime:ro"
-      # Read-only host views for the hostmetrics receiver. A container's /proc is
-      # its own, so node CPU/memory would otherwise report the collector's cgroup
-      # rather than the node's. Read-only, and nothing is written back.
-      - "/proc:/hostfs/proc:ro"
-      - "/sys:/hostfs/sys:ro"
+      # The host's /proc and /sys are no longer mounted: they existed only for the
+      # hostmetrics receiver, which is gone. Node CPU/memory/load now come from each
+      # node's own daemon over OTLP — one producer everywhere, not one host's view.
+    volumes:
+      - "otel_file_storage:/var/lib/otelcol/file_storage"
     configs:
       - config_path(pmcluster_otel_config)
     resources:

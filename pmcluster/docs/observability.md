@@ -697,10 +697,14 @@ node_stats table ── ONE row per node, upserted in place
 console /web/overview ── hostname, role, load, memory, top processes, sample age
 ```
 
-- **The daemon samples, not the collector.** `hostmetrics` can only read its own
-  host, and the collector is now a single leader-pinned task. A node's own daemon
-  is the only process that can describe that node. It exports over the same
-  ingress-published OTLP port applications use; it never talks to Parseable.
+- **The daemon samples, not the collector.** The collector is a single leader-pinned task,
+  so a receiver inside it can only describe the leader — which is why `hostmetrics` is gone
+  rather than kept: each node's daemon samples its own `/proc` and publishes
+  `system.cpu.utilization{state=idle}`, `system.memory.utilization{state=used}` and
+  `system.cpu.load_average.1m` for itself, straight to the collector over the same OTLP port
+  applications use. One producer per node, on every node, and the collector never
+  re-collects what a node already measured about itself. The daemon never talks to
+  Parseable.
   **The leader exports too** — the file exporter is a sink, not a loop, so there
   is nothing for the leader to avoid by staying silent. A swarm that records the
   leader's own address as `0.0.0.0` is dialled on loopback, which is where the
@@ -766,10 +770,9 @@ pmcluster cluster status
 - "Error rate" is the share of error log records, not failed HTTP requests.
 - Traces from different applications are not joined into a distributed trace
   unless the applications propagate trace context.
-- `hostmetrics` covers CPU, memory and load for the node running the collector
-  (the leader). Disk and network are not part of this version.
-- Per-node CPU, memory and the top five processes come from each node's daemon
-  (see "Per-node resources"), not from `hostmetrics`; the top lists are capped at
-  five per axis by design.
+- Node CPU, memory and load come from each node's own daemon (see "Per-node resources");
+  there is no `hostmetrics` in the collector any more, so nothing is scraped from the
+  leader's host. Disk, network and per-state CPU are not part of this version.
+- The top five processes per node are capped at five per axis by design.
 - Historical rows written before a collector identity change may not carry the
   current `service.name`.

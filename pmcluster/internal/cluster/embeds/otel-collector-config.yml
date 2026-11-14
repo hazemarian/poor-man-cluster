@@ -23,6 +23,18 @@
 extensions:
   health_check:
 
+  # Offsets for the dynamic filelog receivers, on disk.
+  #
+  # The receiver_creator recreates a receiver whenever the docker observer re-announces a
+  # container, and without storage each new instance starts from `start_at: end` at ITS
+  # creation moment — so several instances created within the same second each tail the
+  # same file, and every line they all see is ingested once per instance. Measured on the
+  # live leader before this existed: one daemon line stored 72 times, and 3,240 receiver
+  # starts an hour. The extension is what makes a recreation resume instead of re-tail.
+  file_storage:
+    directory: /var/lib/otelcol/file_storage
+    timeout: 1s
+
   # Discovers every running container and its Swarm labels. The receiver_creator
   # below turns each one into a filelog receiver, which is the only way a log
   # record can learn which service produced it.
@@ -73,6 +85,10 @@ receivers:
           and (labels["com.docker.stack.namespace"] ?? "") != "sso"
           and (labels["com.docker.stack.namespace"] ?? "") != "edge"
         config:
+          # Checkpointed, so a recreated receiver resumes where the last one stopped
+          # instead of re-reading the tail. Without this the churn above multiplies every
+          # line by the number of instances that were alive when it was written.
+          storage: file_storage
           include:
             - /var/lib/docker/containers/`container_id`/*-json.log
           include_file_name: false
@@ -164,31 +180,21 @@ receivers:
             # failure here would ship a service's logs against its explicit wish.
             container.labels.io.pmcluster.skip_filelog: '`labels["io.pmcluster.skip_filelog"] ?? ""`'
 
-  # Node-level CPU and memory. docker_stats only ever sees CONTAINERS, so there
-  # was no way to answer "how loaded is this node" — the question that decides
-  # whether a node can take another workload.
+  # NO hostmetrics. It scraped this host's /proc and /sys through
+  # HOST_PROC/HOST_SYS, so it could only ever describe the node the collector
+  # runs on — the leader — and the platform's own daemon now publishes exactly
+  # the three series it produced (system.cpu.utilization{state=idle},
+  # system.memory.utilization{state=used}, system.cpu.load_average.1m) for
+  # EVERY node, because each daemon samples its own /proc and exports OTLP
+  # (internal/nodestat). Two producers for one series meant the leader's bucket
+  # averaged both, and the collector was re-collecting what a node had already
+  # measured about itself.
   #
-  # The service mounts the host's /proc and /sys read-only and points gopsutil at
-  # them (HOST_PROC/HOST_SYS in the stack), because a container's own /proc is
-  # not the host's. mode: global means every node scrapes itself, and the
-  # resourcedetection processor tags each series with that node's host.name — so
-  # "per node" grouping is honest rather than an aggregation of containers.
-  hostmetrics:
-    collection_interval: 30s
-    scrapers:
-      # The double-valued utilization series are what the console charts.
-      # Parseable does not map int64 datapoints (their rows arrive with an empty
-      # value), so system.cpu.utilization / system.memory.utilization are the
-      # only node percentages that can be plotted at all.
-      cpu:
-        metrics:
-          system.cpu.utilization:
-            enabled: true
-      memory:
-        metrics:
-          system.memory.utilization:
-            enabled: true
-      load:
+  # What is lost: nothing that is enabled. The scrapers above were cpu, memory
+  # and load only — the same three the daemon emits. What would be lost is the
+  # rest of hostmetrics (network, disk, filesystem, per-state CPU), and none of
+  # it was ever enabled; if a series is wanted later, the daemon is where it
+  # belongs, because it exists on every node instead of only the leader.
 
 processors:
   # memory_limiter is the guard that keeps a failing exporter from growing the
@@ -369,7 +375,7 @@ exporters:
       X-P-Log-Source: "otel-traces"
 
 service:
-  extensions: [health_check, docker_observer]
+  extensions: [health_check, docker_observer, file_storage]
   telemetry:
     logs:
       level: info
@@ -379,7 +385,7 @@ service:
       processors: [memory_limiter, resourcedetection, filter/skip_filelog, batch]
       exporters:  [otlphttp/parseable-logs]
     metrics:
-      receivers:  [docker_stats, hostmetrics, otlp]
+      receivers:  [docker_stats, otlp]
       processors: [memory_limiter, resourcedetection, transform/metrics, batch]
       exporters:  [otlphttp/parseable-metrics]
     # Node metrics used to need a pipeline of their own: the daemon's samples were
