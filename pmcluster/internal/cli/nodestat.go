@@ -77,21 +77,6 @@ func startNodeStatSampler(ctx context.Context, dc runtime.Client, log zerolog.Lo
 // a row in the Node resources panel.
 func nodeStatTick(ctx context.Context, dc runtime.Client, s *nodestat.Sampler, log zerolog.Logger) {
 	nodeStatTickWith(ctx, dc, s, log, nodeReportSender(dc))
-	smp, err := s.Collect(time.Now())
-	if err != nil {
-		// A partial /proc (a racing exit, a restricted mount) must not stop
-		// the loop: the next tick usually reads everything.
-		log.Warn().Err(err).Msg("node stat sample incomplete")
-	}
-	// The engine socket is the fourth tint rule: a node whose Docker does not
-	// answer cannot start or stop anything, however healthy its kernel looks.
-	if dc != nil {
-		if _, err := dc.Info(ctx); err != nil {
-			smp.DockerUp = 0
-		}
-	}
-	// No direct Publish: see above. A sample that cannot be delivered is simply logged
-	// (one debug line, next tick retries) rather than exported twice on the leader.
 }
 
 // localHostname prefers the swarm's name for this node over a short hostname:
@@ -160,9 +145,19 @@ func nodeStatTickWith(ctx context.Context, dc runtime.Client, s *nodestat.Sample
 			smp.DockerUp = 0
 		}
 	}
-	// EVERY node reports, the leader included, and the leader's report handler is the
-	// single place that emits metrics (it is the only node with a collector). Publishing
-	// here as well would double every point on the leader's own series.
+	// TWO independent legs from one sample, and they must not be confused:
+	//
+	//   - the REPORT (below) is state: it lands in the leader's node_stats and is what the
+	//     panel draws. It is stored, and stored only on the leader.
+	//   - the OTLP EXPORT (right here) is telemetry: the same sample goes straight to the
+	//     collector, which is a proxy in front of Parseable and stores nothing itself
+	//     beyond its batch. Each node exports its OWN point, so there is no store-and-
+	//     forward hop and nothing for the leader to republish.
+	//
+	// Publishing only on the leader — by relaying the received report — was the earlier
+	// shape: it made telemetry depend on the state transaction and put a database write
+	// between a node's number and the graph.
+	nodestat.Publish(ctx, smp)
 	if sender != nil {
 		body, merr := json.Marshal(smp)
 		if merr != nil {
@@ -171,6 +166,4 @@ func nodeStatTickWith(ctx context.Context, dc runtime.Client, s *nodestat.Sample
 			log.Debug().Err(perr).Msg("node report: not delivered to the leader")
 		}
 	}
-	// No direct Publish: see above. A sample that cannot be delivered is simply logged
-	// (one debug line, next tick retries) rather than exported twice on the leader.
 }

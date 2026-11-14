@@ -117,16 +117,17 @@ func writeProcTree(t *testing.T) string {
 	return root
 }
 
-// TestNodeStatTickReportsAndDoesNotPublish: the tick's job is to SEND, not to export.
+// TestNodeStatTickReportsAndExports: one sample, two independent legs.
 //
-// The leader is the only node with a collector, so the collector's copy of a worker's
-// numbers can only arrive through the report handler. Publishing in the tick as well
-// would double every point on the leader's own series — and publishing on a worker is a
-// no-op that looks like success while nothing reaches the pipeline.
+//   - the REPORT is state: one POST to the leader, stored in node_stats, which is what the
+//     panel draws.
+//   - the EXPORT is telemetry: the node publishes its own point straight to the collector,
+//     which proxies it to Parseable and stores nothing.
 //
-// This pins both halves: one POST with this node's sample, and zero metrics recorded
-// locally by the sampler.
-func TestNodeStatTickReportsAndDoesNotPublish(t *testing.T) {
+// They are deliberately not the same leg. Exporting only by relaying the received report
+// (the earlier shape) put a database write between a node's number and its graph, and made
+// telemetry depend on a state transaction succeeding.
+func TestNodeStatTickReportsAndExports(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	prev := otel.GetMeterProvider()
@@ -155,8 +156,17 @@ func TestNodeStatTickReportsAndDoesNotPublish(t *testing.T) {
 	if err := reader.Collect(ctx, &rm); err != nil {
 		t.Fatalf("collect: %v", err)
 	}
-	if load, _ := findGauge(rm, nodestat.MetricLoad1); load {
-		t.Fatal("the sampler published metrics directly: the report handler is the only emitter, or the leader's series doubles")
+	// The telemetry leg: this node exports its OWN sample, named for this node, with no
+	// storage in between.
+	found, host := findGauge(rm, nodestat.MetricSystemLoad1m)
+	if !found {
+		t.Fatal("the tick did not export the node's sample: nothing would reach the collector")
+	}
+	if host != "self" {
+		t.Fatalf("exported under host.name=%q, want this node", host)
+	}
+	if ok, _ := findGauge(rm, nodestat.MetricLoad1); !ok {
+		t.Fatal("the platform's own pmcluster.node series stopped being exported")
 	}
 }
 

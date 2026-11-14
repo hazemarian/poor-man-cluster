@@ -223,8 +223,11 @@ nobody reads, which is worse than silence.
 
 ### A node with no row in Node resources
 
-The console's node panel is fed by each node's **own** daemon over OTLP, through the
-the leader over swarm mTLS, into the `node_stats` table. A node missing from
+The console's node panel is fed by each node's **own** daemon: the sample travels to
+the leader over swarm mTLS and lands in `node_stats`, and the leader also relays the same
+sample into the metrics pipeline as `system.cpu.utilization`, `system.memory.utilization` and
+`system.cpu.load_average.1m` — so the numbers are queryable in Parseable for every node, not
+just the one running the collector. A node missing from
 the table is therefore a telemetry question, not a swarm one — and it is the
 question this section exists to answer, because the panel looked broken while four
 daemons had simply given up.

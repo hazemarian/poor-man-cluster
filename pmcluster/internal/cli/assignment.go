@@ -15,7 +15,6 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth/swarmtls"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/clustersnapshot"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodereport"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodestat"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/server"
@@ -180,12 +179,9 @@ func startAssignmentListener(ctx context.Context, o assignmentListenerOptions) {
 	mux.Handle(nodereport.Path, verifier.Middleware(&nodereport.Service{
 		Store: o.Store,
 		Log:   log.With().Str("component", "node-report").Logger(),
-		// The collector runs on THIS node, so the leader is the only one that can put a
-		// report into the metrics pipeline. Every node's points carry its own name
-		// (host.name + pmcluster.node.name), so one dashboard can separate four machines.
-		Relay: func(ctx context.Context, smp nodestat.Sample) {
-			nodestat.Publish(ctx, smp)
-		},
+		// State only. The sample's telemetry half was already exported by the node that
+		// took it, straight to the collector, so nothing here republishes it: this handler
+		// writes the current value the panel reads and stops there.
 	}))
 	// The cluster snapshot: the read half of the pull-based replication that replaces
 	// writing settings into docker configs (pmcluster/docs/adr/0003-cluster-state-by-pull.md).

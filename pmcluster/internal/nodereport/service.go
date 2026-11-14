@@ -12,7 +12,6 @@
 package nodereport
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -41,12 +40,6 @@ type Service struct {
 	Log   zerolog.Logger
 	// Now is the clock (tests).
 	Now func() time.Time
-	// Relay forwards the sample to this leader's own OTel collector, after the row is
-	// stored. It is the leader's job because the collector runs beside it: a worker has
-	// no collector to send to, and the port is published on the leader only.
-	//
-	// Optional so a test can assert the store without a collector.
-	Relay func(ctx context.Context, smp nodestat.Sample)
 }
 
 type reportResponse struct {
@@ -106,11 +99,11 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "store: " + err.Error()})
 		return
 	}
-	// Metrics history is the collector's job; the row above is the current value. Both
-	// come from one report, so a panel and a graph can never disagree about a node.
-	if s.Relay != nil {
-		s.Relay(r.Context(), smp)
-	}
+	// No relay to the collector here. Each node's daemon exports its own sample straight
+	// to the collector (internal/cli/nodestat.go) — the collector is a proxy in front of
+	// Parseable, not a second store — so this handler does exactly one thing: the current
+	// value in node_stats. Republishing the received report would have put a database
+	// write between a node's number and its graph, and doubled every series.
 	writeJSON(w, http.StatusOK, reportResponse{Node: node, Stored: true, Ignored: ignored})
 }
 

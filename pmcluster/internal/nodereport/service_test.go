@@ -12,7 +12,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth/swarmtls"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodestat"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -72,21 +71,23 @@ func TestReportStoresTheRowAndTheCertificateNamesIt(t *testing.T) {
 	}
 }
 
-// TestReportRelaysWhatTheCertificateSays: the leader is the only node with a collector, so
-// it re-emits every report into the metrics pipeline. What it must never do is relay the
-// hostname from the body — that would put one machine's points on another's series, which
-// is a dashboard that lies in a way nobody can see.
-func TestReportRelaysWhatTheCertificateSays(t *testing.T) {
-	svc := &Service{Store: newStore(t), Log: zerolog.Nop()}
-	var relayed []string
-	svc.Relay = func(_ context.Context, smp nodestat.Sample) { relayed = append(relayed, smp.Hostname) }
+// TestReportStoresUnderTheCertificatesNode: the report is STATE, and the only thing this
+// handler does with it is one row per node. The telemetry half was already exported by the
+// node that took the sample, straight to the collector, so nothing here republishes it —
+// and the hostname in the body is never trusted over the certificate, or one machine's
+// numbers would land on another's series.
+func TestReportStoresUnderTheCertificatesNode(t *testing.T) {
+	st := newStore(t)
+	svc := &Service{Store: st, Log: zerolog.Nop()}
 
 	post(t, svc, "nxt-sw-6-w", `{"hostname":"nxt-sw-1-m","mem_total_mb":3852}`)
-	if len(relayed) != 1 {
-		t.Fatalf("relayed %d samples, want 1", len(relayed))
+
+	rows, err := st.ListNodeStats(context.Background())
+	if err != nil {
+		t.Fatalf("list: %v", err)
 	}
-	if relayed[0] != "nxt-sw-6-w" {
-		t.Fatalf("relayed under %q, want the certificate's node nxt-sw-6-w", relayed[0])
+	if len(rows) != 1 || rows[0].Hostname != "nxt-sw-6-w" {
+		t.Fatalf("rows = %+v, want one row under the certificate's node", rows)
 	}
 }
 

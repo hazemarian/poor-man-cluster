@@ -3,6 +3,74 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.325 — node resource metrics reach Parseable for every node
+
+The daemon sampled its node's `/proc` every 15 s and reported it to the leader, but the
+sample stopped at `node_stats`: the three numbers existed for the Node resources panel and
+nowhere else. The collector could not fill the gap either — `hostmetrics`, `docker_stats` and
+`filelog` all read *the leader's* host (`/hostfs/proc`, its own Docker socket, its own
+container log paths), so the metrics view held exactly one hostname while four nodes were
+being sampled.
+
+- `nodestat.Publish` now emits the node's own resource metrics under the **collector's**
+  names — `system.cpu.utilization{state=idle}`, `system.memory.utilization{state=used}`,
+  `system.cpu.load_average.1m` — which is the vocabulary `observability metrics nodes` and
+  the freshness query already read. Nothing in the reader changed.
+- CPU utilization is a delta: `/proc/stat` holds counters since boot, so the first sample
+  after a restart knows nothing and publishes no cpu point rather than a 0 that would read
+  as a saturated node. A counter that goes backwards is treated the same way.
+- **The node exports its own point; the leader proxies, it does not store.** The publish
+  happens in the daemon's own tick, next to the report, so telemetry never passes through
+  the leader's database: the collector receives it, batches it, and forwards it to
+  Parseable. The leader's report handler now does exactly one thing — the `node_stats` row —
+  and no longer republishes what it receives. Relaying was the earlier shape, and it put a
+  database write between a node's number and its graph.
+- Every point names its node on the datapoint as well as the resource, so four machines do
+  not collapse into one when they meet in the same pipeline.
+- Consequence, and the point of it: `observability status` reads 4/4 and the nodes view
+  shows every node, while `node_stats` and the journal report stay exactly as they were.
+
+## v0.2.324 — every node exports to the one collector
+
+Self-telemetry was leader-only: `otlp_endpoint: auto` resolved to loopback on the leader and
+to **disabled** everywhere else. Four daemons of five exported nothing — their samples
+reached the leader over mTLS and stopped in `node_stats` — which is why the console showed
+one node in a five-node cluster and `pmcluster observability status` said `1/4 reporting`
+while a day of Parseable metrics contained exactly one hostname.
+
+- `auto` now means "the one collector, wherever it is": loopback on the leader, and on every
+  other node the manager address that **answers** on `4318` — the same first-answer-wins
+  discovery the mTLS assignment channel already uses, because a worker cannot be told which
+  manager leads. A manager cannot be asked either without a second election to keep in
+  sync; a dial is the election.
+- A follower never dials a port nobody answered on: no answer means disabled *and* a reason,
+  re-probed every minute. The bounded error handler from the 2026-11-08 storm still stands
+  between a wrong endpoint and a journal, but the cheapest fix is not pointing at a closed
+  port in the first place.
+- Leadership moves the collector, and the next probe re-points the exporter at the new
+  leader without a restart.
+- `node_stats` and the journal are untouched: node state stays where the leader reads it and
+  nothing new is pushed into Parseable.
+
+## v0.2.322 — the mirror's age is about contact, not about change
+
+**A defect the first deployment exposed, four minutes after it started.** v0.2.321 aged a
+follower's mirror from `applied_at`, and `applied_at` only moves when the 200 changes rows.
+The steady state of a healthy cluster is a **304 on every poll**, so within four minutes a
+follower that had just been told "you are current" reported
+`applied 3m40s ago — STALE: nothing applied for over 3m0s`. A warning that fires when
+nothing is wrong is the one kind this platform must not ship.
+
+- **`sync_state.checked_at`** (migration `0032`) records the last successful answer — 200
+  **or** 304 — and the age is computed from it. `applied_at` keeps its own meaning: when
+  the rows were written, which is provenance and normally older.
+- A 304 now records a confirmation (`Store.ConfirmMirrorSync`); the label reads
+  `confirmed 20s ago · rows last written 40m ago`, and the second clause appears only when
+  it says something the first one does not.
+- `doctor` warns **STALE** only when the leader has stopped *answering*, and says so in
+  those words.
+
+
 ## v0.2.320 — the watchdog finishes its own action
 
 **Why:** v0.2.319 made the daemon survive a dead dockerd and keep its policy armed, and
@@ -81,46 +149,6 @@ themselves — the daemon restart-looped to `failed` on the control-plane restor
 rewrote its own policy as `false` so the watchdog did nothing on the next attempt. With
 the heal in v0.2.320 the full chain was then measured live on the same node — see that
 entry — so these three changes are verified end-to-end, not only by unit tests.
-
-## v0.2.324 — every node exports to the one collector
-
-Self-telemetry was leader-only: `otlp_endpoint: auto` resolved to loopback on the leader and
-to **disabled** everywhere else. Four daemons of five exported nothing — their samples
-reached the leader over mTLS and stopped in `node_stats` — which is why the console showed
-one node in a five-node cluster and `pmcluster observability status` said `1/4 reporting`
-while a day of Parseable metrics contained exactly one hostname.
-
-- `auto` now means "the one collector, wherever it is": loopback on the leader, and on every
-  other node the manager address that **answers** on `4318` — the same first-answer-wins
-  discovery the mTLS assignment channel already uses, because a worker cannot be told which
-  manager leads. A manager cannot be asked either without a second election to keep in
-  sync; a dial is the election.
-- A follower never dials a port nobody answered on: no answer means disabled *and* a reason,
-  re-probed every minute. The bounded error handler from the 2026-11-08 storm still stands
-  between a wrong endpoint and a journal, but the cheapest fix is not pointing at a closed
-  port in the first place.
-- Leadership moves the collector, and the next probe re-points the exporter at the new
-  leader without a restart.
-- `node_stats` and the journal are untouched: node state stays where the leader reads it and
-  nothing new is pushed into Parseable.
-
-## v0.2.322 — the mirror's age is about contact, not about change
-
-**A defect the first deployment exposed, four minutes after it started.** v0.2.321 aged a
-follower's mirror from `applied_at`, and `applied_at` only moves when the 200 changes rows.
-The steady state of a healthy cluster is a **304 on every poll**, so within four minutes a
-follower that had just been told "you are current" reported
-`applied 3m40s ago — STALE: nothing applied for over 3m0s`. A warning that fires when
-nothing is wrong is the one kind this platform must not ship.
-
-- **`sync_state.checked_at`** (migration `0032`) records the last successful answer — 200
-  **or** 304 — and the age is computed from it. `applied_at` keeps its own meaning: when
-  the rows were written, which is provenance and normally older.
-- A 304 now records a confirmation (`Store.ConfirmMirrorSync`); the label reads
-  `confirmed 20s ago · rows last written 40m ago`, and the second clause appears only when
-  it says something the first one does not.
-- `doctor` warns **STALE** only when the leader has stopped *answering*, and says so in
-  those words.
 
 ## Unreleased — a follower answers, with an age (step 3 of 5)
 

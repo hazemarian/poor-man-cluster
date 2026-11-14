@@ -26,6 +26,19 @@ const (
 
 	MetricProcessRSS = "pmcluster.process.rss_mb"
 	MetricProcessCPU = "pmcluster.process.cpu_pct"
+
+	// The three node gauges go out under the COLLECTOR'S hostmetrics names, not ours.
+	// They are the same quantities the collector's hostmetrics receiver publishes for the
+	// node it runs on, and they are the ONLY names `pmcluster observability metrics nodes`
+	// and the freshness query read (internal/observability/explore.go). A daemon-only name
+	// would land in Parseable and be invisible to every view built before it.
+	//
+	// state is part of the identity, exactly as hostmetrics reports it: cpu utilization is
+	// published as the IDLE share, memory as the USED share. Without the attribute a row
+	// is a number with no meaning.
+	MetricSystemCPUUtilization = "system.cpu.utilization"
+	MetricSystemMemUtilization = "system.memory.utilization"
+	MetricSystemLoad1m         = "system.cpu.load_average.1m"
 )
 
 // MetricPrefix is what the collector's filter matches to keep node-stats
@@ -72,6 +85,18 @@ func Publish(ctx context.Context, s Sample) {
 		}
 		g.Record(ctx, v, base)
 	}
+	gaugeState := func(name, desc, state string, v float64) {
+		g, err := m.Float64Gauge(name, metric.WithDescription(desc))
+		if err != nil {
+			return
+		}
+		g.Record(ctx, v, metric.WithAttributes(
+			attribute.String("host.name", s.Hostname),
+			attribute.String("pmcluster.node.name", s.Hostname),
+			attribute.String("node.role", s.Role),
+			attribute.String("state", state),
+		))
+	}
 	gauge(MetricLoad1, "1-minute load average of this node.", s.Load1)
 	gauge(MetricLoad5, "5-minute load average of this node.", s.Load5)
 	gauge(MetricLoad15, "15-minute load average of this node.", s.Load15)
@@ -80,6 +105,21 @@ func Publish(ctx context.Context, s Sample) {
 	gauge(MetricMemAvailMB, "RAM available on this node (MemAvailable), MiB; the question 'will it swap'.", float64(s.MemAvailMB))
 	gauge(MetricCores, "Logical CPUs on this node; the denominator of the load tint rule.", float64(s.Cores))
 	gauge(MetricDockerUp, "1 when this node's Docker engine socket answers, 0 otherwise.", float64(s.DockerUp))
+
+	// The node's own resource metrics, in the vocabulary every existing view already
+	// queries. Skipped rather than faked when the reading is unknown: a utilization
+	// published as 0 because the delta was unavailable reads as a saturated node.
+	if s.CPUIdleKnown {
+		gaugeState(MetricSystemCPUUtilization,
+			"Fraction of CPU time this node spent idle over the sample interval; the complement is utilization.",
+			"idle", s.CPUIdleFrac)
+	}
+	if s.MemTotalMB > 0 {
+		gaugeState(MetricSystemMemUtilization,
+			"Fraction of this node's RAM in use (used / total).",
+			"used", float64(s.MemUsedMB)/float64(s.MemTotalMB))
+	}
+	gauge(MetricSystemLoad1m, "1-minute load average of this node.", s.Load1)
 
 	// Per-process series. Cardinality is bounded at the source: only the two
 	// top lists are exported (at most 2xTopN points per node per interval), so
