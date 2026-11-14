@@ -220,18 +220,15 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// false, and the watchdog then sat through three failed probes doing nothing).
 		// On a worker the assignment carries the leader's answer — runners.Agent
 		// writes it, and that write is allowed to overwrite this file.
-		if _, statErr := os.Stat(cfg.DBPath()); statErr == nil {
-			if st, err := store.Open(cfg.DBPath()); err == nil {
-				if armed, known := cluster.LoadNodeDockerRestartKnown(cmd.Context(), st); known {
-					if werr := runners.WriteNodePolicy(cfg.DataDir, runners.NodePolicy{DockerRestart: armed}); werr != nil {
-						log.Warn().Err(werr).Msg("could not write the node policy; the watchdog keeps its previous setting")
-					}
-				} else {
-					log.Info().Msg("node policy left alone: this store holds no node_docker_restart decision (the leader's answer arrives with the runner assignment)")
-				}
-				_ = st.Close()
-			}
-		}
+		// Written once here AND then kept current by nodePolicyLoop below: this
+		// one call happens at startup, and the node that OWNS the setting has no
+		// runner agent to push a new assignment at it. Measured on the leader
+		// (2026-11-14): `settings set node_docker_restart=true` reached a follower
+		// within 50s through its agent while the leader's own policy still said
+		// false, because its only write had been at boot — the armed state landed
+		// everywhere except the node that decided it.
+		applyNodePolicyOnce(cmd.Context(), cfg, log)
+		go nodePolicyLoop(cmd.Context(), cfg, log)
 		go convergeSystemd(func(f string, a ...any) { log.Info().Msgf(f, a...) }, sock, cfg.DataDir)
 
 		// The console's storage toggle sets INTENT; provisioning is local work (loop
@@ -944,6 +941,58 @@ func runRunnerLoop(ctx context.Context, mgr *runners.Manager, st *store.Store, l
 			return
 		case <-t.C:
 			tick()
+		}
+	}
+}
+
+// nodePolicyInterval is how often a node re-reads the watchdog decision. A
+// minute matches the watchdog timer: a setting turned on is armed before the
+// second probe that could act on it.
+const nodePolicyInterval = time.Minute
+
+// applyNodePolicyOnce writes this node's watchdog policy from its store when the
+// store holds the decision, and reports whether the file changed. A store that
+// cannot answer (a worker's, which has no leader-owned settings, or a follower
+// that has not mirrored the row) is left alone: writing the default there is
+// what once disarmed a node's docker watchdog during the very outage it existed
+// for.
+func applyNodePolicyOnce(ctx context.Context, cfg *config.Config, log zerolog.Logger) bool {
+	if _, statErr := os.Stat(cfg.DBPath()); statErr != nil {
+		return false
+	}
+	st, err := store.Open(cfg.DBPath())
+	if err != nil {
+		return false
+	}
+	defer func() { _ = st.Close() }()
+	armed, known := cluster.LoadNodeDockerRestartKnown(ctx, st)
+	if !known {
+		return false
+	}
+	want := runners.NodePolicy{DockerRestart: armed}
+	if current := runners.ReadNodePolicy(cfg.DataDir); current == want {
+		return false
+	}
+	if werr := runners.WriteNodePolicy(cfg.DataDir, want); werr != nil {
+		log.Warn().Err(werr).Msg("could not write the node policy; the watchdog keeps its previous setting")
+		return false
+	}
+	log.Info().Bool("docker_restart", armed).
+		Msg("node policy applied — the watchdog's docker restart follows the cluster setting")
+	return true
+}
+
+// nodePolicyLoop keeps the policy current for the life of the daemon, so a
+// setting change reaches a running node without waiting for its next restart.
+func nodePolicyLoop(ctx context.Context, cfg *config.Config, log zerolog.Logger) {
+	tick := time.NewTicker(nodePolicyInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			applyNodePolicyOnce(ctx, cfg, log)
 		}
 	}
 }
