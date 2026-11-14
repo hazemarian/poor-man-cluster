@@ -2,14 +2,18 @@ package cli
 
 // Self-telemetry that recovers on its own.
 //
-// The endpoint is this node's own swarm address, and it is only usable once the
-// collector is answering on it. That was decided ONCE at startup: a node that
-// booted while the collector was being rescheduled disabled its exporter
-// permanently, and nothing re-checked — measured on a live worker, whose journal
+// The endpoint is only usable once the collector answers on it, and that was decided ONCE
+// at startup: a node that booted while the collector was being rescheduled disabled its
+// exporter permanently, and nothing re-checked — measured on a live worker, whose journal
 // still said "self-telemetry disabled: nothing answers at http://10.7.224.10:4318
-// (connection refused)" six hours after the same port had started answering 200.
-// The console then showed ONE node in a five-node cluster, which reads as a
-// broken panel rather than as four daemons that opted out at boot.
+// (connection refused)" six hours after the same port had started answering 200. The
+// console then showed ONE node in a five-node cluster, which reads as a broken panel
+// rather than as four daemons that opted out at boot.
+//
+// The same re-check is what makes a FOLLOWER's endpoint work at all: the collector lives
+// on the leader and moves with leadership, so a node's endpoint is a property of the
+// cluster's state at this minute, not of its boot. Every probe re-resolves it, and a change
+// restarts the exporter against the new address.
 //
 // Same correction as control-plane adoption (startup-only → also on leadership
 // gain) and registry credentials (one-shot login → per deploy): a decision taken
@@ -68,25 +72,35 @@ func newTelemetrySupervisor(log zerolog.Logger, node string, onFirstEndpoint fun
 
 // Loop re-probes until ctx ends. It never blocks the caller: serve starts it in
 // a goroutine and a failed probe is a log line, not a startup failure.
-func (s *telemetrySupervisor) Loop(ctx context.Context, configured string, isLeader func(context.Context) bool) {
+//
+// leaderEndpoint is asked only on a non-leader, and only after that node has found a
+// manager with a collector answering on it; nil means "this node has no way to find one",
+// which resolves to the disabled reason rather than to a blind dial.
+func (s *telemetrySupervisor) Loop(ctx context.Context, configured string, isLeader func(context.Context) bool, leaderEndpoint func(context.Context) string) {
 	t := time.NewTicker(s.interval)
 	defer t.Stop()
-	s.probe(ctx, configured, isLeader)
+	s.probe(ctx, configured, isLeader, leaderEndpoint)
 	for {
 		select {
 		case <-ctx.Done():
 			s.stop(context.Background())
 			return
 		case <-t.C:
-			s.probe(ctx, configured, isLeader)
+			s.probe(ctx, configured, isLeader, leaderEndpoint)
 		}
 	}
 }
 
 // probe resolves the endpoint once and reconciles the exporter with it.
-func (s *telemetrySupervisor) probe(ctx context.Context, configured string, isLeader func(context.Context) bool) {
+func (s *telemetrySupervisor) probe(ctx context.Context, configured string, isLeader func(context.Context) bool, leaderEndpoint func(context.Context) string) {
 	leader := isLeader != nil && isLeader(ctx)
-	endpoint, reason := resolveTelemetryEndpoint(configured, leader)
+	// Only a non-leader asks: on the leader the answer is loopback by definition, and
+	// dialling three manager addresses to be told so would cost a probe every minute.
+	follower := ""
+	if !leader && leaderEndpoint != nil {
+		follower = leaderEndpoint(ctx)
+	}
+	endpoint, reason := resolveTelemetryEndpoint(configured, leader, follower)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

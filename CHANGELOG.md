@@ -82,6 +82,28 @@ rewrote its own policy as `false` so the watchdog did nothing on the next attemp
 the heal in v0.2.320 the full chain was then measured live on the same node — see that
 entry — so these three changes are verified end-to-end, not only by unit tests.
 
+## v0.2.324 — every node exports to the one collector
+
+Self-telemetry was leader-only: `otlp_endpoint: auto` resolved to loopback on the leader and
+to **disabled** everywhere else. Four daemons of five exported nothing — their samples
+reached the leader over mTLS and stopped in `node_stats` — which is why the console showed
+one node in a five-node cluster and `pmcluster observability status` said `1/4 reporting`
+while a day of Parseable metrics contained exactly one hostname.
+
+- `auto` now means "the one collector, wherever it is": loopback on the leader, and on every
+  other node the manager address that **answers** on `4318` — the same first-answer-wins
+  discovery the mTLS assignment channel already uses, because a worker cannot be told which
+  manager leads. A manager cannot be asked either without a second election to keep in
+  sync; a dial is the election.
+- A follower never dials a port nobody answered on: no answer means disabled *and* a reason,
+  re-probed every minute. The bounded error handler from the 2026-11-08 storm still stands
+  between a wrong endpoint and a journal, but the cheapest fix is not pointing at a closed
+  port in the first place.
+- Leadership moves the collector, and the next probe re-points the exporter at the new
+  leader without a restart.
+- `node_stats` and the journal are untouched: node state stays where the leader reads it and
+  nothing new is pushed into Parseable.
+
 ## v0.2.322 — the mirror's age is about contact, not about change
 
 **A defect the first deployment exposed, four minutes after it started.** v0.2.321 aged a

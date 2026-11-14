@@ -109,9 +109,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// Started here (docker client in hand) and still well before the leadership
 	// wait, so a standby manager and a worker both keep reporting.
 	// The sampler starts HERE, not from the telemetry supervisor's first-endpoint hook:
-	// after the collector became leader-only, a worker has no local endpoint to wait for,
-	// and gating the sampler on one is how four nodes vanished from the panel. Its OTLP
-	// half is a no-op without an exporter; its report half needs no collector at all.
+	// gating it on an exporter is how four nodes vanished from the panel when the exporter
+	// was leader-only, and its report half (node → leader over mTLS) needs no collector at
+	// all. Its OTLP half is a no-op until the probe finds one.
 	go func() {
 		if dc != nil {
 			startNodeStatSampler(cmd.Context(), dc, log)
@@ -122,6 +122,17 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	go telemetryCtl.Loop(cmd.Context(), cfg.OTLPEndpoint, func(ctx context.Context) bool {
 		leader, _, err := isSwarmLeader(ctx, dc, hostname)
 		return err == nil && leader
+	}, func(ctx context.Context) string {
+		// A follower answers where the leader is, and it finds it the way the mTLS
+		// channel does: every manager address, the first that answers on the collector
+		// port wins. Re-probed every minute, so a leadership change re-points the
+		// exporter without a restart.
+		if dc == nil {
+			return ""
+		}
+		return collectorEndpointFor(ctx, func(c context.Context) ([]string, error) {
+			return managerHosts(c, dc)
+		}, dialCollector)
 	})
 	defer telemetryCtl.stop(context.Background())
 	// worker decides which runner path this node takes: a swarm WORKER cannot read

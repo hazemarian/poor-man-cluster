@@ -7,51 +7,53 @@ import "strings"
 // still means "disabled".
 const OTLPAutoEndpoint = "auto"
 
-// OTLPPort is the collector's OTLP/HTTP receiver port, published by the observability
-// stack with `mode: host` — it exists on the node running the collector, which is the
-// leader, and nowhere else (internal/cluster/embeds/observability-stack.yml).
+// OTLPPort is the collector's OTLP/HTTP receiver port. There is ONE collector, on the
+// leader, published with `mode: host` (internal/cluster/embeds/observability-stack.yml),
+// so the port exists on the leader and nowhere else.
 const OTLPPort = 4318
 
-// loopbackAddress is where the leader's daemon reaches its own collector.
+// loopbackAddress is where the leader's daemon reaches the collector running beside it.
 const loopbackAddress = "127.0.0.1"
 
 // ResolveOTLPEndpoint turns the configured otlp_endpoint value into the base URL this
 // daemon's exporters dial.
 //
 //   - ""               → disabled: the operator turned it off.
-//   - "auto" (default) → loopback on the LEADER, disabled everywhere else.
+//   - "auto" (default) → the collector, wherever it is: loopback on the leader, the
+//     leader's own address on every other node.
 //   - anything else    → used verbatim: an explicit endpoint is the operator's decision.
 //
-// The rule is one line of topology. The collector follows the leader by name and its port
-// is published there only, so exactly one daemon has a collector beside it. That daemon
-// dials loopback; every other daemon has nothing to dial and says so once, because it
-// reports its numbers to the leader over swarm mTLS instead of exporting them itself.
+// Every node exports its own logs, metrics and traces, and they all land in the one
+// collector the platform runs. The difference between nodes is only WHERE that collector
+// is: beside the leader, so the leader dials loopback and everyone else dials the leader.
 //
-// This replaced a per-node answer found by dialling the node's own swarm address. That
-// machinery existed because the port was ingress-published — bound on every node — so
-// "does anything answer here" was a real question. It is now a property of the role, and
-// a dial can only ever rediscover what the code already knows. Worse, on a worker the
-// probe succeeded in finding nothing and logged it as a FAULT once a minute, which reads
-// as a broken node rather than as the design.
+// This replaced "loopback on the leader, DISABLED everywhere else". Disabled was not a
+// neutral choice: it meant four daemons of five exported nothing, the node reports that
+// carried their numbers landed in the leader's SQLite and stopped there, and the console
+// showed one node in a five-node cluster with no way to tell "quiet" from "not collected".
+// The telemetry never had to stop at the leader — it had to reach the collector, and the
+// collector is reachable from every node over the swarm data path.
 //
-// The history is worth keeping, because it explains why loopback needed care. Pointing
-// every daemon at 127.0.0.1 was once catastrophic: on 2026-11-08 nxt-sw-4-m (1 vCPU)
-// wrote 261,617 journal lines from a single boot. Unbounded OTel export errors against a
-// closed port starved journald, Docker's heartbeat slipped, the swarm marked the node
-// Down and leadership moved. What made loopback unsafe was never loopback itself — it was
-// every node dialling it. Only the leader does now, and the SDK's error handler is bounded
-// (internal/telemetry/failures.go), so a dead collector costs one line instead of a node.
-func ResolveOTLPEndpoint(configured string, isLeader bool) (endpoint, disabledReason string) {
+// leaderEndpoint is only consulted on a non-leader, and is expected to be the empty string
+// unless something has ALREADY answered on the collector port (the caller dials the swarm
+// manager addresses first). That ordering is deliberate: pointing an exporter at a port
+// nobody listens on is what saturated nxt-sw-4-m's journal with 261,617 lines from a single
+// boot on 2026-11-08, and the SDK's bounded error handler is a safety net, not a licence to
+// dial blind.
+func ResolveOTLPEndpoint(configured string, isLeader bool, leaderEndpoint string) (endpoint, disabledReason string) {
 	switch v := strings.TrimSpace(configured); {
 	case v == "":
 		return "", ""
 	case !strings.EqualFold(v, OTLPAutoEndpoint):
 		return v, ""
 	}
-	if !isLeader {
-		return "", "this node runs no collector (it follows the leader): reporting to the leader over mTLS instead of exporting here"
+	if isLeader {
+		return "http://" + loopbackAddress + ":" + portString(OTLPPort), ""
 	}
-	return "http://" + loopbackAddress + ":" + portString(OTLPPort), ""
+	if e := strings.TrimSpace(leaderEndpoint); e != "" {
+		return e, ""
+	}
+	return "", "no manager is answering the collector's OTLP port yet (the collector runs on the leader); re-probed every minute"
 }
 
 // portString formats the OTLP port without pulling strconv into a file this small.

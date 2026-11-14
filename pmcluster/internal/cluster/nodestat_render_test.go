@@ -90,22 +90,26 @@ func TestOTelCollectorIsSingleTaskPinnedToTheLeader(t *testing.T) {
 	}
 }
 
-// TestNodeStatOTLPEndpointIsTheLeadersLoopback is the daemon half of the same
-// contract. The collector follows the leader and publishes 4318 there only, so exactly
-// one daemon exports — to loopback, beside the collector. Every other node reports to the
-// leader over mTLS and exports nothing; a probe that reported that as a failure is what
-// this replaced.
-func TestNodeStatOTLPEndpointIsTheLeadersLoopback(t *testing.T) {
-	endpoint, reason := config.ResolveOTLPEndpoint(config.OTLPAutoEndpoint, true)
+// TestNodeStatOTLPEndpointFollowsTheCollector is the daemon half of the same contract.
+// The collector follows the leader and publishes 4318 there only, so there is exactly one
+// collector and every daemon in the cluster exports to it: the leader beside it on
+// loopback, every other node to the leader's address. What a follower must never do is
+// dial an address nobody has answered on — that is the 2026-11-08 journal storm — so with
+// no answer it stays disabled and says it is being re-probed.
+func TestNodeStatOTLPEndpointFollowsTheCollector(t *testing.T) {
+	endpoint, reason := config.ResolveOTLPEndpoint(config.OTLPAutoEndpoint, true, "")
 	if reason != "" {
 		t.Fatalf("the leader's endpoint was disabled: %s", reason)
 	}
 	if endpoint != "http://127.0.0.1:4318" {
 		t.Fatalf("endpoint = %q, want the collector beside the leader at http://127.0.0.1:4318", endpoint)
 	}
-	// A worker exports nothing, and says why without calling it a fault.
-	ep, why := config.ResolveOTLPEndpoint(config.OTLPAutoEndpoint, false)
-	if ep != "" || why == "" {
-		t.Fatalf("worker endpoint = (%q, %q), want none with a reason", ep, why)
+	// A follower exports to the leader's collector, not to nothing.
+	if ep, why := config.ResolveOTLPEndpoint(config.OTLPAutoEndpoint, false, "http://10.7.224.11:4318"); ep != "http://10.7.224.11:4318" || why != "" {
+		t.Fatalf("follower endpoint = (%q, %q), want the leader's collector", ep, why)
+	}
+	// Before anything has answered on that port, it stays disabled WITH a reason.
+	if ep, why := config.ResolveOTLPEndpoint(config.OTLPAutoEndpoint, false, ""); ep != "" || why == "" {
+		t.Fatalf("follower endpoint = (%q, %q), want none with a reason", ep, why)
 	}
 }

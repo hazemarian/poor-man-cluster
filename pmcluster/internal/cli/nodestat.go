@@ -47,7 +47,7 @@ const (
 //
 // It is started on EVERY node (not just the leader): the whole point is that each node
 // describes itself. It no longer waits for a collector endpoint — after the collector
-// became leader-only, a worker has nothing local to export to, and waiting for one is
+// lives on the leader, a worker exports to it remotely once the probe finds it, and waiting for one is
 // exactly how four nodes went missing from the panel. The sample is POSTed to the leader
 // on the swarm mTLS channel instead; the OTLP publish is still attempted and is a no-op
 // where there is no exporter.

@@ -240,7 +240,7 @@ completely replaceable by the three manual commands above.
 | 7946 | TCP/UDP | Node-to-node gossip | other swarm nodes only |
 | 4789 | UDP | Overlay networks (VXLAN) | other swarm nodes only |
 | 8333 | TCP | in-cluster SeaweedFS backup store — its S3 API is **published on the routing mesh** (`ingress`), so docker-proxy listens on 8333 on *every* node | cluster nodes only — restrict it (see below); it serves the failover restore and the store-transit mover via `127.0.0.1:8333` / `host.docker.internal:8333` |
-| 4318 | TCP | OTel collector OTLP/HTTP (published `mode: host` — bound on the **leader only**, the node that runs the collector) | the leader's own daemon, and nothing else; nodes report their own telemetry to the leader over swarm mTLS instead |
+| 4318 | TCP | OTel collector OTLP/HTTP (published `mode: host` — bound on the **leader only**, the node that runs the collector) | every node's daemon (the leader on loopback, the rest at the leader's swarm address) and any app that sends OTLP; node→leader mTLS carries the `node_stats` report, not this port |
 
 Options A/B: open 2377/7946/4789 **only to the specific peer node IPs**.
 Option D: leave them closed to the public — the tailnet carries them (but see

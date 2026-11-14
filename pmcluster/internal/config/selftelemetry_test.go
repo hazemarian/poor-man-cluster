@@ -5,32 +5,38 @@ import (
 	"testing"
 )
 
-// TestResolveOTLPEndpointIsARoleNotAMeasurement pins the rule that replaced a live dial.
+// TestResolveOTLPEndpointFollowsTheCollector pins the rule: every node exports, and the
+// only difference between nodes is where the one collector is.
 //
-// The collector follows the leader and its port is published there only, so exactly one
-// daemon has one beside it. A probe could only ever rediscover that, and on every worker
-// it turned "you have no collector, by design" into a connection-refused warning once a
-// minute — a fault message for the intended state.
-func TestResolveOTLPEndpointIsARoleNotAMeasurement(t *testing.T) {
+// The previous rule disabled the exporter everywhere but the leader, which is how four
+// daemons of five came to export nothing and the console showed a single node with no way
+// to tell "quiet" from "not collected".
+func TestResolveOTLPEndpointFollowsTheCollector(t *testing.T) {
 	// Explicit endpoints are the operator's decision, on any node.
-	if ep, _ := ResolveOTLPEndpoint("http://collector.example:4318", false); ep != "http://collector.example:4318" {
-		t.Fatalf("explicit endpoint on a worker = %q, want it used verbatim", ep)
+	if ep, _ := ResolveOTLPEndpoint("http://collector.example:4318", false, "http://10.7.224.11:4318"); ep != "http://collector.example:4318" {
+		t.Fatalf("explicit endpoint on a follower = %q, want it used verbatim, overriding the leader", ep)
 	}
 	// Disabled stays disabled.
-	if ep, reason := ResolveOTLPEndpoint("", true); ep != "" || reason != "" {
+	if ep, reason := ResolveOTLPEndpoint("", true, ""); ep != "" || reason != "" {
 		t.Fatalf("empty endpoint = (%q, %q), want disabled with no reason", ep, reason)
 	}
-	// auto: loopback on the leader.
-	ep, reason := ResolveOTLPEndpoint(OTLPAutoEndpoint, true)
+	// auto on the leader: loopback, and the leader endpoint is not even consulted.
+	ep, reason := ResolveOTLPEndpoint(OTLPAutoEndpoint, true, "http://10.7.224.12:4318")
 	if ep != "http://127.0.0.1:4318" || reason != "" {
 		t.Fatalf("leader auto = (%q, %q), want loopback with no reason", ep, reason)
 	}
-	// auto everywhere else: no endpoint, and a reason that states the design.
-	ep, reason = ResolveOTLPEndpoint(OTLPAutoEndpoint, false)
-	if ep != "" {
-		t.Fatalf("worker auto = %q, want no endpoint (it reports to the leader instead)", ep)
+	// auto on a follower that found the collector: the leader's address.
+	ep, reason = ResolveOTLPEndpoint(OTLPAutoEndpoint, false, "http://10.7.224.11:4318")
+	if ep != "http://10.7.224.11:4318" || reason != "" {
+		t.Fatalf("follower auto = (%q, %q), want the leader's collector", ep, reason)
 	}
-	if !strings.Contains(reason, "reports") && !strings.Contains(reason, "reporting") {
-		t.Fatalf("worker reason = %q, want it to say the node reports to the leader", reason)
+	// auto on a follower that has not found one: no endpoint, and a reason that says why
+	// and that it is retried — never a blind dial.
+	ep, reason = ResolveOTLPEndpoint(OTLPAutoEndpoint, false, "")
+	if ep != "" {
+		t.Fatalf("follower auto with no collector found = %q, want disabled until a probe answers", ep)
+	}
+	if !strings.Contains(reason, "re-probed") {
+		t.Fatalf("follower reason = %q, want it to say the probe repeats", reason)
 	}
 }

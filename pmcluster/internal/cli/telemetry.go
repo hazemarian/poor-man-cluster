@@ -17,9 +17,12 @@ import (
 // Returns a shutdown func that MUST be deferred by the caller so batched spans
 // flush before the process exits.
 //
-// The endpoint is resolved exactly like the daemon's: this node's swarm address,
-// dial-checked (config.ResolveOTLPEndpoint). A CLI run off-cluster — an
-// operator's laptop, a CI runner — has no swarm address, so it exports nothing.
+// The endpoint is resolved like the daemon's (config.ResolveOTLPEndpoint) with one
+// deliberate difference: a one-shot command does not go looking for the collector. Finding
+// it means asking the swarm which manager answers on the collector port, which costs a
+// docker round-trip and a dial per invocation, and the spans worth having are the daemon's,
+// which run for hours. A CLI run therefore exports only when an operator sets an explicit
+// otlp_endpoint — and off-cluster (a laptop, a CI runner) it exports nothing at all.
 // That is the point: the command must work everywhere, and "no collector" must
 // cost nothing rather than pointing an exporter at 127.0.0.1 and paying one
 // stderr line per failed export (the CLI children were part of the 2026-11-08
@@ -34,10 +37,9 @@ func initCLITelemetry() func() {
 		return func() {}
 	}
 
-	// A one-shot command has no role to resolve: the collector belongs to the daemon,
-	// and only the leader's daemon sits beside one. "false" means this process does not
-	// export — an explicit endpoint still overrides it, which is the operator's call.
-	endpoint, _ := config.ResolveOTLPEndpoint(cfg.OTLPEndpoint, false)
+	// No role, and no leader endpoint: "auto" resolves to disabled for a one-shot command.
+	// An explicit endpoint still overrides it, which is the operator's call.
+	endpoint, _ := config.ResolveOTLPEndpoint(cfg.OTLPEndpoint, false, "")
 
 	shutdown, err := telemetry.Init(context.Background(), telemetry.Options{
 		Endpoint:       endpoint,

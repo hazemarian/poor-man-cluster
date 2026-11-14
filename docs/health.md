@@ -230,8 +230,9 @@ question this section exists to answer, because the panel looked broken while fo
 daemons had simply given up.
 
 **The endpoint is supervised, not decided at boot.** `pmcluster serve` resolves
-self-telemetry (`otlp_endpoint: auto` → this node's swarm address, dial-checked)
-every **minute** and reconciles the exporter with the answer:
+self-telemetry (`otlp_endpoint: auto` → loopback on the leader; on any other node the
+manager address that answers on the collector's port, i.e. the leader) every **minute**
+and reconciles the exporter with the answer:
 
 | The probe says | What the daemon does |
 |---|---|
