@@ -527,4 +527,14 @@ func TestEventNoiseDropsHealthcheckExecs(t *testing.T) {
 	if isEventNoise(events.Message{Action: events.Action("update"), Type: "service"}) {
 		t.Error("a service update must wake the loop")
 	}
+	// Swarm node-refresh events are the other half of the storm (11 in 8s on a
+	// four-node cluster); the pass reads node state itself.
+	if !isEventNoise(events.Message{Action: events.Action("update"), Type: "node"}) {
+		t.Error("a swarm node refresh must not wake the loop")
+	}
+	for _, a := range []string{"remove", "create"} {
+		if isEventNoise(events.Message{Action: events.Action(a), Type: "node"}) {
+			t.Errorf("node %q changes membership and must wake the loop", a)
+		}
+	}
 }

@@ -1243,6 +1243,14 @@ func isEventNoise(msg events.Message) bool {
 	if strings.HasPrefix(a, "exec_") || strings.HasPrefix(a, "health_status") {
 		return true
 	}
+	// Swarm refreshes every node's record continuously (measured: 11 `node update`
+	// events in 8 seconds on a four-node cluster), and that is the rest of what kept
+	// a pass running every ~3s. The pass lists and inspects the nodes itself, so a
+	// node update carries nothing it would not read anyway; a node that genuinely
+	// goes Down is picked up by the safety-net tick within a minute.
+	if msg.Type == "node" && a == "update" {
+		return true
+	}
 	return false
 }
 
