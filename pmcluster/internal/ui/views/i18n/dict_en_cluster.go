@@ -134,6 +134,8 @@ func init() {
 		"clustersettings.sso_cookie_expire":              "Session lifetime",
 		"clustersettings.sso_cookie_expire_hint":         "How long one sign-in lasts, for example 24h or 720h.",
 		"clustersettings.sect_edge":                      "Edge and built-in login",
+		"clustersettings.node_docker_restart":            "Restart docker automatically when it stops answering",
+		"clustersettings.node_docker_restart_hint":       "Each node's watchdog restarts docker.service after three failed probes in a row, at most once every ten minutes. This stops every container on that node \u2014 including a running CI job \u2014 until docker is back. Off by default, because the cure is drastic and a node that is merely busy is not a node that is stuck.",
 		"clustersettings.edge_login_disabled":            "Disable the built-in login at the edge",
 		"clustersettings.edge_login_disabled_hint":       "When on, the edge stops serving its own login page. Make sure SSO or another door works first.",
 		"clustersettings.traefik_admin_user":             "Traefik admin user",

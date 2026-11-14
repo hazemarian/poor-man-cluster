@@ -481,6 +481,10 @@ var clusterSettingKeys = []string{
 	"sso_github_repos",
 	"sso_cookie_expire",
 	"edge_login_disabled",
+	// Armed by the node watchdog, not by the daemon: the switch lives here
+	// because it is a cluster-wide decision, and each node's policy file is what
+	// makes it act.
+	"node_docker_restart",
 	"domain",
 	"observability_admin_email",
 	"traefik_admin_user",
@@ -506,6 +510,7 @@ var clusterBoolSettings = map[string]bool{
 	"backup_enabled":               true,
 	"sso_enabled":                  true,
 	"edge_login_disabled":          true,
+	"node_docker_restart":          true,
 	"github_runners_enabled":       true,
 	"github_runner_allow_managers": true,
 }
@@ -534,7 +539,7 @@ func clusterSectionOf(key string) string {
 		return "runners"
 	case strings.HasPrefix(key, "backup_"):
 		return "backups"
-	case key == "volume_root", key == "log_level", key == "observability_admin_email":
+	case key == "volume_root", key == "log_level", key == "observability_admin_email", key == "node_docker_restart":
 		return "advanced"
 	default:
 		// sso_*, domain, edge_login_disabled, traefik_admin_user
@@ -549,6 +554,10 @@ func clusterSettingDefault(key string) string {
 	switch key {
 	case "backup_enabled", "github_runner_socket_proxy":
 		return "true"
+	case "node_docker_restart":
+		// The daemon means false when the row is absent, so an empty form value
+		// must not read as "changed" on every save.
+		return "false"
 	}
 	return ""
 }
@@ -565,7 +574,15 @@ func changedClusterSections(before, after map[string]string) []string {
 		if !ok {
 			old = clusterSettingDefault(k)
 		}
-		if old != after[k] {
+		// Same rule on the way out: a flag the form did not carry is at its
+		// default, which is what the daemon means by an absent row. Without this
+		// a newly added defaulted flag reads as changed on every save, and a
+		// confirmation that always names a section is noise.
+		now, ok := after[k]
+		if !ok {
+			now = clusterSettingDefault(k)
+		}
+		if old != now {
 			changed[clusterSectionOf(k)] = true
 		}
 	}

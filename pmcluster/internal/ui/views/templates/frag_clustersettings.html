@@ -275,6 +275,15 @@
         </div>
       </div>
 
+      {{/* Moved out of the CLI: the switch is a cluster decision, and the node
+           policy file is what makes each node's watchdog act on it. Placed last
+           in the section because it is the only one that stops workloads. */}}
+      <label class="check mt-16">
+        <input type="checkbox" name="node_docker_restart" value="true"{{if eq (index .Settings "node_docker_restart") "true"}} checked{{end}}>
+        <span>{{T "clustersettings.node_docker_restart"}}</span>
+      </label>
+      <span class="hint">{{T "clustersettings.node_docker_restart_hint"}}</span>
+
       <div class="subhead">
         <h3>{{T "settings.cluster_configs"}}</h3>
         <p class="sub">{{T "settings.configs_moved"}} {{T "settings.secrets_moved"}}</p>

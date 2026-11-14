@@ -152,6 +152,8 @@ func init() {
 		"clustersettings.sso_cookie_expire":              "مدة الجلسة",
 		"clustersettings.sso_cookie_expire_hint":         "كم يدوم تسجيل الدخول الواحد، مثل 24 ساعة أو 720 ساعة.",
 		"clustersettings.sect_edge":                      "الحافة والدخول المدمج",
+		"clustersettings.node_docker_restart":            "إعادة تشغيل docker تلقائيًا عندما يتوقف عن الاستجابة",
+		"clustersettings.node_docker_restart_hint":       "يعيد مراقب كل عقدة تشغيل docker.service بعد ثلاث محاولات فاشلة متتالية، وبحدّ أقصى مرة كل عشر دقائق. هذا يوقف كل حاويات تلك العقدة — بما فيها مهمة CI جارية — حتى يعود docker. معطّل افتراضيًا، لأن العلاج قاسٍ والعقدة المشغولة ليست عقدة متوقفة.",
 		"clustersettings.edge_login_disabled":            "تعطيل الدخول المدمج في الحافة",
 		"clustersettings.edge_login_disabled_hint":       "عند التشغيل، تكفّ الحافة عن تقديم صفحة الدخول الخاصة بها. تأكد أولًا أن الدخول الموحّد أو بابًا آخر يعمل.",
 		"clustersettings.traefik_admin_user":             "مستخدم مشرف Traefik",
