@@ -20,7 +20,12 @@ type repairDocker struct {
 	services []runtime.Service
 	mounts   map[string][]runtime.Mount
 	volumes  map[string]runtime.Volume
+	tasks    map[string][]runtime.ServiceTask
 	listErr  error
+}
+
+func (r repairDocker) ServiceTasks(_ context.Context, id string) ([]runtime.ServiceTask, error) {
+	return r.tasks[id], nil
 }
 
 func (r repairDocker) ServiceList(context.Context) ([]runtime.Service, error) {
@@ -80,7 +85,7 @@ func TestRepairLocalVolumeDirs_CreatesAndForces(t *testing.T) {
 		},
 	}
 	forcer := &repairForcer{}
-	created, updated, err := repairLocalVolumeDirs(context.Background(), dc, forcer, root, zerolog.Nop())
+	created, updated, _, err := repairLocalVolumeDirs(context.Background(), dc, forcer, root, nil, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("repair: %v", err)
 	}
@@ -114,7 +119,7 @@ func TestRepairLocalVolumeDirs_ExistingDirIsNoop(t *testing.T) {
 		mounts:   map[string][]runtime.Mount{"s1": {{Type: "bind", Source: source, Target: "/data"}}},
 	}
 	forcer := &repairForcer{}
-	created, updated, err := repairLocalVolumeDirs(context.Background(), dc, forcer, root, zerolog.Nop())
+	created, updated, _, err := repairLocalVolumeDirs(context.Background(), dc, forcer, root, nil, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("repair: %v", err)
 	}
@@ -125,7 +130,7 @@ func TestRepairLocalVolumeDirs_ExistingDirIsNoop(t *testing.T) {
 
 func TestRepairLocalVolumeDirs_WorkerIsSilent(t *testing.T) {
 	dc := repairDocker{listErr: errors.New("docker service ls: This node is not a swarm manager. Worker nodes can't be used to view or modify cluster state")}
-	created, updated, err := repairLocalVolumeDirs(context.Background(), dc, &repairForcer{}, "/var/stack/data", zerolog.Nop())
+	created, updated, _, err := repairLocalVolumeDirs(context.Background(), dc, &repairForcer{}, "/var/stack/data", nil, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("a worker must not report an error: %v", err)
 	}
@@ -142,7 +147,7 @@ func TestRepairLocalVolumeDirs_EmptyRootIsNoop(t *testing.T) {
 		mounts:   map[string][]runtime.Mount{"s1": {{Type: "bind", Source: source, Target: "/data"}}},
 	}
 	forcer := &repairForcer{}
-	created, updated, err := repairLocalVolumeDirs(context.Background(), dc, forcer, "", zerolog.Nop())
+	created, updated, _, err := repairLocalVolumeDirs(context.Background(), dc, forcer, "", nil, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("repair: %v", err)
 	}
@@ -197,5 +202,137 @@ func TestLocalVolumeRoot(t *testing.T) {
 	}
 	if got := localVolumeRoot(ctx, st); got != "/srv/stack/data" {
 		t.Fatalf("configured setting = %q, want /srv/stack/data", got)
+	}
+}
+
+// fakeUserResolver answers image users from a map and counts how often it was
+// asked, so the cache can be tested without a daemon.
+type fakeUserResolver struct {
+	users map[string][2]int
+	calls int
+}
+
+func (f *fakeUserResolver) ImageUserIDs(ctx context.Context, ref string) (int, int, bool, error) {
+	f.calls++
+	if u, ok := f.users[ref]; ok {
+		return u[0], u[1], true, nil
+	}
+	return 0, 0, false, nil
+}
+
+func TestRepairStateCachesImageOwner(t *testing.T) {
+	res := &fakeUserResolver{users: map[string][2]int{"img:1": {10001, 10001}}}
+	st := newRepairState()
+	for i := 0; i < 5; i++ {
+		uid, gid, ok := st.owner(context.Background(), res, "img:1")
+		if !ok || uid != 10001 || gid != 10001 {
+			t.Fatalf("owner = %d:%d ok=%v", uid, gid, ok)
+		}
+	}
+	if res.calls != 1 {
+		t.Errorf("resolved %d times, want 1 — a 30s loop must not create a container per pass", res.calls)
+	}
+	// Unresolvable images are cached too (as not-ok), or every pass would retry.
+	st.owner(context.Background(), res, "img:missing")
+	st.owner(context.Background(), res, "img:missing")
+	if res.calls != 2 {
+		t.Errorf("calls = %d, want 2 (one per image, cached)", res.calls)
+	}
+}
+
+func TestEnforceOwnershipLeavesRootImagesAlone(t *testing.T) {
+	dir := t.TempDir()
+	st := newRepairState()
+	// An empty map means "runs as root or unknown": nothing to repair.
+	changed, err := enforceOwnership(context.Background(), &fakeUserResolver{}, st, "img:root", dir)
+	if err != nil || changed != 0 {
+		t.Fatalf("changed=%d err=%v, want 0/nil", changed, err)
+	}
+}
+
+// TestEnforceOwnershipTakesOverForeignDirectory is the 4-m case: the tree is
+// owned by someone else (root, after an adoption copy) and the image runs as a
+// different user. Needs root to hand the directory to a foreign uid.
+func TestEnforceOwnershipTakesOverForeignDirectory(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to create a directory owned by another uid")
+	}
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "nested")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "app.db"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	const foreign = 10001
+	for _, p := range []string{dir, sub, filepath.Join(sub, "app.db")} {
+		if err := os.Chown(p, foreign, foreign); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st := newRepairState()
+	res := &fakeUserResolver{users: map[string][2]int{"img:app": {int(os.Getuid()), int(os.Getgid())}}}
+	changed, err := enforceOwnership(context.Background(), res, st, "img:app", dir)
+	if err != nil {
+		t.Fatalf("enforce: %v", err)
+	}
+	if changed < 3 {
+		t.Errorf("changed %d entries, want the directory, the nested dir and the file", changed)
+	}
+	for _, p := range []string{dir, sub, filepath.Join(sub, "app.db")} {
+		uid, _, oerr := pathOwner(p)
+		if oerr != nil || uid != os.Getuid() {
+			t.Errorf("%s still owned by %d (err=%v)", p, uid, oerr)
+		}
+	}
+}
+
+// TestRepairLocalVolumeDirs_RefusesToRecreateVanishedData is the guard against
+// the silent-empty-start: a node that has run the service before has lost the
+// data, and recreating the directory would boot the app on an empty database
+// with nothing in the logs to say so.
+func TestRepairLocalVolumeDirs_RefusesToRecreateVanishedData(t *testing.T) {
+	host, _ := os.Hostname()
+	root := t.TempDir()
+	missing := filepath.Join(root, "shop", "db_data")
+	dc := repairDocker{
+		services: []runtime.Service{{ID: "s1", Name: "shop_db", Node: host}},
+		mounts:   map[string][]runtime.Mount{"s1": {{Type: "bind", Source: missing, Target: "/data"}}},
+		tasks:    map[string][]runtime.ServiceTask{"s1": {{TaskID: "t1", State: "shutdown"}}},
+	}
+	forcer := &repairForcer{}
+	created, updated, _, err := repairLocalVolumeDirs(context.Background(), dc, forcer, root, nil, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	if created != 0 || updated != 0 {
+		t.Fatalf("created=%d updated=%d, want 0/0 — the task must fail rather than the app boot empty", created, updated)
+	}
+	if _, statErr := os.Stat(missing); statErr == nil {
+		t.Fatal("the directory was recreated")
+	}
+}
+
+// A first-ever deployment has no task history: the volume repair is what makes
+// its directory exist, so the guard must not block it.
+func TestRepairLocalVolumeDirs_CreatesForANewService(t *testing.T) {
+	host, _ := os.Hostname()
+	root := t.TempDir()
+	fresh := filepath.Join(root, "newapp", "data")
+	dc := repairDocker{
+		services: []runtime.Service{{ID: "s9", Name: "newapp_web", Node: host}},
+		mounts:   map[string][]runtime.Mount{"s9": {{Type: "bind", Source: fresh, Target: "/data"}}},
+		tasks:    map[string][]runtime.ServiceTask{"s9": {{TaskID: "t9", State: "rejected", Error: "no such file or directory"}}},
+	}
+	created, _, _, err := repairLocalVolumeDirs(context.Background(), dc, &repairForcer{}, root, nil, zerolog.Nop())
+	if err != nil {
+		t.Fatalf("repair: %v", err)
+	}
+	if created != 1 {
+		t.Fatalf("created=%d, want 1", created)
+	}
+	if _, statErr := os.Stat(fresh); statErr != nil {
+		t.Fatal("directory not created for a service that has never run")
 	}
 }

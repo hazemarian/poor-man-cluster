@@ -115,6 +115,16 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 			// This machine's RAM, so the runner's cap is checked against the node
 			// that would have to survive it. Unknown (0) skips the check.
 			MemTotalMiB: hostMemTotalMiB(),
+			// The app-data ownership check needs to know which services run here
+			// and what user their images declare. A runtime that cannot be opened
+			// is not an error: the check skips with a line saying so.
+			Runtime: func() runtime.Client {
+				c, err := docker.New()
+				if err != nil {
+					return nil
+				}
+				return c
+			}(),
 		})
 		printReport(cmd, rep)
 		if !rep.OK {

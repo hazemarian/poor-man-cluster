@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/clustersnapshot"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -65,6 +68,10 @@ type NodeInput struct {
 	Role string
 	// Now is the clock (tests). It also ages the mirror.
 	Now time.Time
+	// Runtime is this node's container runtime, used only by the app-data
+	// ownership check: which services run here, and which user their images
+	// declare. Nil skips that check rather than guessing.
+	Runtime runtime.Client
 }
 
 // RunNodeLocal produces the worker's report: four measurements it can make, the
@@ -80,6 +87,7 @@ func RunNodeLocal(ctx context.Context, in NodeInput) *Report {
 	add(checkLocalRunnerMemory(in))
 	add(checkRunnerCaches(ctx, in))
 	add(checkDisk(Input{VolumeRoot: in.VolumeRoot}))
+	add(checkAppDataOwnership(ctx, in))
 	add(checkSwarmNodeLocal(ctx, in))
 	add(checkMirrorState(ctx, in))
 	add(Check{
@@ -359,4 +367,123 @@ func checkRunnerCaches(ctx context.Context, in NodeInput) Check {
 	}
 	return Check{"runner caches", StatusOK,
 		strings.Join(parts, " · ") + " · total " + runners.HumanBytes(runners.TotalCacheBytes(usage))}
+}
+
+// imageUserResolver is the optional capability a runtime client can offer:
+// "what uid does this image run as". The doctor only uses it to decide whether a
+// directory owned by root is a problem, so a backend that cannot answer skips.
+type imageUserResolver interface {
+	ImageUserIDs(ctx context.Context, ref string) (uid, gid int, ok bool, err error)
+}
+
+// checkAppDataOwnership answers "can the app that owns this data still write it?".
+//
+// The failure it exists for is quiet and expensive: adoption copies the volume
+// root as root and a restore writes into it as root, so a stack whose image runs
+// as a non-root user ends up unable to create its own database lock. The app
+// exits, swarm restarts it every few seconds, and each restart rebuilds the
+// task's network sandbox — which is how a permission error turns into a node at
+// load 15 with nothing obviously wrong on it.
+func checkAppDataOwnership(ctx context.Context, in NodeInput) Check {
+	const name = "app-data ownership"
+	if in.Runtime == nil {
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "no container runtime handle in this report, so app-data directories were not inspected"}
+	}
+	resolver, _ := in.Runtime.(imageUserResolver)
+	if resolver == nil {
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "this runtime cannot resolve image users, so app-data ownership was not inspected"}
+	}
+	svcs, err := in.Runtime.ServiceList(ctx)
+	if err != nil {
+		if strings.Contains(err.Error(), "not a swarm manager") {
+			return Check{Name: name, Status: StatusSkip,
+				Detail: "a worker cannot list services; app-data ownership is checked on the manager that owns the stack"}
+		}
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "could not list services (" + err.Error() + "), so app-data ownership was not inspected"}
+	}
+	var bad []string
+	checked := 0
+	for _, svc := range svcs {
+		if svc.Node == "" || svc.Node != in.Hostname {
+			continue
+		}
+		ins, ierr := in.Runtime.ServiceInspect(ctx, svc.ID)
+		if ierr != nil {
+			continue
+		}
+		uid, _, known, rerr := resolver.ImageUserIDs(ctx, ins.Image)
+		if rerr != nil {
+			continue
+		}
+		if !known || uid == 0 {
+			continue // the image runs as root: root-owned data is fine
+		}
+		for _, m := range ins.Mounts {
+			path := appDataPath(ctx, in.Runtime, in.VolumeRoot, m)
+			if path == "" {
+				continue
+			}
+			checked++
+			owner, _, oerr := dirOwner(path)
+			if oerr != nil || owner != 0 {
+				continue // missing or already handed over
+			}
+			bad = append(bad, fmt.Sprintf("%s (%s, image user uid %d)", path, svc.Name, uid))
+		}
+	}
+	switch {
+	case len(bad) > 0:
+		return Check{Name: name, Status: StatusFail,
+			Detail: "root-owned app data for a non-root image — the app cannot write it: " +
+				strings.Join(bad, "; ") + ". The daemon's volume repair hands these back within 30s; a directory that keeps returning means the write is happening as root again (a restore, or an adoption copy)"}
+	case checked == 0:
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "no service with a volume is placed on this node"}
+	}
+	return Check{Name: name, Status: StatusOK,
+		Detail: fmt.Sprintf("%d app-data director%s on this node, all writable by their image's user", checked, plural(checked))}
+}
+
+// appDataPath resolves one mount to the host directory behind it, scoped to the
+// managed volume root. Empty means "not app data this check can judge".
+func appDataPath(ctx context.Context, dc runtime.Client, volumeRoot string, m runtime.Mount) string {
+	switch m.Type {
+	case "bind":
+		if !strings.HasPrefix(m.Source, volumeRoot+string(filepath.Separator)) && m.Source != volumeRoot {
+			return ""
+		}
+		return m.Source
+	case "volume":
+		vol, err := dc.VolumeInspect(ctx, m.Source)
+		if err != nil || !vol.Bind {
+			return ""
+		}
+		return vol.Device
+	}
+	return ""
+}
+
+// dirOwner reads a path's uid. A missing path returns an error, which the caller
+// treats as "nothing to report": the repair creates it on the next pass.
+func dirOwner(path string) (uid, gid int, err error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, fmt.Errorf("no ownership for %s on this platform", path)
+	}
+	return int(st.Uid), int(st.Gid), nil
+}
+
+// plural is the "y"/"ies" the check's detail needs and fmt cannot do.
+func plural(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
 }
