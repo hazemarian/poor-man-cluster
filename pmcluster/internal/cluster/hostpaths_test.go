@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 )
 
 // withPlatformHostDirs swaps the workflow seam for the duration of a test and
@@ -17,7 +19,7 @@ func withPlatformHostDirs(t *testing.T, fn func() error) *int {
 	orig := ensurePlatformHostDirs
 	t.Cleanup(func() { ensurePlatformHostDirs = orig })
 	calls := 0
-	ensurePlatformHostDirs = func() error {
+	ensurePlatformHostDirs = func(string) error {
 		calls++
 		return fn()
 	}
@@ -278,16 +280,16 @@ func TestUpdate_WarnsWhenAPlatformHostDirCannotBeCreated(t *testing.T) {
 }
 
 // TestEnsurePlatformHostDirsRealRunsThePlatformList keeps the seam honest: the
-// workflow's mkdir must walk platformHostDirs() — the same list the drift test
+// workflow's mkdir must walk platformHostDirs("") — the same list the drift test
 // compares against the rendered bind source.
 func TestEnsurePlatformHostDirsRealRunsThePlatformList(t *testing.T) {
 	origMkdir := hostMkdirAll
 	t.Cleanup(func() { hostMkdirAll = origMkdir })
 
 	root := t.TempDir()
-	platDirs := platformHostDirs()
+	platDirs := platformHostDirs("")
 	if len(platDirs) == 0 {
-		t.Fatal("platformHostDirs() is empty — nothing would be created")
+		t.Fatal("platformHostDirs is empty — nothing would be created")
 	}
 
 	var made []string
@@ -298,10 +300,55 @@ func TestEnsurePlatformHostDirsRealRunsThePlatformList(t *testing.T) {
 		}
 		return os.MkdirAll(filepath.Join(root, filepath.Base(path)), mode)
 	}
-	if err := ensurePlatformHostDirsReal(); err != nil {
+	if err := ensurePlatformHostDirsReal(""); err != nil {
 		t.Fatalf("ensurePlatformHostDirsReal: %v", err)
 	}
 	if len(made) != len(platDirs) || made[0] != platDirs[0] {
 		t.Fatalf("the real helper created %v, want the platform list %v", made, platDirs)
+	}
+}
+
+// TestNodeStatHostDirFollowsTheVolumeRoot is the regression this change exists
+// for. The directory used to be the literal /var/stack/nodestat whatever root the
+// cluster was configured with, so a cluster whose root was a temp tree still tried
+// to create a root-owned /var/stack path. On the CI runner that is a permission
+// error, which failed cluster up and took TestClusterUp plus ten downstream e2e
+// tests with it — for eight commits, before anyone read the mkdir's message.
+func TestNodeStatHostDirFollowsTheVolumeRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "stack")
+
+	got := NodeStatHostDirFor(root)
+	if want := filepath.Join(filepath.Dir(root), NodeStatDirName); got != want {
+		t.Fatalf("NodeStatHostDirFor(%q) = %q, want the sibling %q", root, got, want)
+	}
+	if !strings.HasPrefix(got, filepath.Dir(root)) {
+		t.Fatalf("%q is not under the configured tree %q — a non-root host cannot create it", got, filepath.Dir(root))
+	}
+
+	// The stock root must NOT move: every deployed cluster already has a JSONL at
+	// /var/stack/nodestat, and moving it silently abandons that history.
+	if got := NodeStatHostDirFor(""); got != NodeStatHostDir {
+		t.Fatalf("NodeStatHostDirFor(default) = %q, want the documented %q", got, NodeStatHostDir)
+	}
+	if got := NodeStatHostDirFor(manifest.DefaultVolumeRoot); got != NodeStatHostDir {
+		t.Fatalf("NodeStatHostDirFor(%q) = %q, want %q", manifest.DefaultVolumeRoot, got, NodeStatHostDir)
+	}
+	if want := NodeStatHostDir + "/" + NodeStatFileName; NodeStatFilePathFor("") != want {
+		t.Fatalf("NodeStatFilePathFor(default) = %q, want %q", NodeStatFilePathFor(""), want)
+	}
+
+	// The rendered bind source and the mkdir must agree for the SAME root, or the
+	// collector mounts a path this command never created.
+	if got, want := withHostPaths(RenderInput{VolumeRoot: root}).NodeStatDir, got; got != want {
+		t.Fatalf("rendered NodeStatDir = %q, want %q", got, want)
+	}
+
+	// And the workflow can actually create it there without root, which is the
+	// whole point: the e2e runs as an ordinary user.
+	if err := ensurePlatformHostDirs(root); err != nil {
+		t.Fatalf("ensurePlatformHostDirs(%q): %v", root, err)
+	}
+	if st, err := os.Stat(NodeStatHostDirFor(root)); err != nil || !st.IsDir() {
+		t.Fatalf("node-stat dir was not created under the configured root: %v", err)
 	}
 }

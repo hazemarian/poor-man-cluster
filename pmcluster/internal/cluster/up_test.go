@@ -18,10 +18,15 @@ import (
 func newUpDeps(t *testing.T) (UpDeps, *fakeDocker, *recordingDeployer) {
 	t.Helper()
 	dir := t.TempDir()
+	// Both seams are package-level: leaving them stubbed would hand a no-op
+	// ensurePlatformHostDirs to every test that runs AFTER this helper, which is
+	// how a later test "passes" while nothing was created. Restore them.
+	origStorageDirs, origHostDirs := ensureStorageDirs, ensurePlatformHostDirs
+	t.Cleanup(func() { ensureStorageDirs, ensurePlatformHostDirs = origStorageDirs, origHostDirs })
 	ensureStorageDirs = func(string) error { return nil }
 	// The host-directory step is the same kind of host mutation: keep it
 	// out of the real filesystem (the real helper is covered by hostpaths_test).
-	ensurePlatformHostDirs = func() error { return nil }
+	ensurePlatformHostDirs = func(string) error { return nil }
 
 	s, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {

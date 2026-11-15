@@ -77,12 +77,17 @@ jobs:
       - name: Map observ.example.test to localhost
         run: echo "127.0.0.1 observ.example.test" | sudo tee -a /etc/hosts
 
-      # cluster up creates the storage root dirs (/var/stack/data + /var/stack/backup)
-      # via ensureStorageDirs — the runner is not root, so pre-create them.
+      # cluster up creates its own paths via ensureStorageDirs and
+      # ensurePlatformHostDirs — the runner is not root, so pre-create the ones a
+      # test that uses the DEFAULT root would need. Tests that pass a temp
+      # --volume-root create their own tree, including /var/stack/nodestat's
+      # equivalent beside it: the node-stat bind source follows the volume root
+      # (NodeStatHostDirFor), precisely so a non-root host never has to make
+      # /var/stack. Both halves are here because a default-root test still can't.
       - name: Create storage root dirs
         run: |
-          sudo mkdir -p /var/stack/data /var/stack/backup
-          sudo chmod 0777 /var/stack/data /var/stack/backup
+          sudo mkdir -p /var/stack/data /var/stack/backup /var/stack/nodestat
+          sudo chmod 0777 /var/stack/data /var/stack/backup /var/stack/nodestat
 
       - name: swarm e2e
         env:

@@ -347,11 +347,13 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// not a fatal: every other stack in this reconcile is healthy and
 		// aborting the run would leave them unrepaired. The warning names the
 		// path and the reason, and reaches the apply record through the sink.
-		if err := ensurePlatformHostDirs(); err != nil {
+		// render.VolumeRoot, not the default: the collector's bind source is rendered
+		// from the same value, so the mkdir and the mount cannot disagree.
+		if err := ensurePlatformHostDirs(render.VolumeRoot); err != nil {
 			fmt.Fprintf(out, "  ⚠ %v\n", err)
 			return nil
 		}
-		for _, dir := range platformHostDirs() {
+		for _, dir := range platformHostDirs(render.VolumeRoot) {
 			fmt.Fprintf(out, "  ✓ %s ready\n", dir)
 		}
 		return nil

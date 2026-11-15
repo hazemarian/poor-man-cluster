@@ -242,11 +242,11 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	// no task logs. This is fatal on a fresh install on purpose — there is no
 	// healthy cluster to preserve, and deploying anyway would fail later at the
 	// health wait with a message that names the service, not the path.
-	wf.Add("Ensuring platform host directories ("+NodeStatHostDir+")", func(ctx context.Context) error {
-		if err := ensurePlatformHostDirs(); err != nil {
+	wf.Add("Ensuring platform host directories ("+NodeStatHostDirFor(in.VolumeRoot)+")", func(ctx context.Context) error {
+		if err := ensurePlatformHostDirs(in.VolumeRoot); err != nil {
 			return err
 		}
-		for _, dir := range platformHostDirs() {
+		for _, dir := range platformHostDirs(in.VolumeRoot) {
 			fmt.Fprintf(out, "  ✓ %s ready\n", dir)
 		}
 		return nil

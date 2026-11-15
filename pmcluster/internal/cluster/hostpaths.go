@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 )
 
 // Host paths the platform's own stacks bind-mount from the node.
@@ -30,10 +31,33 @@ import (
 // does not cover. TestRenderedNodeStatBindSourceIsTheEnsuredHostDir pins them
 // together.
 
+// NodeStatDirName is the directory's name, placed BESIDE the volume root rather
+// than inside it.
+const NodeStatDirName = "nodestat"
+
 // NodeStatHostDir is the host directory the OTel collector appends the
-// node-stats JSONL to. It is bind-mounted into the collector at the SAME path
-// so the leader's daemon — a host process — reads exactly what the task wrote.
-const NodeStatHostDir = "/var/stack/nodestat"
+// node-stats JSONL to, for the stock volume root. It is bind-mounted into the
+// collector at the SAME path so the leader's daemon — a host process — reads
+// exactly what the task wrote.
+const NodeStatHostDir = "/var/stack/" + NodeStatDirName
+
+// NodeStatHostDirFor is that directory for a given volume root: a SIBLING of the
+// volume root, never a child.
+//
+// Sibling for a boring reason and a load-bearing one. Boring: the stock
+// /var/stack/data must keep yielding /var/stack/nodestat, because every deployed
+// cluster already has a JSONL there and moving it would abandon the history the
+// console reads. Load-bearing: the path has to FOLLOW the volume root, or a
+// cluster whose root is not /var/stack — a temp tree in the e2e harness, an
+// operator's own disk — is asked to create a root-owned /var/stack/nodestat it
+// cannot make. That is exactly how swarm-e2e died for eight commits:
+// `mkdir /var/stack/nodestat: permission denied` on a runner whose every other
+// path was under a temp root, taking TestClusterUp and ten downstream tests with
+// it. A platform path that ignores the configured root is a path that only works
+// on the default host.
+func NodeStatHostDirFor(volumeRoot string) string {
+	return filepath.Join(filepath.Dir(effectiveVolumeRoot(volumeRoot)), NodeStatDirName)
+}
 
 // NodeStatFileName is the JSONL file inside NodeStatHostDir. The collector's
 // file exporter creates it; only the directory has to pre-exist.
@@ -44,9 +68,14 @@ const NodeStatFileName = "nodestat.jsonl"
 // too, while nothing else needs to write there.
 const hostPathMode os.FileMode = 0o755
 
-// NodeStatFilePath is the collector's JSONL path — NodeStatHostDir plus the
-// file name, so a caller never re-spells the directory.
+// NodeStatFilePath is the collector's JSONL path — the directory plus the file
+// name, so a caller never re-spells the directory.
 func NodeStatFilePath() string { return NodeStatHostDir + "/" + NodeStatFileName }
+
+// NodeStatFilePathFor is NodeStatFilePath for a volume root.
+func NodeStatFilePathFor(volumeRoot string) string {
+	return NodeStatHostDirFor(volumeRoot) + "/" + NodeStatFileName
+}
 
 // hostMkdirAll is os.MkdirAll, indirected so tests can present a read-only or
 // unwritable host without touching /var/stack.
@@ -68,8 +97,8 @@ var hostMkdirAll = os.MkdirAll
 // So NodeStatHostDir is the only source in this class, and this is the list the
 // mkdir walks. Anything added here must be a path that is NOT guaranteed on a
 // stock node.
-func platformHostDirs() []string {
-	return []string{NodeStatHostDir}
+func platformHostDirs(volumeRoot string) []string {
+	return []string{NodeStatHostDirFor(volumeRoot)}
 }
 
 // ensureHostDir creates dir when it is missing. It is idempotent and a no-op
@@ -111,7 +140,7 @@ func ensureHostDirs(dirs []string) error {
 // both render paths (compose and collector config) call it.
 func withHostPaths(in RenderInput) RenderInput {
 	if in.NodeStatDir == "" {
-		in.NodeStatDir = NodeStatHostDir
+		in.NodeStatDir = NodeStatHostDirFor(in.VolumeRoot)
 	}
 	return in
 }
@@ -131,6 +160,10 @@ var ensurePlatformHostDirs = ensurePlatformHostDirsReal
 // ensurePlatformHostDirsReal is the implementation behind the seam above. It
 // is a named function so a test can exercise the real list and the real helper
 // without depending on whatever a previous test left in the seam.
-func ensurePlatformHostDirsReal() error {
-	return ensureHostDirs(platformHostDirs())
+//
+// volumeRoot is the cluster's configured root, not the default: the platform
+// creates its own paths UNDER the tree the operator chose, so a cluster on a
+// non-default root never needs a root-owned /var/stack.
+func ensurePlatformHostDirsReal(volumeRoot string) error {
+	return ensureHostDirs(platformHostDirs(volumeRoot))
 }

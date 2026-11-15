@@ -202,6 +202,19 @@ func healthyService(name string) runtime.Service {
 	return runtime.Service{Name: name, Stack: stack, Replicas: 1, Desired: 1}
 }
 
+// stubHostMutations keeps a test off the real host filesystem: Update creates the
+// storage roots and the platform bind sources, and on a non-root host those are
+// /var/stack paths it cannot make. A test that builds UpdateDeps by hand calls
+// this itself — before it existed, two of them passed only because an earlier test
+// had leaked the stub, so they failed the day the leak was fixed.
+func stubHostMutations(t *testing.T) {
+	t.Helper()
+	origStorage, origHost := ensureStorageDirs, ensurePlatformHostDirs
+	t.Cleanup(func() { ensureStorageDirs, ensurePlatformHostDirs = origStorage, origHost })
+	ensureStorageDirs = func(string) error { return nil }
+	ensurePlatformHostDirs = func(string) error { return nil }
+}
+
 // seedUpdateState runs a real Up with a fresh fake docker + deployer, then
 // returns a freshly-wired UpdateDeps (separate recording deployer) — plus the
 // config dir shared by up and update — so update tests observe exactly what
@@ -209,10 +222,15 @@ func healthyService(name string) runtime.Service {
 func seedUpdateState(t *testing.T) (UpdateDeps, string) {
 	t.Helper()
 	dir := t.TempDir()
+	// Both seams are package-level: leaving them stubbed would hand a no-op
+	// ensurePlatformHostDirs to every test that runs AFTER this helper, which is
+	// how a later test "passes" while nothing was created. Restore them.
+	origStorageDirs, origHostDirs := ensureStorageDirs, ensurePlatformHostDirs
+	t.Cleanup(func() { ensureStorageDirs, ensurePlatformHostDirs = origStorageDirs, origHostDirs })
 	ensureStorageDirs = func(string) error { return nil }
 	// The host-directory step is the same kind of host mutation: keep it
 	// out of the real filesystem (the real helper is covered by hostpaths_test).
-	ensurePlatformHostDirs = func() error { return nil }
+	ensurePlatformHostDirs = func(string) error { return nil }
 	s, err := store.Open(filepath.Join(dir, "seed.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -795,6 +813,7 @@ func TestUpdate_TLSNotACMEWithoutCertPathsErrorsIfNoACMEEmail(t *testing.T) {
 	f.info = goodSwarmInfo()
 	seedHealthySwarm(f)
 
+	stubHostMutations(t)
 	_, err = Update(ctx, UpdateDeps{
 		Store:    s,
 		Cipher:   cipher,
@@ -853,6 +872,7 @@ func TestUpdate_ACMEModeDoesNotRequireCertPaths(t *testing.T) {
 	f.info = goodSwarmInfo()
 	seedHealthySwarm(f)
 
+	stubHostMutations(t)
 	if _, err := Update(ctx, UpdateDeps{
 		Store:    s,
 		Cipher:   cipher,
