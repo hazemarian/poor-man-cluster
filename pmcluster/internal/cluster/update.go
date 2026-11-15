@@ -653,6 +653,20 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 				// directory. There is nothing to deploy and nothing to remember, and
 				// recording a hash for an empty document made every later update
 				// report "deployed" for a stack that has no services at all.
+				//
+				// BUT an empty render over a LIVE stack means the render just lost its
+				// last service — a retired one. Skipping there leaves it running
+				// forever: measured on wafaa, where `backup` rendered nothing after
+				// `control-plane-backup` was deleted from the template and the service
+				// stayed 1/1 across the update that removed it. The render is the
+				// statement of what should exist, so an empty one removes the stack.
+				removed, err := removeEmptyPlatformStack(ctx, out, deps.Docker, deps.Deployer, s)
+				if err != nil {
+					return err
+				}
+				if removed {
+					res.StacksDeployed = append(res.StacksDeployed, string(s))
+				}
 				continue
 			case forceAll:
 				reasons[s] = "forced"
@@ -1290,6 +1304,50 @@ func checkBackupOffsite(ctx context.Context, deps UpdateDeps) error {
 // composeServices returns the service keys of a rendered compose document. It is
 // deliberately forgiving: the only question it answers is "is there anything to
 // deploy", and a parse problem is LoadComposeFile's job to report.
+// removeEmptyPlatformStack reconciles "this platform stack renders no services" against
+// what swarm actually runs: nothing live is a no-op, anything live is a stack that just
+// lost its last service and must go.
+//
+// The case it exists for, measured on wafaa: `control-plane-backup` was deleted from the
+// backup template, the stack now renders an empty document, and the reconcile's
+// empty-render rule skipped it — so the retired service stayed 1/1 across the very update
+// that removed it. A platform stack that empties is a removal, not a no-op.
+func removeEmptyPlatformStack(ctx context.Context, out io.Writer, dc runtime.Client, dep runtime.StackDeployer, s stackName) (bool, error) {
+	live := liveStackServices(ctx, dc, string(s))
+	if live == 0 {
+		return false, nil
+	}
+	fmt.Fprintf(out, "  ▶ %s renders no services, %d still live → removing the stack\n", string(s), live)
+	if err := dep.RemoveStack(ctx, string(s)); err != nil {
+		return false, fmt.Errorf("remove empty platform stack %s: %w", s, err)
+	}
+	return true, nil
+}
+
+// liveStackServices counts the services swarm currently runs for a stack. Used by
+// the reconcile's empty-render case: "this stack should have nothing" is only a
+// no-op when the swarm agrees.
+//
+// A docker error returns 0 — the same conservative choice the drift check makes
+// (never let a flaky API cause a destructive action): the stack is left alone and
+// the next pass tries again.
+func liveStackServices(ctx context.Context, dc runtime.Client, stack string) int {
+	if dc == nil {
+		return 0
+	}
+	svcs, err := dc.ServiceList(ctx)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, svc := range svcs {
+		if svc.Stack == stack {
+			n++
+		}
+	}
+	return n
+}
+
 func composeServices(composeYAML []byte) []string {
 	var doc struct {
 		Services map[string]any `yaml:"services"`

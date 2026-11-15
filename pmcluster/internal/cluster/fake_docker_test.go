@@ -25,6 +25,9 @@ type fakeDocker struct {
 	pingErr error
 	infoErr error
 	info    runtime.Info
+	// serviceListErr makes ServiceList fail, for the paths that must degrade to a
+	// no-op rather than act on an API they could not read.
+	serviceListErr error
 
 	// In-memory resources, keyed by name.
 	networks map[string]runtime.NetworkSpec
@@ -228,6 +231,9 @@ func stampRenderedHashLabels(t *testing.T, s *store.Store, f *fakeDocker) {
 }
 
 func (f *fakeDocker) ServiceList(_ context.Context) ([]runtime.Service, error) {
+	if f.serviceListErr != nil {
+		return nil, f.serviceListErr
+	}
 	out := make([]runtime.Service, 0, len(f.services))
 	for _, s := range f.services {
 		out = append(out, s)
