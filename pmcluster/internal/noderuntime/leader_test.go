@@ -1,15 +1,10 @@
 package noderuntime
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"errors"
-	"fmt"
 	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +15,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // leaderFake embeds runtime.Client so every method is satisfied, and lets the
@@ -314,318 +310,182 @@ func TestWatchSwarmLeadership_SwarmWorkerStandsByIdle(t *testing.T) {
 	}
 }
 
-// writeCtlplaneArchive drops a control-plane tarball into dir under the
-// standard offen name so NewestControlPlaneArchive picks it up. The archive
-// mirrors the offen layout: entries under backup/pmcluster/.
-func writeCtlplaneArchive(t *testing.T, dir, name string, mtime time.Time) string {
+// noConfigDocker is a runtime.Client that answers the config list with nothing: a swarm
+// that has never published a control-plane key config. Every other method is the embedded
+// nil interface, which is fine because nothing here calls one.
+type noConfigDocker struct{ runtime.Client }
+
+func (noConfigDocker) ConfigList(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+
+// confirmCfg is a config whose data dir optionally holds a store.
+func confirmCfg(t *testing.T) *config.Config {
 	t.Helper()
-	p := filepath.Join(dir, name)
-	f, err := os.Create(p)
+	dir := t.TempDir()
+	return &config.Config{DataDir: dir}
+}
+
+// TestConfirmMirrorAtStartup_NoStoreSaysItIsWaiting is the startup rule after ADR 0005: the
+// store is seeded by the mirror, so a manager with no data starts and says what it is doing.
+// The assertion that it CREATES nothing is the important half — the old path copied a
+// data.db onto the node, and a silent empty store would read as "the cluster is empty".
+func TestConfirmMirrorAtStartup_NoStoreSaysItIsWaiting(t *testing.T) {
+	cfg := confirmCfg(t)
+	logs := &logCapture{}
+	ConfirmMirrorAtStartup(context.Background(), cfg, logs.logger())
+
+	entry := logs.find("waiting for the first snapshot")
+	if entry == nil {
+		t.Fatalf("no startup line said the node is waiting for a snapshot:\n%s", logs.text())
+	}
+	if entry.Level != "info" {
+		t.Errorf("level = %q, want info — this is a new state, not a fault", entry.Level)
+	}
+	if _, err := os.Stat(cfg.DBPath()); !os.IsNotExist(err) {
+		t.Errorf("ConfirmMirrorAtStartup created %s; nothing may seed the store but the mirror", cfg.DBPath())
+	}
+}
+
+func TestConfirmMirrorAtStartup_NeverSynced(t *testing.T) {
+	cfg := confirmCfg(t)
+	st, err := store.Open(cfg.DBPath())
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("open store: %v", err)
 	}
-	gz := gzip.NewWriter(f)
-	tw := tar.NewWriter(gz)
-	if err := tw.WriteHeader(&tar.Header{Name: "backup/pmcluster", Mode: 0o755, Typeflag: tar.TypeDir}); err != nil {
-		t.Fatal(err)
+	_ = st.Close()
+
+	logs := &logCapture{}
+	ConfirmMirrorAtStartup(context.Background(), cfg, logs.logger())
+	if logs.find("never applied a snapshot") == nil {
+		t.Fatalf("a store that has never mirrored was not reported as such:\n%s", logs.text())
 	}
-	body := "sqlite-bytes"
-	if err := tw.WriteHeader(&tar.Header{Name: "backup/pmcluster/data.db", Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tw.Write([]byte(body)); err != nil {
-		t.Fatal(err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := gz.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chtimes(p, mtime, mtime); err != nil {
-		t.Fatal(err)
-	}
-	return p
 }
 
-// withArchiveDir points the archive scan at dir for the duration of the test.
-func withArchiveDir(t *testing.T, dir string) {
-	t.Helper()
-	old := controlPlaneArchiveDir
-	controlPlaneArchiveDir = dir
-	t.Cleanup(func() { controlPlaneArchiveDir = old })
-}
-
-func TestEnsureControlPlaneFresh_KeepsCurrentDB(t *testing.T) {
-	// Shared-storage (LINSTOR) case: data.db on this node is newer than the
-	// newest archive → no restore, existing DB must remain untouched.
-	archiveDir := t.TempDir()
-	withArchiveDir(t, archiveDir)
-	now := time.Now()
-	writeCtlplaneArchive(t, archiveDir, "pmcluster-ctlplane-n1-2026-09-25T03-00-00.tar.gz", now.Add(-24*time.Hour))
-
-	dataDir := t.TempDir()
-	dbPath := filepath.Join(dataDir, "data.db")
-	if err := os.WriteFile(dbPath, []byte("live-db"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	os.Chtimes(dbPath, now, now) // DB newer than archive
-
-	cfg := &config.Config{DataDir: dataDir}
-	log := zerolog.Nop()
-	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, nil, log)
+// TestConfirmMirrorAtStartup_ReportsTheMirror is the healthy case: the line names the leader,
+// the version and the age, measured from checked_at (which moves on a 304) rather than from
+// applied_at (which does not).
+func TestConfirmMirrorAtStartup_ReportsTheMirror(t *testing.T) {
+	cfg := confirmCfg(t)
+	ctx := context.Background()
+	st, err := store.Open(cfg.DBPath())
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("open store: %v", err)
 	}
-	if restored {
-		t.Fatal("expected NO restore when local DB is current")
+	applied := time.Now().Add(-90 * time.Second)
+	if err := st.ApplySnapshot(ctx, &store.Snapshot{
+		Version: 12,
+		Tables: map[string]store.TableData{
+			"cluster_settings": {Columns: []string{"key", "value"}, Types: []string{"TEXT", "TEXT"}, Rows: [][]any{}},
+		},
+	}, "nxt-sw-5-m", applied.Unix()); err != nil {
+		t.Fatalf("ApplySnapshot: %v", err)
 	}
-	b, _ := os.ReadFile(dbPath)
-	if string(b) != "live-db" {
-		t.Fatal("current local DB was clobbered")
+	if err := st.ConfirmMirrorSync(ctx, applied.Unix()); err != nil {
+		t.Fatalf("ConfirmMirrorSync: %v", err)
+	}
+	_ = st.Close()
+
+	logs := &logCapture{}
+	ConfirmMirrorAtStartup(context.Background(), cfg, logs.logger())
+	entry := logs.find("mirrored from the leader")
+	if entry == nil {
+		t.Fatalf("no startup line reported the mirror:\n%s", logs.text())
+	}
+	if !strings.Contains(string(entry.Fields["leader"]), "nxt-sw-5-m") {
+		t.Errorf("the line does not name the leader: %s", entry.Message)
+	}
+	if !strings.Contains(string(entry.Fields["version"]), "12") {
+		t.Errorf("the line does not carry the version: %s", entry.Fields["version"])
 	}
 }
 
-func TestEnsureControlPlaneFresh_RestoresWhenStale(t *testing.T) {
-	archiveDir := t.TempDir()
-	withArchiveDir(t, archiveDir)
-	now := time.Now()
-	writeCtlplaneArchive(t, archiveDir, "pmcluster-ctlplane-n1-2026-09-25T03-00-00.tar.gz", now.Add(-2*time.Hour))
-
-	dataDir := t.TempDir()
-	dbPath := filepath.Join(dataDir, "data.db")
-	if err := os.WriteFile(dbPath, []byte("stale-db"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	os.Chtimes(dbPath, now.Add(-24*time.Hour), now.Add(-24*time.Hour)) // older than archive
-
-	cfg := &config.Config{DataDir: dataDir}
-	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, nil, zerolog.Nop())
+// TestAdoptOnLeadershipGain_ServesAStaleMirrorAndSaysSo is the operator's ruling: a
+// 30-minute-old mirror is SERVED (a promotion on old data beats no leader), the age is
+// logged, and the adoption gate is left open.
+func TestAdoptOnLeadershipGain_ServesAStaleMirrorAndSaysSo(t *testing.T) {
+	ctx := context.Background()
+	cfg := confirmCfg(t)
+	st, err := store.Open(cfg.DBPath())
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("open store: %v", err)
 	}
-	if !restored {
-		t.Fatal("expected restore when local DB is older than newest archive")
+	defer func() { _ = st.Close() }()
+	old := time.Now().Add(-30 * time.Minute).Unix()
+	if err := st.ApplySnapshot(ctx, &store.Snapshot{
+		Version: 3,
+		Tables: map[string]store.TableData{
+			"cluster_settings": {Columns: []string{"key", "value"}, Types: []string{"TEXT", "TEXT"}, Rows: [][]any{}},
+		},
+	}, "old-leader", old); err != nil {
+		t.Fatalf("ApplySnapshot: %v", err)
+	}
+
+	logs := &logCapture{}
+	gate := &AdoptionGate{}
+	kit := &controlplane.Kit{Docker: noConfigDocker{}, DataDir: cfg.DataDir, Log: logs.logger()}
+	if ready := AdoptOnLeadershipGain(ctx, kit, st, gate, true, logs.logger()); !ready {
+		t.Fatal("AdoptOnLeadershipGain refused a stale mirror, which the operator decided is served")
+	}
+	if gate.adopting() {
+		t.Error("the adoption gate stayed closed after the check: every request but /health would answer 503 forever")
+	}
+	if logs.find("older than three polls") == nil {
+		t.Fatalf("the stale adoption did not log its age and version:\n%s", logs.text())
 	}
 }
 
-func TestEnsureControlPlaneFresh_RestoresWhenMissing(t *testing.T) {
-	archiveDir := t.TempDir()
-	withArchiveDir(t, archiveDir)
-	now := time.Now()
-	writeCtlplaneArchive(t, archiveDir, "pmcluster-ctlplane-n1-2026-09-25T03-00-00.tar.gz", now.Add(-2*time.Hour))
-
-	// Empty data dir — no data.db at all. Expect restore.
-	cfg := &config.Config{DataDir: t.TempDir()}
-	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, nil, zerolog.Nop())
+// TestAdoptOnLeadershipGain_EmptyStoreRefusesAndStartsNothing is the one hard refusal: no
+// snapshot has ever been applied AND the store holds nothing, so there is nothing to serve.
+// The caller gets false, so the control loop never starts.
+func TestAdoptOnLeadershipGain_EmptyStoreRefusesAndStartsNothing(t *testing.T) {
+	ctx := context.Background()
+	cfg := confirmCfg(t)
+	st, err := store.Open(cfg.DBPath())
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("open store: %v", err)
 	}
-	if !restored {
-		t.Fatal("expected restore when no local DB exists")
+	defer func() { _ = st.Close() }()
+
+	logs := &logCapture{}
+	gate := &AdoptionGate{}
+	kit := &controlplane.Kit{Docker: noConfigDocker{}, DataDir: cfg.DataDir, Log: logs.logger()}
+	if ready := AdoptOnLeadershipGain(ctx, kit, st, gate, true, logs.logger()); ready {
+		t.Fatal("AdoptOnLeadershipGain said ready for an empty store that has never mirrored")
+	}
+	if gate.adopting() {
+		t.Error("the adoption gate stayed closed after a refusal")
+	}
+	if logs.find("refusing leadership") == nil {
+		t.Fatalf("the refusal was not logged:\n%s", logs.text())
 	}
 }
 
-func TestEnsureControlPlaneFresh_NoArchiveKeeps(t *testing.T) {
-	cfg := &config.Config{DataDir: t.TempDir()}
-	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, nil, zerolog.Nop())
+// TestAdoptOnLeadershipGain_FreshMirrorIsReady is the promoted-manager case: the store is
+// already the cluster's state, so it becomes the writer without copying anything.
+func TestAdoptOnLeadershipGain_FreshMirrorIsReady(t *testing.T) {
+	ctx := context.Background()
+	cfg := confirmCfg(t)
+	st, err := store.Open(cfg.DBPath())
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("open store: %v", err)
 	}
-	if restored {
-		t.Fatal("expected no restore when no archive exists")
-	}
-}
-
-// leaderlessDocker is a runtime.Client whose ConfigList fails with Docker's
-// no-Raft-leader (quorum lost) error — the transient condition that used to
-// make the daemon exit and systemd restart-loop it (BUG-020).
-type leaderlessDocker struct{ runtime.Client }
-
-func (leaderlessDocker) ConfigList(context.Context, string, string) ([]string, error) {
-	return nil, errors.New("Error response from daemon: rpc error: code = Unknown desc = The swarm does not have a leader. It's possible that too few managers are online. Make sure more than half of the managers are online.")
-}
-
-func TestEnsureControlPlaneFresh_SwarmLeaderlessIsNonFatal(t *testing.T) {
-	// Quorum lost while this daemon starts: the Raft kit is unreadable. The
-	// daemon must keep serving (fall through to the tarball path, then the
-	// local DB) instead of returning an error that exits the process —
-	// otherwise every manager crash-loops for the duration of the outage
-	// (BUG-020, reproduced live in TC10-A: 28 restarts on nxt-sw-4-m).
-	withArchiveDir(t, t.TempDir()) // empty: no tarball to fall back to either
-	cfg := &config.Config{DataDir: t.TempDir()}
-	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, leaderlessDocker{}, zerolog.Nop())
-	if err != nil {
-		t.Fatalf("a leaderless swarm must not be fatal, got %v", err)
-	}
-	if restored {
-		t.Fatal("no restore expected when the swarm is unavailable and no archive exists")
-	}
-}
-
-// stateFake embeds runtime.Client and stores configs in memory so the
-// Raft-replicated control-plane restore path runs without Docker.
-type stateFake struct {
-	runtime.Client
-	configs map[string]runtime.ConfigInspectResult
-}
-
-func (f *stateFake) ConfigCreate(_ context.Context, spec runtime.ConfigSpec) error {
-	f.configs[spec.Name] = runtime.ConfigInspectResult{Labels: spec.Labels, Data: spec.Data}
-	return nil
-}
-
-func (f *stateFake) ConfigRemove(_ context.Context, name string) error {
-	delete(f.configs, name)
-	return nil
-}
-
-func (f *stateFake) ConfigList(_ context.Context, labelKey, labelValue string) ([]string, error) {
-	var names []string
-	for name, c := range f.configs {
-		if labelKey == "" || c.Labels[labelKey] == labelValue {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	return names, nil
-}
-
-func (f *stateFake) ConfigInspect(_ context.Context, name string) (runtime.ConfigInspectResult, error) {
-	c, ok := f.configs[name]
-	if !ok {
-		return runtime.ConfigInspectResult{}, fmt.Errorf("config %q not found", name)
-	}
-	return c, nil
-}
-
-// snapshotInto publishes a control-plane snapshot of srcDir into the fake.
-func snapshotInto(t *testing.T, f *stateFake, srcDir string) {
-	t.Helper()
-	kit := &controlplane.Kit{Docker: f, DataDir: srcDir, Log: zerolog.Nop()}
-	if err := kit.Snapshot(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestEnsureControlPlaneFresh_RestoresFromStateConfig(t *testing.T) {
-	srcDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(srcDir, "data.db"), []byte("raft-db"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(srcDir, ".encryption_key"), []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f := &stateFake{configs: map[string]runtime.ConfigInspectResult{}}
-	snapshotInto(t, f, srcDir)
-
-	cfg := &config.Config{DataDir: t.TempDir()}
-	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !restored {
-		t.Fatal("expected restore from the Raft state config")
-	}
-	if b, _ := os.ReadFile(cfg.DBPath()); string(b) != "raft-db" {
-		t.Fatalf("data.db not restored from Raft config: %q", b)
-	}
-}
-
-func TestEnsureControlPlaneFresh_KeepsCurrentStateConfig(t *testing.T) {
-	srcDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(srcDir, "data.db"), []byte("raft-db"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(srcDir, ".encryption_key"), []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f := &stateFake{configs: map[string]runtime.ConfigInspectResult{}}
-	snapshotInto(t, f, srcDir)
-
-	// Local control plane at the snapshot's revision (a node that already
-	// synced): the Raft config exists but nothing is restored, and the local DB
-	// survives. "Current" is the revision marker — a follower writes its own
-	// data.db constantly, so its mtime is always newer and can never mean
-	// "synced".
-	curDir := t.TempDir()
-	dbPath := filepath.Join(curDir, "data.db")
-	if err := os.WriteFile(dbPath, []byte("live-db"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	os.Chtimes(dbPath, time.Now().Add(time.Minute), time.Now().Add(time.Minute))
-	if err := os.WriteFile(filepath.Join(curDir, ".encryption_key"), []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var snapAt string
-	for name, cfg := range f.configs {
-		if strings.HasPrefix(name, controlplane.StateNamePrefix+"_") && !strings.HasPrefix(name, controlplane.KeyNamePrefix+"_") {
-			snapAt = cfg.Labels[controlplane.LabelSnapshotAt]
-		}
-	}
-	if snapAt == "" {
-		t.Fatal("snapshot has no timestamp label")
-	}
-	if err := os.WriteFile(filepath.Join(curDir, ".state_revision"), []byte(snapAt), 0o600); err != nil {
-		t.Fatal(err)
+	defer func() { _ = st.Close() }()
+	if err := st.ApplySnapshot(ctx, &store.Snapshot{
+		Version: 4,
+		Tables: map[string]store.TableData{
+			"cluster_settings": {Columns: []string{"key", "value"}, Types: []string{"TEXT", "TEXT"}, Rows: [][]any{}},
+		},
+	}, "nxt-sw-5-m", time.Now().Add(-10*time.Second).Unix()); err != nil {
+		t.Fatalf("ApplySnapshot: %v", err)
 	}
 
-	cfg := &config.Config{DataDir: curDir}
-	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop())
-	if err != nil {
-		t.Fatal(err)
+	gate := &AdoptionGate{}
+	kit := &controlplane.Kit{Docker: noConfigDocker{}, DataDir: cfg.DataDir, Log: zerolog.Nop()}
+	if ready := AdoptOnLeadershipGain(ctx, kit, st, gate, true, zerolog.Nop()); !ready {
+		t.Fatal("AdoptOnLeadershipGain refused a mirror confirmed ten seconds ago")
 	}
-	if restored {
-		t.Fatal("expected no restore when the local control plane is current")
-	}
-	if b, _ := os.ReadFile(dbPath); string(b) != "live-db" {
-		t.Fatal("current local DB was clobbered")
-	}
-}
-
-func TestEnsureControlPlaneFresh_MissingKeyConfigErrors(t *testing.T) {
-	srcDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(srcDir, "data.db"), []byte("raft-db"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(srcDir, ".encryption_key"), []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f := &stateFake{configs: map[string]runtime.ConfigInspectResult{}}
-	snapshotInto(t, f, srcDir)
-	// Break the security split: remove the key configs.
-	for name := range f.configs {
-		if strings.HasPrefix(name, "pmcluster_state_key_") {
-			if err := f.ConfigRemove(context.Background(), name); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-
-	cfg := &config.Config{DataDir: t.TempDir()}
-	if _, err := EnsureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop()); err == nil {
-		t.Fatal("restore must refuse a state config whose key config is missing")
-	}
-}
-
-func TestEnsureControlPlaneFresh_FallsBackToTarballWhenNoStateConfig(t *testing.T) {
-	// A live Docker client with NO state configs must fall back to the
-	// tarball archive path (pre-L2 clusters).
-	archiveDir := t.TempDir()
-	withArchiveDir(t, archiveDir)
-	now := time.Now()
-	writeCtlplaneArchive(t, archiveDir, "pmcluster-ctlplane-n1-2026-09-25T03-00-00.tar.gz", now.Add(-2*time.Hour))
-
-	f := &stateFake{configs: map[string]runtime.ConfigInspectResult{}}
-	cfg := &config.Config{DataDir: t.TempDir()}
-	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !restored {
-		t.Fatal("expected tarball fallback when no Raft state config exists")
+	if gate.adopting() {
+		t.Error("the adoption gate stayed closed after a successful check")
 	}
 }

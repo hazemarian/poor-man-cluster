@@ -474,3 +474,34 @@ func legacyUsers(tables map[string]TableData) []SnapshotUser {
 	}
 	return out
 }
+
+// TableRowCounts counts the rows of every mirrored table on THIS node. It is what a
+// verify report prints: a promotion is only as good as what the store actually holds, and
+// "version 9" says nothing about whether the stacks came with it.
+func (s *Store) TableRowCounts(ctx context.Context) (map[string]int, error) {
+	out := make(map[string]int, len(mirroredTables))
+	for _, table := range mirroredTables {
+		var n int
+		if err := s.conn().QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&n); err != nil {
+			return nil, fmt.Errorf("count %s: %w", table, err)
+		}
+		out[table] = n
+	}
+	return out, nil
+}
+
+// HasData reports whether this store holds any cluster state at all: a setting, a user, a
+// stack or a secret. It is the difference between "a node that has not mirrored yet" and
+// "a node with nothing to serve", and only the second one must never take leadership.
+func (s *Store) HasData(ctx context.Context) (bool, error) {
+	for _, table := range []string{"cluster_settings", "users", "stacks", "secrets", "configs"} {
+		var n int
+		if err := s.conn().QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&n); err != nil {
+			return false, fmt.Errorf("count %s: %w", table, err)
+		}
+		if n > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}

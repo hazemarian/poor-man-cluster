@@ -13,6 +13,7 @@ decoration; the design docs carry the behaviour.
 | [0002](0002-telemetry-backend.md) | Telemetry store: owned query API over parquet (DuckDB), not an owned engine | proposed | 2026-11-07 | Every statement is written by `internal/observability`; the store is replaceable and no backend dialect leaks out of its adapter |
 | [0003](0003-cluster-state-by-pull.md) | Cluster state reaches other managers by pull (mTLS snapshot), not by Docker config | accepted (slices 1–3 landed) | 2026-11-13 | `internal/clustersnapshot` is the only reader of cluster state over the network; the version is a content identity stamped by the writer; the cipher key never comes from the replicated object |
 | [0004](0004-node-runtime-and-host-units.md) | A node's loops and its host units leave `internal/cli` | accepted | 2026-11-15 | `internal/noderuntime` owns the loops `serve` starts, `internal/nodeunits` owns the units and the node-local file names, `store.OpenExisting` is the one never-create opener, and `cli/boundary_test.go` fails when a name is defined twice or a loop returns to the CLI |
+| [0005](0005-mirror-is-the-document.md) | The mirror is the whole control-plane document and adoption copies nothing | accepted | 2026-11-15 | The mTLS snapshot is the only channel for cluster state; every table travels except an explicit node-local exclusion list; a stale mirror is served and logged while an empty store refuses leadership; the config channel's data kit and the control-plane backup path are retired |
 
 ## Status values
 

@@ -286,8 +286,33 @@ switched the surfaces that used to refuse:
 - The staleness threshold is derived from `clustersnapshot.PollInterval`, so the loop and
   the read surfaces cannot disagree about what "three polls" means.
 
-**Not built yet (slices 4–5 of the ADR):** settings still travel in Docker configs (the
-mirror does not touch a container), and the join-time key route does not exist.
+**Not built yet:** the join-time key route (ADR 0005's handoff). Settings travel only by the
+pull now, and adoption copies nothing — see below.
+
+**Adoption copies nothing** (`internal/controlplane/adopt.go`, ADR 0005). A manager gaining
+leadership keeps serving the store it has been mirroring; there is no kit to stage, no
+`data.db` to rename and no `.encryption_key` to move, and `store.Store.Swap` — which existed
+only to replace a database under a live handle — is gone with it. The check is about trust,
+and the operator settled where the line is:
+
+- **A stale mirror is served**, and the adoption logs the version and the age it is adopting
+  ("adopting mirror version N, age Ts"). Refusing would turn a failover into an outage over
+  an age the operator decided is acceptable; hiding it would make a leader on old data
+  indistinguishable from a current one.
+- **One refusal: nothing to serve.** No snapshot ever applied AND no cluster state in the
+  store (no setting, user, stack, secret or config) means an empty control plane. It refuses
+  and starts no control loop. That is an absence, not an age, and the two do not share a code
+  path.
+- **A node that never mirrored but holds data is the source** — the first leader of a cluster
+  adopts itself.
+- **The key is reported, not enforced.** A key that differs from the cluster's key config is a
+  WARN in the adoption log and a problem in `cluster mirror verify`; ending up with no leader
+  over a key the next change replaces is the wrong trade.
+- **Startup says what the node holds.** `noderuntime.ConfirmMirrorAtStartup` replaced the old
+  restore-from-config: it reads `sync_state` and states the leader, version and age, or says
+  plainly that the node is waiting for its first snapshot. `cli.openServeStore` is the one
+  place `serve` tolerates a missing database — the store is seeded by the mirror, so a node
+  with no data starts, serves `/health` and says so instead of crash-looping.
 
 ## Leaf packages
 

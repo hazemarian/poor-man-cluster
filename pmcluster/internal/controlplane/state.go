@@ -35,7 +35,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -142,22 +141,21 @@ func isDockerDaemonUnavailable(msg string) bool {
 	return false
 }
 
-// Kit snapshots and restores the control-plane survivor kit via Docker
-// configs. Create one per daemon; Snapshot must only be called on the swarm
-// leader (Raft replication is the transport), while Restore is safe on any
-// manager.
+// Kit publishes and reads the control-plane's KEY config, and answers the
+// leadership-gain question about this node's own store.
 //
-// One Kit instance per daemon is not just a convenience: it remembers the
-// newest snapshot it published, so a leadership gain cannot re-extract a
-// snapshot this node produced itself (see AdoptOnLeadership).
+// It no longer publishes or restores the data kit: the mirror is the document
+// and adoption copies nothing (ADR 0005). The key still travels in its own
+// config, because the security split from ADR 0003 is unchanged and the
+// join-time key route is a separate decision; see AdoptOnLeadership.
+//
+// Create one per daemon. It holds no per-process state any more — the
+// published-config marker existed only so a leadership gain could avoid
+// re-extracting this node's own snapshot, and nothing is extracted now.
 type Kit struct {
 	Docker  runtime.Client
 	DataDir string
 	Log     zerolog.Logger
-
-	// mu guards published; kept private so Kit literals stay simple.
-	mu        sync.Mutex
-	published string
 }
 
 // DBPath returns the SQLite database path inside DataDir.
@@ -282,7 +280,6 @@ func (k *Kit) Snapshot(ctx context.Context) error {
 		return fmt.Errorf("create control-plane key config: %w", err)
 	}
 	log.Info().Str("config", keyName).Int("bytes", len(key)).Msg("control-plane encryption key snapshotted to Raft-replicated config")
-	k.setPublishedConfig(stateName)
 
 	// This node IS the source of this snapshot, so its control plane is by
 	// definition at this revision. Without recording it, a demoted-then-promoted
@@ -338,7 +335,7 @@ func (k *Kit) maxKitMtime() (time.Time, error) {
 		}
 		if fi.IsDir() {
 			rel, _ := filepath.Rel(k.DataDir, path)
-			if rel == "logs" || strings.HasPrefix(rel, stagingPrefix) {
+			if rel == "logs" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -346,11 +343,10 @@ func (k *Kit) maxKitMtime() (time.Time, error) {
 		if !fi.Mode().IsRegular() {
 			return nil
 		}
-		// The revision marker is written by this package after every snapshot,
-		// and an adoption staging directory is written by it mid-adoption;
-		// counting either would make the kit look perpetually newer and
+		// The revision marker is written by this package after every snapshot;
+		// counting it would make the kit look perpetually newer and
 		// re-snapshot on every tick — an endless config churn loop.
-		if filepath.Base(path) == ".state_revision" || strings.HasPrefix(filepath.Base(path), stagingPrefix) {
+		if filepath.Base(path) == ".state_revision" {
 			return nil
 		}
 		if fi.ModTime().After(max) {
@@ -424,14 +420,6 @@ func (k *Kit) packKit(dbPath string) ([]byte, error) {
 			// file it was written for. Packing one beside an exported data.db
 			// would leave the promoted node with a "hot journal" that SQLite
 			// replays into a database it does not belong to.
-			return nil
-		}
-		if strings.HasPrefix(rel, stagingPrefix) {
-			// An adoption's scratch directory: excluded like the marker, because
-			// a snapshot must never carry a half-extracted copy of itself.
-			if fi.IsDir() {
-				return filepath.SkipDir
-			}
 			return nil
 		}
 		name := filepath.ToSlash(rel)
@@ -790,4 +778,28 @@ func parseSnapshotAt(labels map[string]string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("parse %s label %q: %w", LabelSnapshotAt, raw, err)
 	}
 	return t, nil
+}
+
+// newestKey returns the newest KEY config published on this swarm: its name and the bytes
+// it carries. ErrNoSnapshots means the cluster has never published one.
+//
+// It reads the key family directly rather than deriving the key's name from a state
+// config, which is what it used to do: the data kit is retired (ADR 0005), so a key config
+// is now the only thing this family carries and it must be findable on its own.
+func (k *Kit) newestKey(ctx context.Context) (name string, key []byte, err error) {
+	if k.Docker == nil {
+		return "", nil, ErrNoSnapshots // standalone/local mode: no Raft configs to read
+	}
+	name, err = k.newest(ctx, KindKey)
+	if err != nil {
+		return "", nil, err
+	}
+	if name == "" {
+		return "", nil, ErrNoSnapshots
+	}
+	inspect, err := k.Docker.ConfigInspect(ctx, name)
+	if err != nil {
+		return name, nil, fmt.Errorf("inspect key config %s: %w", name, err)
+	}
+	return name, inspect.Data, nil
 }

@@ -94,6 +94,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	var (
 		localAPIStop func()
 		localAPIDone <-chan struct{}
+		// mirrorRan records that THIS process ran the snapshot mirror before it became
+		// leader. It separates "never a follower" (nothing to vouch for) from "a follower
+		// whose polls never landed" (a refusal) at the leadership-gain check.
+		mirrorRan bool
 	)
 
 	dc, dockerErr := docker.New()
@@ -335,35 +339,21 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// ONLY on the current Swarm leader; other managers stand by until
 		// Swarm elects them leader (failover). Standalone/local mode returns
 		// immediately.
-		// Control-plane freshness for EVERY manager at startup, BEFORE the
-		// leadership wait, not only on promotion. A follower manager that never
-		// leads still needs the current credential and settings rows to answer
-		// reads (the observability reader, the console) — restoring only on
-		// promotion is why two managers sat on a two-week-old credential table
-		// while reporting themselves current.
-		//
-		// This is the safe window: nothing has the store open yet, so replacing
-		// data.db cannot truncate it under a live sqlite connection. Best-effort:
-		// a worker, or a swarm without a readable Raft config, must still serve.
-		// The mid-run twin of this check is noderuntime.AdoptOnLeadershipGain: a node that
-		// BECOMES leader later adopts through the open store (close, replace,
-		// reopen) on the same predicate.
-		if _, err := noderuntime.EnsureControlPlaneFresh(cmd.Context(), cfg, dc, log); err != nil {
-			log.Warn().Err(err).Msg("control-plane restore at startup had issues (continuing)")
-		}
+		// What this node's cluster state is, stated at boot, before anything opens the
+		// store. The old path restored data.db from a Raft config here; the store is
+		// seeded by the mirror now, so there is nothing to restore and nothing to copy —
+		// only a state to report. A manager with no data yet starts, serves /health and
+		// says it is waiting for the first snapshot.
+		noderuntime.ConfirmMirrorAtStartup(cmd.Context(), cfg, log)
 
-		// The follower's mirror (slice 2 of docs/adr/0003-cluster-state-by-pull.md):
-		// a manager that is NOT the leader pulls the leader's snapshot into its own
-		// store, so its settings stop being whatever the last control-plane kit
-		// happened to carry. Two ordering rules, both load-bearing:
+		// The follower's mirror (docs/adr/0003-cluster-state-by-pull.md): a manager that is
+		// NOT the leader pulls the leader's snapshot into its own store. Two ordering rules,
+		// both load-bearing:
 		//
-		//   * it starts BEFORE the leadership wait, because a follower manager blocks
-		//     there forever (the runner assignment loop has the same shape for the same
-		//     reason);
-		//   * it starts AFTER the control-plane restore above, which is the safe window
-		//     precisely because nothing has the store open — a mirror holding a handle
-		//     across that replacement would keep writing to a file that had been
-		//     unlinked underneath it.
+		//   * it starts BEFORE the leadership wait, because a follower manager blocks there
+		//     forever (the runner assignment loop has the same shape for the same reason);
+		//   * it is joined (not merely cancelled) before this node serves as the writer, so
+		//     there is one writer to a row at a time.
 		//
 		// A WORKER does not mirror: it has no store, and opening one would seed an empty
 		// database whose answers look plausible.
@@ -371,6 +361,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		var mirrorDone <-chan struct{}
 		if standby && !worker {
 			mirrorStop, mirrorDone = noderuntime.StartSnapshotMirror(cmd.Context(), noderuntime.SnapshotMirrorFor(cfg, dc, hostname, log))
+			mirrorRan = true
 			defer func() {
 				if mirrorStop != nil {
 					mirrorStop()
@@ -385,8 +376,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 		// This node is the leader now, so the mirror has to be gone — finished its last
 		// tick, handle closed — BEFORE the leader's own store is opened below. Two
-		// writers to one row is a race whose winner nobody can predict, and the
-		// leadership-gain restore that follows assumes nothing has the file open.
+		// writers to one row is a race whose winner nobody can predict.
 		if mirrorStop != nil {
 			mirrorStop()
 			<-mirrorDone
@@ -403,24 +393,15 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			localAPIStop = nil
 		}
 
-		// Control-plane freshness: when this node was a standby and just
-		// became leader, adopt the newest control-plane snapshot if the
-		// local DB is missing or older than it. The leader snapshots the
-		// survivor kit into Raft-replicated Docker configs (L2); pre-L2
-		// clusters fall back to the tarball archive. Shared/replicated
-		// storage (LINSTOR) keeps the DB current on every manager — never
-		// clobber a fresh DB.
-		if _, err := noderuntime.EnsureControlPlaneFresh(cmd.Context(), cfg, dc, log); err != nil {
-			return fmt.Errorf("control-plane restore: %w", err)
-		}
+		// Nothing is restored or adopted here: this node serves the store it has been
+		// mirroring, and the leadership watcher below decides — with the mirror's age in
+		// hand — whether it may vouch for it before it becomes the writer.
 
-		// First snapshot as leader: publish the current (possibly just
-		// restored) control plane so the other managers have a fresh kit
-		// before any mutation happens. Published through the same Kit the
-		// leadership loop uses, so that loop recognises this snapshot as its
-		// own and does not adopt it back.
+		// First publication as leader: the KEY config only. The data kit is retired —
+		// the mirror is the document, so a promoted manager has nothing to fetch from a
+		// Docker config (ADR 0005).
 		if err := kit.Snapshot(cmd.Context()); err != nil {
-			log.Warn().Err(err).Msg("initial control-plane snapshot had issues")
+			log.Warn().Err(err).Msg("initial control-plane key snapshot had issues")
 		}
 
 		checkConfigVersions(cmd.Context(), dc, log)
@@ -440,10 +421,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		log.Warn().Err(err).Msg("ensure local storage roots")
 	}
 
-	if err := requireInitialised(cfg, "run `pmcluster init` (or `pmcluster join` on a joining node)"); err != nil {
-		return err
-	}
-	st, err := openExistingStore(cfg.DBPath())
+	// The store is seeded by the MIRROR, so a manager that holds no data yet still has
+	// to start: it answers /health, serves empty tables with the mirror's state attached,
+	// and says plainly that it is waiting for the first snapshot. Refusing to start (the
+	// old behaviour) turned a node whose data directory was lost, or one that has not
+	// polled yet, into a crash loop — and a crash loop is not an explanation.
+	st, err := openServeStore(cfg, log)
 	if err != nil {
 		return err
 	}
@@ -727,22 +710,21 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				log.Info().Msg("control loop: starting reconcile loop (leader)")
 				// Nothing to label: the collector follows the leader by NAME at
 				// render time, and nothing else reads pmcluster.leader.
-				// This node just gained leadership. Its data.db may be older
-				// than the newest Raft-replicated kit (the previous leader
-				// snapshotted credentials/settings this node never adopted), so
-				// adopt BEFORE the reconcile loop reads settings, before this
-				// node answers control-plane reads, and before publishing:
-				// adopting after a publish would overwrite the deployed state
-				// with a stale snapshot.
+				// This node just gained leadership. It is ALREADY holding the cluster's
+				// state (it has been mirroring it), so there is nothing to adopt: the check
+				// is whether there is anything to serve. A stale mirror is SERVED (the
+				// operator's decision) and its age is logged; a node that has never mirrored
+				// and holds nothing refuses, loudly, and starts no loop.
 				//
-				// Exactly once per transition: the leadership channel emits only
-				// on a state change, so a node that stays leader never re-runs
-				// this — a per-tick check would close and reopen the store under
-				// every request, for nothing.
-				noderuntime.AdoptOnLeadershipGain(ctx, kit, st, cipher, cfg, gate, log)
+				// Exactly once per transition: the leadership channel emits only on a
+				// state change, so a node that stays leader never re-runs this.
+				if !noderuntime.AdoptOnLeadershipGain(ctx, kit, st, gate, mirrorRan, log) {
+					log.Error().Msg("control loop NOT started: this node has no cluster state to serve; reads keep answering with the mirror's age, and restarting pmcluster makes it re-enter standby and mirror again")
+					continue
+				}
 
 				if err := kit.Snapshot(ctx); err != nil {
-					log.Warn().Err(err).Msg("control-plane snapshot on leadership gain had issues")
+					log.Warn().Err(err).Msg("control-plane key snapshot on leadership gain had issues")
 				}
 				var loopCtx context.Context
 				loopCtx, loopCancel = context.WithCancel(ctx)

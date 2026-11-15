@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/rs/zerolog"
+
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -82,4 +84,30 @@ func openStore() (*store.Store, *config.Config, error) {
 		return nil, nil, err
 	}
 	return st, cfg, nil
+}
+
+// openServeStore is what `pmcluster serve` opens, and the one place in the daemon that
+// tolerates a missing database.
+//
+// The store's contents arrive by MIRROR (ADR 0005), so a node that has not polled yet —
+// or whose data directory was just lost — must still start: it serves /health, answers
+// from an empty store, and says in the log that it is waiting for the first snapshot.
+// Exiting instead made systemd restart-loop the node, and the operator saw a failing unit
+// with no statement about the actual state.
+//
+// It is deliberately NOT a general loosening of the never-create rule: openExistingStore
+// still refuses to create, openOrCreateStore still names its two callers, and this wrapper
+// exists so `serve` can state its own reason. A database that exists but cannot be opened
+// is still an error — that is corruption or a lock, not "no data yet".
+func openServeStore(cfg *config.Config, log zerolog.Logger) (*store.Store, error) {
+	st, err := openExistingStore(cfg.DBPath())
+	if err == nil {
+		return st, nil
+	}
+	if _, statErr := os.Stat(cfg.DBPath()); !os.IsNotExist(statErr) {
+		return nil, err
+	}
+	log.Warn().Str("path", cfg.DBPath()).
+		Msg("no cluster state on this node yet: starting on an empty store — it is filled by the mirror, and this node is not a source of truth until it has one")
+	return openOrCreateStore(cfg)
 }

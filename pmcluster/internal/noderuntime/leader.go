@@ -9,20 +9,15 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // leaderPollInterval is how often a standby daemon re-checks whether this node
 // has become the Docker Swarm leader.
 const leaderPollInterval = 15 * time.Second
-
-// controlPlaneArchiveDir is where the control-plane backup agent writes its
-// pmcluster-ctlplane-*.tar.gz archives. Overridable in tests.
-var controlPlaneArchiveDir = backups.DefaultArchiveDir
 
 // WaitForSwarmLeadership blocks until the local Docker node is the current
 // Swarm leader (or the context is cancelled). Non-leader managers run as
@@ -208,132 +203,96 @@ func WatchSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Lo
 	return out
 }
 
-// AdoptOnLeadershipGain runs the control-plane freshness predicate once for a
-// follower→leader transition and adopts the newest Raft-replicated kit when this
-// node is behind it.
+// AdoptOnLeadershipGain decides whether this node may act as the cluster's writer after
+// a follower→leader transition, and says so loudly either way. It returns ready: false
+// only when there is NOTHING TO SERVE — a node that has never applied a snapshot and whose
+// store holds no cluster state. A STALE mirror is served: the operator's decision is that a
+// promotion on a few-minutes-old snapshot beats no leader, so the age and version are
+// logged as the adoption happens rather than turned into a refusal.
 //
-// It is the mid-run twin of the startup check in serve (EnsureControlPlaneFresh):
-// the same predicate — no key, a missing or older `.state_revision`, or a
-// different encryption key — but the store is already open and serving, so
-// adoption closes the SQLite handle, renames the staged data.db and
-// .encryption_key into place, and reopens (controlplane.StoreSwapper). The
-// encryption key is adopted with the DB, so the in-memory Cipher is reloaded
-// when the key changed; otherwise every ciphertext in the freshly adopted
-// database would be undecryptable.
+// Nothing is copied, renamed or swapped. The node has been mirroring the cluster's state
+// the whole time it was a follower, so on gaining leadership it keeps serving the store it
+// already has and becomes the writer (ADR 0005). The old path closed the SQLite handle,
+// renamed a staged data.db and .encryption_key into place and reopened; that existed
+// because the mirror was a projection, and it is gone with the projection.
 //
-// Failure is contained: the Kit logs the reason and leaves the current database
-// in place, and this function keeps serving it. Exiting here would turn a stale
-// leader into no leader at all.
-func AdoptOnLeadershipGain(ctx context.Context, kit *controlplane.Kit, swap controlplane.StoreSwapper, cipher *credentials.Cipher, cfg *config.Config, gate *AdoptionGate, log zerolog.Logger) {
+// mirrored reports whether this process ran the mirror before the transition — it is
+// carried into the log rather than used to decide, because the decision is about the STORE,
+// not about which loop this process ran.
+//
+// Failure is contained: the refusal is logged with the reason, the store stays open and
+// keeps answering reads with the mirror's age attached, and the next leadership transition
+// checks again.
+func AdoptOnLeadershipGain(ctx context.Context, kit *controlplane.Kit, st *store.Store, gate *AdoptionGate, mirrored bool, log zerolog.Logger) bool {
 	if kit == nil {
-		return
+		return true // no control plane to check (standalone); serve as before
 	}
 	end := gate.begin()
 	adoption, err := func() (controlplane.Adoption, error) {
-		// defer, so the window closes even if the adoption panics — otherwise
-		// the node would answer 503 for the rest of its life.
+		// defer, so the window closes even if the check panics — otherwise the node
+		// would answer 503 for the rest of its life.
 		defer end()
-		return kit.AdoptOnLeadership(ctx, swap)
+		return kit.AdoptOnLeadership(ctx, st, mirrored)
 	}()
-
-	switch {
-	case err != nil:
-		log.Error().Err(err).Msg("control-plane adoption on leadership gain did not happen; continuing to serve the CURRENT database")
-		return
-	case !adoption.Adopted:
-		return
+	if err != nil {
+		log.Error().Err(err).Bool("mirrored", mirrored).
+			Msg("refusing leadership: this node has no cluster state to serve — the control loop is NOT starting (reads keep answering with the mirror's age; the next leadership transition retries)")
+		return false
 	}
-
+	if !adoption.Ready {
+		return false
+	}
 	log.Info().
-		Str("config", adoption.Config).
-		Str("revision", adoption.Revision.Format(time.RFC3339Nano)).
 		Str("reason", adoption.Reason).
-		Bool("key-adopted", adoption.KeyChanged).
-		Msg("control plane adopted on gaining leadership")
-	if !adoption.KeyChanged {
-		return
-	}
-	if cipher == nil {
-		log.Error().Msg("the adopted control plane brought a different encryption key but no cipher is loaded; credentials stay unreadable until the daemon restarts")
-		return
-	}
-	if err := cipher.Reload(cfg.EncryptionKeyPath()); err != nil {
-		log.Error().Err(err).Msg("could not load the encryption key adopted with the control plane; credentials stay unreadable until the daemon restarts")
-		return
-	}
-	log.Info().Msg("reloaded the encryption key adopted with the control plane")
+		Str("mirrored_leader", adoption.Leader).
+		Int64("mirrored_version", adoption.Version).
+		Dur("mirror_age", adoption.Age).
+		Bool("source", adoption.Source).
+		Bool("key_ok", adoption.KeyOK).
+		Msg("serving the mirrored store; this node is the cluster's writer")
+	return true
 }
 
-// EnsureControlPlaneFresh restores the control plane on promotion. Two
-// sources, newest-first:
+// ConfirmMirrorAtStartup says what this node's store is seeded with, at boot, before any
+// handle is opened for serving. It replaces the old startup control-plane restore: the
+// store is seeded by the MIRROR, so the only thing to do here is state what this node
+// holds — never to copy files into it (ADR 0005).
 //
-//  1. The Raft-replicated survivor kit (L2): the leader snapshots the data
-//     kit + encryption key into pmcluster_state_* Docker configs, replicated
-//     to every manager by Swarm itself — no host-to-host archive shipping.
-//     Restored when the local data.db is missing or older than the snapshot.
-//  2. The tarball archive fallback: pre-L2 clusters that only have
-//     pmcluster-ctlplane-*.tar.gz archives on /var/stack/backup.
-//
-// When the local DB is already at least as fresh as the newest snapshot (e.g.
-// shared/replicated storage such as LINSTOR keeps the data dir current on
-// every manager), no restore happens — restoring would clobber a live,
-// current database. Returns (restored bool, err).
-func EnsureControlPlaneFresh(ctx context.Context, cfg *config.Config, dc runtime.Client, log zerolog.Logger) (bool, error) {
-	kit := &controlplane.Kit{Docker: dc, DataDir: cfg.DataDir, Log: log}
-	restored, err := kit.Restore(ctx)
-	if err == nil {
-		return restored, nil // Raft config path handled it (restored, or DB current)
+// A manager with no store yet is not an error. It starts, serves /health, and waits for
+// the first snapshot; saying that plainly is the job, because a node that answers with
+// empty tables and no explanation is indistinguishable from one that lost its data.
+func ConfirmMirrorAtStartup(ctx context.Context, cfg *config.Config, log zerolog.Logger) {
+	if cfg == nil {
+		return
 	}
-	if !errors.Is(err, controlplane.ErrNoSnapshots) && !controlplane.IsSwarmUnavailable(err) {
-		return false, fmt.Errorf("control-plane Raft restore: %w", err)
+	if _, err := os.Stat(cfg.DBPath()); err != nil {
+		log.Info().Str("path", cfg.DBPath()).
+			Msg("no cluster state on this node yet: the store is seeded by the mirror — waiting for the first snapshot (nothing is copied onto this node any more)")
+		return
 	}
-	if controlplane.IsSwarmUnavailable(err) {
-		// The swarm has no Raft leader right now (quorum lost), so the
-		// replicated kit is unreadable. That is transient, not a
-		// control-plane failure — never fatal: fall through to the local
-		// tarball archive and, if there is none, keep serving with the local
-		// DB. Safe because the reconcile loop only starts once leadership is
-		// confirmed, so there is nothing to reconcile during the outage.
-		// Without this the daemon exits and systemd restart-loops it
-		// (seen live during a whole quorum outage).
-		log.Warn().Err(err).Msg("swarm unavailable; deferring control-plane restore")
+	st, err := store.OpenExisting(cfg.DBPath())
+	if err != nil {
+		log.Warn().Err(err).Msg("cannot read this node's cluster state at startup; it will be reported once the store opens")
+		return
 	}
+	defer func() { _ = st.Close() }()
 
-	// No state configs yet (pre-L2 cluster or standalone): fall back to the
-	// tarball archive path.
-	newest, err := backups.NewestControlPlaneArchive(controlPlaneArchiveDir)
-	if err != nil {
-		return false, fmt.Errorf("scan control-plane archives: %w", err)
-	}
-	if newest == "" {
-		log.Info().Msg("no control-plane archive found; keeping local data")
-		return false, nil
-	}
-	archInfo, err := os.Stat(newest)
-	if err != nil {
-		return false, fmt.Errorf("stat newest control-plane archive %s: %w", newest, err)
-	}
-	dbInfo, err := os.Stat(cfg.DBPath())
+	state, err := st.SyncState(ctx)
 	switch {
-	case err == nil:
-		// DB exists: restore only when it is OLDER than the newest archive.
-		// A DB at least as fresh as the archive is already current — the
-		// shared-storage (LINSTOR) case — and must not be overwritten.
-		if !dbInfo.ModTime().Before(archInfo.ModTime()) {
-			log.Info().Str("archive", newest).Msg("local control-plane DB is current (shared storage?); no restore needed")
-			return false, nil
-		}
-		log.Info().Str("archive", newest).Msg("local control-plane DB is older than the newest archive; restoring")
-	case !os.IsNotExist(err):
-		return false, fmt.Errorf("stat local data.db: %w", err)
+	case errors.Is(err, store.ErrNeverSynced):
+		log.Info().Msg("this node has never applied a snapshot — waiting for the first one from the leader")
+	case err != nil:
+		log.Warn().Err(err).Msg("cannot read this node's mirror state at startup")
 	default:
-		log.Info().Str("archive", newest).Msg("no local control-plane DB; restoring from newest archive")
+		// Same rule as every other age on this platform: a signal that keeps moving while
+		// the thing is healthy (checked_at moves on a 304 too), never when content last
+		// changed, and never a negative age from a clock that stepped backwards.
+		age := time.Since(time.Unix(state.CheckedAt, 0))
+		if age < 0 {
+			age = 0
+		}
+		log.Info().Str("leader", state.Leader).Int64("version", state.Version).
+			Dur("age", age.Truncate(time.Second)).
+			Msg("cluster state is mirrored from the leader")
 	}
-
-	n, err := backups.RestoreControlPlane(newest, cfg.DataDir)
-	if err != nil {
-		return false, fmt.Errorf("restore control plane from %s: %w", newest, err)
-	}
-	log.Info().Int("files", n).Str("archive", newest).Msg("control-plane data restored")
-	return true, nil
 }

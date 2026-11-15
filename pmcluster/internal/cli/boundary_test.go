@@ -127,7 +127,7 @@ func TestTheNodeRuntimeIsNotBackInTheCLI(t *testing.T) {
 		"WatchDockerOnce",
 		"PublishBackupPlan",
 		"AdoptOnLeadershipGain",
-		"EnsureControlPlaneFresh",
+		"ConfirmMirrorAtStartup",
 		"IsSwarmLeader",
 		"IsSwarmWorker",
 		"IsStandby",
