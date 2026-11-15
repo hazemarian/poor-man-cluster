@@ -36,10 +36,6 @@ var (
 // defaultStorageSpec is the spec `storage provision` builds when every flag is left at
 // its default. One definition, used by the command and by the convergence, so a
 // UI-driven promotion provisions exactly what a CLI run would have provisioned.
-func defaultStorageSpec() storage.Spec {
-	return storageSpecForVolumeRoot(storage.DefaultVolumeRoot)
-}
-
 // storageSpecForVolumeRoot builds the spec for a CONFIGURED volume root.
 //
 // The convergence used the stock root regardless of the setting, so a cluster that runs its
