@@ -791,11 +791,6 @@ func hostnameConstraint(c string) (string, bool) {
 	return strings.TrimSpace(parts[1]), true
 }
 
-// backupCoverageWindow is how stale an archive may be before a stack's data is
-// considered unprotected. The agent keeps 48 hours hour-by-hour, so a gap wider
-// than that means the pipeline stopped, not that the window was unlucky.
-const backupCoverageWindow = 48 * time.Hour
-
 // checkBackupCoverage answers "can this stack's data actually be recovered?".
 //
 // Two ways a stack holding a volume ends up with no recoverable copy, both of
