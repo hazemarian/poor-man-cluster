@@ -52,6 +52,17 @@ func effectiveVolumeRoot(v string) string {
 // hostname list (comma-separated, whitespace-trimmed). Kept in the cluster
 // package — importing stacks would create an import cycle (stacks imports
 // cluster).
+// appendStorageNode adds host to the comma-separated storage_nodes setting, leaving no
+// leading or doubled comma. The empty case is not hypothetical: it is every fresh install,
+// where the reconcile designates the leader into a setting nobody has written yet.
+func appendStorageNode(raw, host string) string {
+	parts := splitStorageNodes(raw)
+	if containsStorageNode(parts, host) {
+		return strings.Join(parts, ",")
+	}
+	return strings.Join(append(parts, host), ",")
+}
+
 func splitStorageNodes(raw string) []string {
 	var out []string
 	seen := map[string]bool{}

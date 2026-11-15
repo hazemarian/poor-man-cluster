@@ -813,10 +813,17 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// leader. Pinning platform services to the leader (the API host) keeps
 		// them on a node that can serve them. An operator-set value is left
 		// untouched.
+		//
+		// NOT an early return when the setting is empty. It used to be, and that quietly
+		// disabled the whole function on every cluster that never designated a storage node
+		// — which is every fresh install: the leader rule below (and the label stamping that
+		// makes `doctor`'s backup-coverage check agree) sat AFTER the return and never ran.
+		// Measured on wafaa: one manager, hourly verified backups, `storage_nodes` empty,
+		// no `pmcluster.storage` label, and a failing coverage check that read like
+		// "your data is not backed up" while it was. An empty setting means "nothing
+		// designated yet", not "designation disabled" — the prune and adoption passes below
+		// are all no-ops on an empty value, so falling through is safe.
 		raw := deps.Store.SettingDefault(ctx, SettingStorageNodes(), "")
-		if raw == "" {
-			return nil
-		}
 		// A storage node must be a MANAGER. Only a manager can read the control
 		// plane — settings, credentials, the stack list — and the backup agent on a
 		// worker cannot even ship (measured: its policy file carries no S3
@@ -845,7 +852,10 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			}
 		}
 		if leaderHost != "" && !containsStorageNode(splitStorageNodes(raw), leaderHost) {
-			raw = raw + "," + leaderHost
+			// appendStorageNode, not raw+","+host: the empty case is the common one (a fresh
+			// install), and it used to persist ",idlib-wafaa" — a leading comma in a setting
+			// the console shows verbatim.
+			raw = appendStorageNode(raw, leaderHost)
 			if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), raw); err != nil {
 				return fmt.Errorf("persist storage_nodes: %w", err)
 			}
@@ -883,7 +893,7 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 					n.Hostname, runtime.StorageNodeLabel, n.Hostname)
 				continue
 			}
-			raw = raw + "," + n.Hostname
+			raw = appendStorageNode(raw, n.Hostname)
 			if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), raw); err != nil {
 				return fmt.Errorf("persist storage_nodes: %w", err)
 			}

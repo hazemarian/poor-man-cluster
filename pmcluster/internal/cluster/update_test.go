@@ -1104,6 +1104,49 @@ func TestUpdate_ForceRedeploysAllStacks(t *testing.T) {
 	}
 }
 
+// TestUpdate_LeaderBecomesAStorageNodeWhenNoneIsSet is the wafaa case: one manager, hourly
+// verified backups, `storage_nodes` never set — so nobody was designated, `doctor` failed the
+// backup-coverage check with "not a storage node", and the check was right about the flag
+// while the data was in fact backed up.
+//
+// The reconcile documents "the leader MUST be a storage node" and implements it thirty lines
+// below an `if raw == "" { return nil }`. Every fresh install starts empty, so that return
+// silently disabled the invariant — and the label stamping that makes the coverage check
+// agree — on exactly the clusters that had never configured anything.
+func TestUpdate_LeaderBecomesAStorageNodeWhenNoneIsSet(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if got := deps.Store.SettingDefault(ctx, SettingStorageNodes(), ""); got != "" {
+		t.Fatalf("precondition: storage_nodes = %q, want empty", got)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "idlib-wafaa", ID: "n1", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
+			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
+	}
+	var out bytes.Buffer
+	deps.Stdout = &out
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got := deps.Store.SettingDefault(ctx, SettingStorageNodes(), "")
+	if got != "idlib-wafaa" {
+		t.Fatalf("storage_nodes = %q, want the leader designated — an empty setting means \"nothing designated yet\", not \"designation disabled\" (output:\n%s)", got, out.String())
+	}
+	labelled := false
+	for _, l := range f.nodeLabels {
+		if l == runtime.StorageNodeLabel+"=true" {
+			labelled = true
+		}
+	}
+	if !labelled {
+		t.Fatalf("the leader was not labelled %s=true, so the coverage check still calls it a non-storage node: %v (output:\n%s)",
+			runtime.StorageNodeLabel, f.nodeLabels, out.String())
+	}
+}
+
 // TestUpdate_StorageSetSurvivesLeadershipChange is the regression for the
 // incident: leadership moved from nxt-sw-4-m to nxt-sw-5-m and the apply
 // rewrote storage_nodes (removing the former leader, adding the new one), which
