@@ -14,9 +14,11 @@
 #   PMCLUSTER_NODES=10.0.0.1,10.0.0.2 hack/upgrade-nodes.sh v0.2.203
 #
 # Hosts are ordered workers -> follower managers -> leader LAST. With an
-# explicit --hosts/PMCLUSTER_NODES list the *membership* comes from that list, but the
-# ORDER is still derived from the swarm's roles (falling back to the stated order if
-# the swarm cannot be asked), so you cannot accidentally restart the leader first.
+# explicit --hosts/PMCLUSTER_NODES list the *membership* comes from that list, but
+# the ORDER comes from asking each node what it is — the swarm's own node list
+# answers with INTERNAL addresses, which is why matching the list against it
+# silently degraded to "whatever order you typed". A run that cannot identify a
+# leader refuses rather than guessing; --assume-order proceeds anyway.
 #
 # Original note:
 # the leader is
@@ -29,8 +31,9 @@
 set -euo pipefail
 
 REPO="hazemarian/poor-man-cluster"
+ASSUME_ORDER=0
 VERSION="${1:-}"
-[ -n "$VERSION" ] || { echo "usage: $0 <version> [--hosts ip,ip,ip] [--key path]" >&2; exit 2; }
+[ -n "$VERSION" ] || { echo "usage: $0 <version> [--hosts ip,ip,ip] [--key path] [--assume-order]" >&2; exit 2; }
 shift || true
 
 HOSTS="${PMCLUSTER_NODES:-}"     # optional; discovered from the swarm when empty
@@ -40,6 +43,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --hosts) HOSTS="$2"; shift 2 ;;
     --key)   KEY="$2";   shift 2 ;;
+    --assume-order) ASSUME_ORDER=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -68,23 +72,25 @@ swarm_roles() {
   ' 2>/dev/null
 }
 
-# Restart order: workers, then follower managers, leader LAST — so the swarm
-# keeps a manager throughout and never loses its leader mid-upgrade. Given an
-# explicit host list, sort the IDS IT NAMED by the roles discovered above,
-# keeping each node's stated position as the tie-break; a name with no matching
-# role (unreachable, or the swarm answered for a different set) is treated as a
-# plain worker and kept, never dropped.
-order_explicit_hosts() {
-  # $1: comma-separated IPs ; stdin: "ip|role|leader" lines
-  awk -v list="$1" -F'|' '
-    { prio[$1] = ($3=="true" ? 3 : ($2=="manager" ? 2 : 1)) }
-    END {
-      n = split(list, a, ",")
-      for (i = 1; i <= n; i++) {
-        p = (a[i] in prio) ? prio[a[i]] : 1
-        printf "%d\t%d\t%s\n", p, i, a[i]
-      }
-    }' | sort -k1,1n -k2,2n | cut -f3 | paste -sd, -
+# Ask ONE HOST what it is, over the same ssh channel the copy below uses.
+# Prints "role|leader": "manager|true", "manager|false", "worker|", or "" when the
+# host could not be asked at all.
+#
+# WHY PER HOST, not "match the list against the swarm":
+#   the swarm answers docker node inspect with INTERNAL addresses (10.7.224.x on an
+#   overlay deployment), while the list you pass carries the PUBLIC ones you can ssh
+#   to. The old code sorted the given names by matching them against those internal
+#   addresses, so on that topology NOTHING matched, every host fell through to
+#   "plain worker", and the restart order silently became whatever order you typed —
+#   the one case where "leader last" was not guaranteed was also the only case that
+#   printed nothing. Identity from the node itself needs no address to match.
+host_identity() {
+  ssh "${SSHOPT[@]}" "$SSHUSER@$1" '
+    if ! command -v docker >/dev/null 2>&1; then echo "nodocker|"; exit 0; fi
+    # docker node inspect self is manager-only: on a worker it fails, and failing is
+    # the answer (a worker has no ManagerStatus to report).
+    docker node inspect self --format "{{.Spec.Role}}|{{.ManagerStatus.Leader}}" 2>/dev/null || echo "worker|"
+  ' 2>/dev/null
 }
 
 if [ -z "$HOSTS" ]; then
@@ -113,17 +119,52 @@ if [ -z "$HOSTS" ]; then
     echo "    order from the swarm, so you do not have to sort them yourself." >&2
   fi
 else
-  # An explicit list wins for *which* nodes to touch. Its ORDER is still derived
-  # from the swarm when a seed answers, because "leader last" is a safety
-  # property, not a preference — but a failure here is not fatal: the list was
-  # given deliberately, so fall back to the stated order rather than aborting.
-  SEED="${PMCLUSTER_SEED:-${HOSTS%%,*}}"
-  if ROLES=$(swarm_roles "$SEED") && [ -n "$ROLES" ]; then
-    ORDERED=$(printf '%s\n' "$ROLES" | order_explicit_hosts "$HOSTS")
-    [ "$ORDERED" = "$HOSTS" ] || echo "  reordered by discovered role: $ORDERED"
-    HOSTS="$ORDERED"
-  else
-    echo "  ⚠ could not read roles via $SEED — using the given order as-is" >&2
+  # An explicit list wins for WHICH nodes to touch. Its ORDER comes from each node
+  # saying what it is, because "leader last" is a safety property, not a preference:
+  # the reconcile at the end runs on the last host, and a leader restarted first
+  # leaves every later node unable to reconcile (and the swarm briefly leaderless).
+  echo "▶ reading each node's role (workers → follower managers → leader last)"
+  PROBED=""
+  UNKNOWN=""
+  LEADER_LAST=""
+  idx=0
+  for ip in $(printf '%s' "$HOSTS" | tr ',' ' '); do
+    idx=$((idx + 1))
+    # Not "ident=$(…)" alone: ssh exits 255 on an unreachable or banned host, and
+    # under `set -e` that aborted the run BEFORE a single node was touched, with no
+    # message. A host that cannot be asked is exactly what UNKNOWN is for.
+    ident=$(host_identity "$ip") || ident=""
+    role=${ident%%|*}
+    lead=${ident##*|}
+    case "$role" in
+      manager) if [ "$lead" = "true" ]; then prio=3; LEADER_LAST="$ip"; else prio=2; fi ;;
+      worker)  prio=1 ;;
+      *)       prio=1; UNKNOWN="$UNKNOWN $ip" ;;
+    esac
+    PROBED="$PROBED$prio|$idx|$ip
+"
+  done
+  # prio, then the order you typed as the tie-break — so a fleet of workers keeps
+  # its stated order and the leader is hoisted to the back.
+  HOSTS=$(printf '%s' "$PROBED" | sort -t'|' -k1,1n -k2,2n | cut -d'|' -f3 | paste -sd, -)
+  echo "  order:  $HOSTS"
+  if [ -n "$UNKNOWN" ]; then
+    # A swarm has ONE leader, so if another host claimed it, an unaskable host is
+    # not the leader and its position cannot cost the run. Say which case it is
+    # instead of warning about a danger that does not exist.
+    if [ -n "$LEADER_LAST" ]; then
+      echo "  ⚠ could not ask:$UNKNOWN — treated as workers; the leader ($LEADER_LAST) is last regardless." >&2
+    else
+      echo "  ⚠ could not ask:$UNKNOWN — treated as workers, kept in the order given." >&2
+    fi
+  fi
+  if [ -z "$LEADER_LAST" ] && [ "${ASSUME_ORDER:-0}" != "1" ]; then
+    echo "  ✖ no host identified itself as the swarm leader, so \"leader last\" cannot be" >&2
+    echo "    guaranteed — that is the one ordering that must not be guessed. Every host" >&2
+    echo "    was asked; the ones that did not answer are named above." >&2
+    echo "    Re-run with --assume-order to upgrade anyway: the roles that WERE read still" >&2
+    echo "    order the run, and the hosts that could not be asked keep the order you gave." >&2
+    exit 1
   fi
 fi
 
