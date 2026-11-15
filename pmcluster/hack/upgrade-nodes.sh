@@ -86,10 +86,20 @@ swarm_roles() {
 #   printed nothing. Identity from the node itself needs no address to match.
 host_identity() {
   ssh "${SSHOPT[@]}" "$SSHUSER@$1" '
-    if ! command -v docker >/dev/null 2>&1; then echo "nodocker|"; exit 0; fi
-    # docker node inspect self is manager-only: on a worker it fails, and failing is
-    # the answer (a worker has no ManagerStatus to report).
-    docker node inspect self --format "{{.Spec.Role}}|{{.ManagerStatus.Leader}}" 2>/dev/null || echo "worker|"
+    # Written out TWICE rather than via a $SUDO variable: the remote LOGIN SHELL is
+    # whatever the user runs, and zsh does not word-split an unquoted variable, and
+    # "$SUDO docker" becomes `command not found: sudo -n docker` there — the same
+    # trap the install block below already documents. wafaa logs in as a plain user
+    # with passwordless sudo, so the sudo branch is the one that actually runs there.
+    if command -v docker >/dev/null 2>&1; then
+      out=$(docker node inspect self --format "{{.Spec.Role}}|{{.ManagerStatus.Leader}}" 2>/dev/null) && { echo "$out"; exit 0; }
+    fi
+    if command -v docker >/dev/null 2>&1 || command -v sudo >/dev/null 2>&1; then
+      out=$(sudo -n docker node inspect self --format "{{.Spec.Role}}|{{.ManagerStatus.Leader}}" 2>/dev/null) && { echo "$out"; exit 0; }
+    fi
+    # docker node inspect self is manager-only: on a worker both branches fail, and
+    # failing IS the answer — a worker has no ManagerStatus to report.
+    if command -v docker >/dev/null 2>&1 || command -v sudo >/dev/null 2>&1; then echo "worker|"; else echo "nodocker|"; fi
   ' 2>/dev/null
 }
 
