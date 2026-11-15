@@ -23,7 +23,12 @@ import (
 // It records every (stackName, composeYAML) call and returns configurable
 // errors for deploy and remove independently.
 type recordingDeployer struct {
-	mu           sync.Mutex
+	mu sync.Mutex
+	// block, when non-nil, PARKS the apply until it is closed. It is how a test
+	// proves the caller did not wait for the apply: with the apply pinned open, the
+	// only way DeployAsync can return is by not waiting for it. A sleep plus a
+	// stopwatch could not tell the difference without measuring the machine.
+	block        chan struct{}
 	calls        []deployCall
 	noPruneCalls []deployCall
 	pruned       []string
@@ -37,7 +42,19 @@ type deployCall struct {
 	yaml []byte
 }
 
-func (r *recordingDeployer) DeployStack(_ context.Context, name string, composeYAML []byte) error {
+func (r *recordingDeployer) DeployStack(ctx context.Context, name string, composeYAML []byte) error {
+	// The park is OUTSIDE the mutex on purpose: a test asserting on callCount() or
+	// callNameAt() while the apply is held must not block on the deployer's own lock.
+	r.mu.Lock()
+	block := r.block
+	r.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, deployCall{name: name, yaml: composeYAML})
@@ -1073,22 +1090,42 @@ func TestDeploy_NoDepsUsesFullDeploy(t *testing.T) {
 // after.
 func TestDeployAsync_ReturnsEarlyAndAppliesInBackground(t *testing.T) {
 	s := openTestStore(t)
-	dep := &recordingDeployer{}
+	// The apply is parked, so the ONLY way DeployAsync can return is by not waiting
+	// for it. The old version slept in the fake and asserted "returned in < 1s",
+	// which measured the runner: a descheduling event between the call and the
+	// return failed a test whose subject had behaved correctly.
+	dep := &recordingDeployer{block: make(chan struct{})}
 	svc := newService(s, dep)
 	ctx := context.Background()
 
-	start := time.Now()
-	res, err := svc.DeployAsync(ctx, Payload{Manifest: donationCampaignManifest})
-	if err != nil {
-		t.Fatalf("DeployAsync: %v", err)
+	type outcome struct {
+		res *Result
+		err error
 	}
-	if res == nil || res.StackName != "donation-campaign" || res.Revision == 0 {
-		t.Fatalf("DeployAsync result = %+v, want stack donation-campaign + revision", res)
+	returned := make(chan outcome, 1)
+	go func() {
+		res, err := svc.DeployAsync(ctx, Payload{Manifest: donationCampaignManifest})
+		returned <- outcome{res, err}
+	}()
+
+	var got outcome
+	select {
+	case got = <-returned:
+	case <-time.After(5 * time.Second):
+		// A deadlock detector, not a performance budget: the apply is parked, so a
+		// synchronous DeployAsync never returns and this names why.
+		t.Fatal("DeployAsync did not return while the apply was parked — the apply is not backgrounded")
 	}
-	// The apply is backgrounded — give it a bounded moment to reach the
-	// deployer, then confirm it did apply.
-	// Generous on purpose: this asserts the background apply happened, not how
-	// fast it happened. 2s flaked on loaded CI runners.
+	if got.err != nil {
+		t.Fatalf("DeployAsync: %v", got.err)
+	}
+	if got.res == nil || got.res.StackName != "donation-campaign" || got.res.Revision == 0 {
+		t.Fatalf("DeployAsync result = %+v, want stack donation-campaign + revision", got.res)
+	}
+
+	// Release the apply and confirm it lands. Bounded, because this asserts THAT it
+	// happened, not how fast.
+	close(dep.block)
 	deadline := time.Now().Add(20 * time.Second)
 	for dep.callCount() == 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -1098,9 +1135,6 @@ func TestDeployAsync_ReturnsEarlyAndAppliesInBackground(t *testing.T) {
 	}
 	if dep.callNameAt(0) != "donation-campaign" {
 		t.Errorf("applied stack = %q, want donation-campaign", dep.callNameAt(0))
-	}
-	if time.Since(start) > time.Second {
-		t.Errorf("DeployAsync returned in %s — want immediate return while the apply is backgrounded", time.Since(start))
 	}
 }
 

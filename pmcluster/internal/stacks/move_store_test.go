@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 )
@@ -184,13 +183,22 @@ func fakeDockerOnPath(t *testing.T, script string) {
 // `docker service create` that never returns must not stall the move once the
 // service exists.
 func TestStartMoverService_HangingCreateIsTolerated(t *testing.T) {
-	fakeDockerOnPath(t, "#!/bin/sh\nif [ \"$1\" = service ] && [ \"$2\" = inspect ]; then exit 0; fi\nif [ \"$1\" = service ] && [ \"$2\" = create ]; then sleep 5; exit 0; fi\nexit 0\n")
-	start := time.Now()
+	// The create touches this marker when it FINISHES, so the assertion is causal —
+	// "was the create still running when we returned?" — instead of a stopwatch
+	// racing the fake's own 5 s sleep. The old form allowed 5 s against a 5 s sleep,
+	// so a loaded runner could fail it while the code behaved exactly as designed.
+	marker := filepath.Join(t.TempDir(), "create-finished")
+	t.Setenv("PMC_TEST_CREATE_MARKER", marker)
+	fakeDockerOnPath(t, "#!/bin/sh\n"+
+		"if [ \"$1\" = service ] && [ \"$2\" = inspect ]; then exit 0; fi\n"+
+		"if [ \"$1\" = service ] && [ \"$2\" = create ]; then sleep 5; : > \"$PMC_TEST_CREATE_MARKER\"; exit 0; fi\n"+
+		"exit 0\n")
+
 	if err := startMoverService(context.Background(), []string{"service", "create", "--name", "pmcluster-move-x-abc", "rclone/rclone:latest"}, "pmcluster-move-x-abc"); err != nil {
 		t.Fatalf("a hanging create must be tolerated once the service exists: %v", err)
 	}
-	if d := time.Since(start); d > 5*time.Second {
-		t.Fatalf("startMoverService took %v, want a fast return", d)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("startMoverService returned only after `service create` had finished: a hanging create must be tolerated, not awaited")
 	}
 }
 

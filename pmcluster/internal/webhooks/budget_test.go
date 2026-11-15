@@ -22,13 +22,25 @@ import (
 
 // slowDeployer answers only after the request has almost certainly given up: the
 // shape of a deploy phase that outlives the caller.
-type slowDeployer struct{ delay time.Duration }
+// done closes when DeployAsync returns, so a test can ask the CAUSAL question —
+// "had the phase finished when the 202 arrived?" — instead of putting a stopwatch
+// on it. A 200ms budget for a 300ms phase is a 100ms margin, and a descheduling
+// event on a busy runner eats it.
+type slowDeployer struct {
+	delay time.Duration
+	done  chan struct{}
+}
 
 func (s slowDeployer) Deploy(ctx context.Context, p stacks.Payload) (*stacks.Result, error) {
 	return nil, context.DeadlineExceeded
 }
 
 func (s slowDeployer) DeployAsync(_ context.Context, p stacks.Payload) (*stacks.Result, error) {
+	defer func() {
+		if s.done != nil {
+			close(s.done)
+		}
+	}()
 	time.Sleep(s.delay)
 	return &stacks.Result{StackName: "slow-stack", Revision: 42}, nil
 }
@@ -62,9 +74,10 @@ func TestResponseBudgetAnswersBeforeTheIngressCutsTheRequest(t *testing.T) {
 	secret := []byte(plain)
 
 	rec := NewLocal(st, c)
+	phaseDone := make(chan struct{})
 	h := &Receiver{
 		Sources:    NewLocal(st, c),
-		Deploy:     slowDeployer{delay: 300 * time.Millisecond},
+		Deploy:     slowDeployer{delay: 300 * time.Millisecond, done: phaseDone},
 		Record:     rec,
 		RetryDelay: time.Millisecond,
 	}
@@ -88,20 +101,24 @@ func TestResponseBudgetAnswersBeforeTheIngressCutsTheRequest(t *testing.T) {
 	req.Header.Set("X-Pmcluster-Timestamp", strconv.FormatInt(now, 10))
 	req.Header.Set("X-Pmcluster-Signature", computeHMAC(secret, body, now))
 
-	start := time.Now()
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST: %v", err)
 	}
 	defer resp.Body.Close()
 	payload, _ := io.ReadAll(resp.Body)
-	elapsed := time.Since(start)
 
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202; body: %s", resp.StatusCode, payload)
 	}
-	if elapsed > 200*time.Millisecond {
-		t.Fatalf("response took %s — it waited for the deploy phase instead of the budget", elapsed)
+	// The property is "the answer did not wait for the deploy phase", and the phase
+	// is a 300ms sleep in the fake. Asking whether it had already FINISHED when the
+	// response landed is the causal question; the 200ms budget it replaces was a
+	// proxy that measured the runner.
+	select {
+	case <-phaseDone:
+		t.Fatal("the 202 arrived after the deploy phase had already finished: the response waited for it")
+	default:
 	}
 	if !strings.Contains(string(payload), `"pending":true`) {
 		t.Fatalf("body = %s, want pending:true", payload)

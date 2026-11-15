@@ -11,11 +11,14 @@ import (
 )
 
 // overlapSource records how many Logs calls are inside the fake at once, so a
-// sequential implementation fails the test instead of merely being slower.
+// sequential implementation fails the test instead of merely being slower — and
+// counts WAVES (a call that starts while nothing else is in flight opens one), so
+// "two queries issued together" is asserted structurally instead of by a stopwatch.
 type overlapSource struct {
 	mu       sync.Mutex
 	inFlight int
 	peak     int
+	waves    int
 	delay    time.Duration
 	results  map[string]observability.Result
 	failOn   string
@@ -23,6 +26,9 @@ type overlapSource struct {
 
 func (s *overlapSource) Logs(_ context.Context, q observability.LogQuery) (observability.Result, error) {
 	s.mu.Lock()
+	if s.inFlight == 0 {
+		s.waves++
+	}
 	s.inFlight++
 	if s.inFlight > s.peak {
 		s.peak = s.inFlight
@@ -57,9 +63,7 @@ func TestRecentForInvestigationOverlapsItsTwoQueries(t *testing.T) {
 		},
 	}
 
-	start := time.Now()
 	merged, err := recentForInvestigation(context.Background(), src, "svc", observability.Window{})
-	elapsed := time.Since(start)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -67,9 +71,11 @@ func TestRecentForInvestigationOverlapsItsTwoQueries(t *testing.T) {
 	if src.peak != 2 {
 		t.Fatalf("peak concurrent calls = %d, want 2 (queries ran sequentially)", src.peak)
 	}
-	// Two 60ms calls overlapped must finish well inside two sequential calls.
-	if elapsed > 100*time.Millisecond {
-		t.Fatalf("elapsed %v looks sequential (2 x %v)", elapsed, src.delay)
+	// The 100ms budget that used to stand here measured the machine: on a loaded CI
+	// runner two correctly-overlapped 60ms calls can take longer than two sequential
+	// ones on an idle one. The wave count states the same property and cannot flake.
+	if src.waves != 1 {
+		t.Fatalf("the two queries arrived in %d waves, want 1: they are issued one after another", src.waves)
 	}
 	// Order is unchanged: the error rows come first, then any-level.
 	if len(merged.Rows) != 2 || merged.Rows[0]["body"] != "boom" || merged.Rows[1]["body"] != "fine" {
