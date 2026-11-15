@@ -27,14 +27,14 @@ import (
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
-	Short: "Check this platform's health: quorum, kit restore, secrets, drills, offsite, disk",
+	Short: "Check this platform's health: quorum, the cluster mirror, secrets, drills, offsite, disk",
 	Long: `Answers "is this platform healthy right now?" from measurements rather than
 assumptions, one line per check:
 
   swarm              manager readiness, and whether quorum survives another loss
   version skew       which managers run a different pmcluster binary
-  control-plane kit  does the newest Raft snapshot actually RESTORE — extracted
-                     into a temp dir, opened, and its secrets decrypted
+  cluster mirror verify  what THIS node would promote on: the version applied, how
+                     old the last answer is, the rows per table, and a key present
   secrets            does every stored secret decrypt with the current key
   github app         can the cluster mint an installation token, and does it grant what it needs
   github runners     are the self-hosted runners registered, running, and permitted
@@ -50,23 +50,27 @@ command answers the NODE-LOCAL subset instead:
   socket proxy       is the filtered docker socket present
   runner assignment  when this node last read its runner assignment, and from where
   local runner       this node's runner container, and the docker exposure it has
-  cluster mirror     the leader's settings/secrets/users as THIS node holds them,
-                     with the leader's name and how old the copy is
+  cluster mirror     the cluster state as THIS node mirrors it, with the leader's
+                     name and how old the last answer is
   disk               headroom on the volume root
 
-The mirror line is the answer to "are my cluster settings current here?", and it
-carries its age on purpose: a mirror that has not been refreshed since the leader
-died is reported as stale (a warning naming the leader), never as current and
+The mirror line is the answer to "is the state this node would promote on current?",
+and it carries its age on purpose: a mirror that has not been refreshed since the
+leader died is reported as stale (a warning naming the leader), never as current and
 never as blank.
 
-Every cluster question it cannot answer is printed as a skipped line with the
-reason — secret DECRYPTION (the cipher key is provisioned at join, not carried by
-the snapshot), stacks and their revisions, the last apply, and the kit drill — so
-the report is never mistaken for a clean bill of health.
+On the LEADER the report also carries "cluster mirror verify" — the check the
+control-plane kit drill used to be, pointed at the mirror: version applied, age of
+the last successful answer, the rows every table carries, and whether a key is
+present. That is the proof that a promotion would work, and it exists on every node
+rather than only where the old kit happened to be published.
+
+Every cluster question a non-leader cannot answer is printed as a skipped line with
+the reason, so the report is never mistaken for a clean bill of health.
 
 Exit status is non-zero when any check fails, so it can gate a deploy or run
-from cron. Nothing here writes: the kit drill extracts to a temporary
-directory, the offsite check only lists, and the rest are reads.`,
+from cron. Nothing here writes: "cluster mirror verify" only reads, the offsite
+check only lists, and the rest are reads.`,
 	Args: cobra.NoArgs,
 	RunE: runDoctor,
 }

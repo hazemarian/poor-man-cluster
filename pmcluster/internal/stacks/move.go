@@ -69,10 +69,11 @@ func (s *Service) MoveWithOptions(ctx context.Context, stackName, targetNode str
 		return fmt.Errorf("move: list revisions: %w", err)
 	}
 	if len(revs) == 0 {
-		// The stack row survived a slim control-plane kit but its revision did
-		// not (see controlplane). A move restores the stack from its latest
-		// rendered compose, so without a revision there is nothing to move
-		// until it is re-deployed — say that instead of "not found".
+		// The stack row came across but its revision did not — a mirror that
+		// predates the revision, or a stack deployed after the last poll. A move
+		// restores the stack from its latest rendered compose, so without a revision
+		// there is nothing to move until it is re-deployed — say that instead of
+		// "not found".
 		return fmt.Errorf("move: stack %q has no stored revision on this node — deploy it from its repository before moving it: %w", stackName, store.ErrRevisionNotFound)
 	}
 	latest := revs[0]

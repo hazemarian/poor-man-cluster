@@ -70,6 +70,43 @@ copied, the Docker-config path has no remaining job:
    mirror verify` problem), never a second way to end up with no leader. The join-time key
    route replaces this in a separate step.
 
+## What is retired with it
+
+- **`internal/controlplane` keeps only the key.** `kitdb.go` (the export), the staging and
+  promote path, `Restore`, `Verify`, the mtime walk and the tarball packer are deleted. What
+  remains is `PublishKey` / `KeyLoop` (the key config, still published because the join-time
+  route does not exist yet) and the adoption check that reads it.
+- **`pmcluster_state_<ts>` is never written again.** Nothing reads it: a promoted manager
+  serves the store it mirrored, so there is no file to restore. `serve` publishes the key
+  config on promotion and on its 5-minute loop, and nothing else.
+- **The control-plane backup path is deleted.** The `control-plane-backup` service
+  (`offen/docker-volume-backup`, pinned to the leader, archiving `~/.pmcluster` daily) is
+  removed from the backup stack, together with `backups.NewestControlPlaneArchive`,
+  `backups.RestoreControlPlane`, `backups.PruneControlPlaneArchives` and their callers in the
+  backup agent and the store prune. **Backups are service volumes only.** The refusal that
+  keeps a stray `backup/pmcluster` archive out of a volume restore stays — it guards against
+  leftovers on disk, and it costs one tar header read.
+- **The drill moves, it does not disappear.** `pmcluster cluster kit verify` becomes
+  `pmcluster cluster mirror verify`, the `doctor` line `control-plane kit` becomes
+  `cluster mirror verify`, and the weekly systemd drill step runs the new command. It reports
+  the version applied here, the age of the last successful answer, the rows every table
+  carries, and whether a key is present — the same "would a promotion work" question, asked
+  of the thing that now decides it. A stale mirror is a WARNING (serving it is accepted); no
+  snapshot and no key are the failures.
+- **`store.Export` / `CopyPlan` stay in the store package.** They are not the kit; the tarball
+  and offsite backup path uses the same export helper, and deleting it would take that path
+  with it.
+
+## What deliberately did not change
+
+- **The DSL secret/config mirror** (`internal/cluster/secrets.go`) and the content-addressed
+  swarm objects: a different mechanism, load-bearing, untouched.
+- **Service volume backups**: the hourly node agent, the artifacts, retention, the drill and
+  the offsite re-read.
+- **The encryption key's handling.** It is still a file provisioned by `init`/`join`, still
+  compared against its config on a leadership gain, and still never shared with the
+  ciphertext it unlocks. Moving it is the next decision.
+
 ## Consequences
 
 - **A promotion is instant and cannot fail on I/O.** There is no rename, no extraction, no

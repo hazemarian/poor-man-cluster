@@ -3,11 +3,7 @@
 package e2e
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"context"
-	"io"
 	"os"
 	"os/exec"
 	"sort"
@@ -17,20 +13,22 @@ import (
 	"time"
 )
 
-// TestControlPlaneSnapshotE2E proves L2 (control-plane survivor kit →
-// Raft-replicated Docker configs) on a real swarm:
+// TestControlPlaneKeyConfigE2E proves the LAST piece of the Docker-config channel
+// (ADR 0005): the leader publishes the encryption KEY as its own Raft-replicated config,
+// and publishes NO data kit at all — the mirror carries the cluster state now, and
+// adoption copies nothing.
 //
-//  1. a serving leader snapshots pmcluster_state_* and pmcluster_state_key_*
-//     Docker configs into the swarm (both families present);
-//  2. the security split holds on live data: the state config carries
-//     data.db but NEVER the .encryption_key bytes; the key config carries
-//     exactly the 32-byte AES-GCM key and nothing else;
-//  3. a store mutation is captured within one snapshot interval (a NEWER
-//     state config name appears);
-//  4. prune keeps at most 2 snapshots per family.
+// It asserts:
+//
+//  1. a `pmcluster.kind=state-key` config appears, carrying exactly the 32-byte AES-GCM
+//     key and nothing else;
+//  2. NO `pmcluster.kind=state` config is ever created (the retired data kit), polled for
+//     several publish intervals rather than asserted once;
+//  3. prune keeps at most 2 key configs.
 //
 // Swarm-gated (PMCLUSTER_E2E_SWARM=1), mirroring TestControlLoopE2E's harness.
-func TestControlPlaneSnapshotE2E(t *testing.T) {
+
+func TestControlPlaneKeyConfigE2E(t *testing.T) {
 	requireSwarm(t)
 	requireDockerDaemon(t)
 
@@ -43,7 +41,7 @@ func TestControlPlaneSnapshotE2E(t *testing.T) {
 	runCmd(t, homeDir, "init")
 	// Keep the auto-started daemon (started by cluster up) loop-free so it
 	// cannot race this test; the dedicated serve subprocess below is the only
-	// snapshot-loop runner with a short interval.
+	// publish-loop runner with a short interval.
 	setReconcileInterval(t, homeDir, "0")
 	// Hermetic storage root: `cluster up` otherwise hardcodes the
 	// root-owned /var/stack/{data,backup}, which a non-root dev host (macOS)
@@ -69,7 +67,7 @@ func TestControlPlaneSnapshotE2E(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		t.Log("TestControlPlaneSnapshotE2E: running cluster down --yes --purge (cleanup)")
+		t.Log("TestControlPlaneKeyConfigE2E: running cluster down --yes --purge (cleanup)")
 		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cleanCancel()
 		if out, errOut, code := runCmdCtx(t, cleanCtx, homeDir, "cluster", "down", "--yes", "--purge"); code != 0 {
@@ -77,7 +75,7 @@ func TestControlPlaneSnapshotE2E(t *testing.T) {
 		}
 	})
 
-	// Dedicated daemon with a 1-second snapshot loop so the assertions below
+	// Dedicated daemon with a 1-second publish loop so the assertions below
 	// converge in seconds instead of the 5-minute production default.
 	addr := freePort(t)
 	daemon := exec.Command(binaryPath, "serve")
@@ -106,70 +104,31 @@ func TestControlPlaneSnapshotE2E(t *testing.T) {
 	})
 	waitHealthy(t, addr, daemon, 20*time.Second)
 
-	// (1) Both config families appear within the timeout.
-	stateName := waitConfigKind(t, ctx, "state", 30*time.Second)
+	// (1) The key config appears, and carries exactly the key.
 	keyName := waitConfigKind(t, ctx, "state-key", 30*time.Second)
-	t.Logf("snapshot configs present: %s, %s", stateName, keyName)
-
-	// (2) Security split on live data. The state payload is a gzipped tar;
-	// entry names are the real security boundary (rendered stack YAML inside
-	// the kit may legally MENTION the key path in comments, so a byte search
-	// for the string would be a false positive). Assert instead: the tar has
-	// no .encryption_key entry, and the raw 32-byte key material never rides
-	// in the state payload. The key config is exactly those 32 bytes.
-	stateData := gunzipConfigData(t, ctx, stateName)
-	names := map[string]bool{}
-	foundDB := false
-	tr := tar.NewReader(bytes.NewReader(stateData))
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			t.Fatalf("read tar entries from state config %s: %v", stateName, err)
-		}
-		names[hdr.Name] = true
-		if hdr.Name == "data.db" {
-			foundDB = true
-		}
-	}
-	if !foundDB {
-		t.Fatalf("state config %s has no data.db entry; entries: %v", stateName, names)
-	}
-	if names[".encryption_key"] {
-		t.Fatalf("security split violated: state config %s contains a .encryption_key entry", stateName)
-	}
 	keyData := dockerConfigData(t, ctx, keyName)
 	if len(keyData) != 32 {
 		t.Fatalf("key config %s data is %d bytes, want 32 (AES-GCM key)", keyName, len(keyData))
 	}
-	if bytes.Contains(stateData, []byte(keyData)) {
-		t.Fatalf("security split violated: state config %s embeds the raw encryption key bytes", stateName)
-	}
-	t.Log("security split verified: the 32-byte key lives only in its own config")
+	t.Logf("key config present: %s (%d bytes)", keyName, len(keyData))
 
-	// (3) A store mutation is captured within one snapshot interval (a newer
-	// state config name appears; the suffix is unixnano, so the greatest name
-	// is the newest snapshot).
-	if out, errOut, code := runCmd(t, homeDir, "config", "create", "snap_check", "--scope", "cluster", "--value", "hello"); code != 0 {
-		t.Fatalf("config create exited %d:\n%s\n%s", code, out, errOut)
+	// (2) The data kit is retired: no `state` config may ever appear, across several
+	// publish intervals. One assertion at t=0 would pass on a daemon that simply had not
+	// got there yet.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if names := configNamesByLabel(t, ctx, "state"); len(names) > 0 {
+			t.Fatalf("a control-plane DATA kit reappeared: %v — cluster state travels by the mirror now (ADR 0005)", names)
+		}
+		time.Sleep(time.Second)
 	}
-	nextState := waitConfigNewer(t, ctx, "state", stateName, 30*time.Second)
-	t.Logf("mutation captured: %s -> %s", stateName, nextState)
+	t.Log("no data-kit config was created: the mirror is the channel")
 
-	// (4) Prune keeps at most 2 snapshots per family even across further
-	// mutations (two more store writes → several more snapshots → both
-	// families must settle back to ≤ 2).
-	if out, errOut, code := runCmd(t, homeDir, "config", "create", "snap_check_2", "--scope", "cluster", "--value", "world"); code != 0 {
-		t.Fatalf("config create #2 exited %d:\n%s\n%s", code, out, errOut)
-	}
-	if out, errOut, code := runCmd(t, homeDir, "config", "create", "snap_check_3", "--scope", "cluster", "--value", "prune"); code != 0 {
-		t.Fatalf("config create #3 exited %d:\n%s\n%s", code, out, errOut)
-	}
-	waitConfigCountAtMost(t, ctx, "state", 2, 45*time.Second)
-	waitConfigCountAtMost(t, ctx, "state-key", 2, 45*time.Second)
-	t.Log("prune verified: at most 2 snapshots per family retained")
+	// (3) Prune keeps at most two key configs. Rotating the key is the only thing that
+	// publishes a second one; here the assertion is simply that a long-running daemon
+	// re-checking every second does not grow the family without bound.
+	waitConfigCountAtMost(t, ctx, "state-key", 2, 30*time.Second)
+	t.Log("key config count stayed bounded")
 }
 
 // configNamesByLabel lists pmcluster control-plane configs of the given kind
@@ -205,22 +164,6 @@ func waitConfigKind(t *testing.T, ctx context.Context, kind string, timeout time
 	return ""
 }
 
-// waitConfigNewer waits until a config of the kind with a name greater than
-// older appears (a newer snapshot) and returns it.
-func waitConfigNewer(t *testing.T, ctx context.Context, kind, older string, timeout time.Duration) string {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		names := configNamesByLabel(t, ctx, kind)
-		if len(names) > 0 && names[len(names)-1] > older {
-			return names[len(names)-1]
-		}
-		time.Sleep(time.Second)
-	}
-	t.Fatalf("no pmcluster.kind=%s config newer than %s appeared within %s", kind, older, timeout)
-	return ""
-}
-
 // waitConfigCountAtMost waits until at most max configs of the kind remain
 // (prune settled).
 func waitConfigCountAtMost(t *testing.T, ctx context.Context, kind string, max int, timeout time.Duration) {
@@ -234,22 +177,4 @@ func waitConfigCountAtMost(t *testing.T, ctx context.Context, kind string, max i
 	}
 	names := configNamesByLabel(t, ctx, kind)
 	t.Fatalf("expected at most %d pmcluster.kind=%s configs, got %d: %v", max, kind, len(names), names)
-}
-
-// gunzipConfigData returns the gunzipped payload of a config (the state
-// config data is a gzipped tar, so raw byte searches against .Spec.Data never
-// match entry names).
-func gunzipConfigData(t *testing.T, ctx context.Context, name string) []byte {
-	t.Helper()
-	raw := dockerConfigData(t, ctx, name)
-	gz, err := gzip.NewReader(bytes.NewReader([]byte(raw)))
-	if err != nil {
-		t.Fatalf("config %s is not a gzip payload: %v", name, err)
-	}
-	defer gz.Close()
-	flat, err := io.ReadAll(gz)
-	if err != nil {
-		t.Fatalf("gunzip config %s: %v", name, err)
-	}
-	return flat
 }

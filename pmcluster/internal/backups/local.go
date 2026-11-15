@@ -175,10 +175,9 @@ func (l *Local) discoverLocal(ctx context.Context, offsite map[string]bool, offs
 // whose archive path is the bare object key; restoreSource then resolves it
 // through fetchS3Object (s3ObjectKey of a bare key is the key itself).
 //
-// Only volume archives (`backup-` prefix) are indexed: control-plane archives
-// are restored through a separate path (RestoreControlPlane), never as volume
-// data, so they are deliberately excluded. Nothing is ever deleted from the
-// store.
+// Only volume archives (`backup-` prefix) are indexed. Control-plane archives no
+// longer exist: the control plane reaches every manager through the mirror, so the
+// leader stopped writing them (ADR 0005). Nothing is ever deleted from the store.
 func (l *Local) discoverStore(ctx context.Context, offsite map[string]bool, offsiteErr error) {
 	objects, err := listS3Objects(ctx, l.S3, "backup-")
 	if err != nil {

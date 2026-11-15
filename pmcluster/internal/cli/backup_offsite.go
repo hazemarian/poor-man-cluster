@@ -259,9 +259,9 @@ func recentArtifacts(dir string, days int) ([]string, error) {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tar.gz") || strings.Contains(e.Name(), ".json") {
 			continue
 		}
-		// pmcluster-ctlplane-* are control-plane snapshots shed here for the
-		// tarball fallback; they are not per-stack artifacts and carry no
-		// manifest. `cluster kit verify` is the drill for those.
+		// pmcluster-ctlplane-* are control-plane archives left by the retired
+		// archiver (ADR 0005); they are not per-stack artifacts and carry no
+		// manifest. The drill for a promoted node is `cluster mirror verify`.
 		if strings.HasPrefix(e.Name(), "pmcluster-ctlplane-") {
 			continue
 		}

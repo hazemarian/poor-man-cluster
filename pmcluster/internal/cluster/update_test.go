@@ -93,9 +93,9 @@ func TestUpdate_RedeploysWhenLiveServiceLabelDrifted(t *testing.T) {
 	}
 
 	// Drifted: one service still carries an older render's hash.
-	svc := f.services["backup_control-plane-backup"]
+	svc := f.services["backup_seaweedfs"]
 	svc.Labels = map[string]string{runtime.RenderedHashLabel: "stale-from-an-older-render"}
-	f.services["backup_control-plane-backup"] = svc
+	f.services["backup_seaweedfs"] = svc
 
 	deployer2 := &recordingDeployer{}
 	deps.Deployer = deployer2
@@ -126,9 +126,12 @@ func TestUpdate_RedeploysWhenServiceLabelMissing(t *testing.T) {
 		t.Fatalf("baseline Update: %v", err)
 	}
 	f := deps.Docker.(*fakeDocker)
-	row, err := deps.Store.Config(ctx, "backup-stack")
+	// The mixed state is set up on the OBSERVABILITY stack: it is the one platform stack
+	// with several services since the backup stack lost its archivers and kept only the
+	// store.
+	row, err := deps.Store.Config(ctx, "observability-stack")
 	if err != nil {
-		t.Fatalf("read backup-stack: %v", err)
+		t.Fatalf("read observability-stack: %v", err)
 	}
 	var doc struct {
 		Services map[string]struct {
@@ -150,13 +153,12 @@ func TestUpdate_RedeploysWhenServiceLabelMissing(t *testing.T) {
 		t.Fatal("stored render carries no rendered-hash label")
 	}
 
-	// Stamp every backup service except one: the interrupted-deploy shape.
-	// Named explicitly before, which broke silently when the per-volume archiver
-	// was removed from the stack — so pick the first backup service that exists
-	// and stamp the rest.
+	// Stamp every observability service except one: the interrupted-deploy shape.
+	// Named explicitly before, which broke silently when a service was removed from a
+	// stack — so pick the first service of the stack that exists and stamp the rest.
 	stamped, unstamped := 0, ""
 	for name, svc := range f.services {
-		if !strings.HasPrefix(name, "backup_") {
+		if !strings.HasPrefix(name, "observability_") {
 			continue
 		}
 		if unstamped == "" {
@@ -169,7 +171,7 @@ func TestUpdate_RedeploysWhenServiceLabelMissing(t *testing.T) {
 		f.services[name] = svc
 	}
 	if unstamped == "" {
-		t.Fatal("fixture has no backup services")
+		t.Fatal("fixture has no observability services")
 	}
 	if stamped == 0 {
 		t.Fatal("fixture stamped no services; the mixed state was not set up")
@@ -180,14 +182,14 @@ func TestUpdate_RedeploysWhenServiceLabelMissing(t *testing.T) {
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("partial-deploy Update: %v", err)
 	}
-	var backupDeployed bool
+	var obsDeployed bool
 	for _, d := range deployer.deployedStacks {
-		if d.Name == "backup" {
-			backupDeployed = true
+		if d.Name == "observability" {
+			obsDeployed = true
 		}
 	}
-	if !backupDeployed {
-		t.Fatalf("expected the backup stack to be redeployed after a partial deploy, got %v", deployer.deployedStacks)
+	if !obsDeployed {
+		t.Fatalf("expected the observability stack to be redeployed after a partial deploy, got %v", deployer.deployedStacks)
 	}
 }
 

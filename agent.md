@@ -767,38 +767,40 @@ wizard; a joined-but-unpromoted standby manager is recognized and skipped.
 
 ### Control plane failover
 `serve` waits for swarm leadership (15s poll; workers/standby managers idle).
-At startup — BEFORE the store opens — `ensureControlPlaneFresh` restores from
-the newest Raft-replicated `pmcluster_state_*` Docker config (key split into
-`pmcluster_state_key_*`). On every follower→leader transition the leadership
-goroutine runs `adoptOnLeadershipGain` → `Kit.AdoptOnLeadership`: the same
-freshness predicate, but the store is already open, so adoption stages the kit in
-`.adopt-*`, closes the handle (`store.Store.Swap`), renames `data.db` last and
-`.encryption_key` in, then reopens — and reloads `credentials.Cipher` when the key
-changed. It runs before `kit.Snapshot` and before the reconcile loop reads
-settings (`internal/noderuntime/leader.go`, `internal/controlplane/adopt.go`). While it
-runs, `adoptionGate` answers 503 + `Retry-After: 1` for every route but
-`/health` (`internal/noderuntime/adoptgate.go`). Alongside the reconcile loop the leader
-runs `kit.Loop` (5-min change-detection snapshot; 500 KiB config ceiling; keeps
-2). Adoption is never part of a tick.
+Cluster state reaches a manager by the swarm-mTLS pull
+(`GET /internal/api/cluster/snapshot`, `internal/clustersnapshot`) and is mirrored
+into its own store every 60 s; the leader never fetches from itself. At startup —
+before the store opens — `noderuntime.ConfirmMirrorAtStartup` states what this node
+holds (leader, version, age) or says plainly that it is waiting for the first
+snapshot; `cli.openServeStore` is the one place `serve` tolerates a missing
+database, so a manager with no data starts and serves `/health` instead of
+crash-looping.
 
-The kit's `data.db` is an EXPORT of the authoritative tables, not the leader's
-file (`internal/controlplane/kitdb.go`, `store.Export`): users, credentials,
-stacks, webhook_sources, registries, cluster_settings, configs, secrets,
-site_certs, stack_failover — plus a short rollback window on the two unbounded
-tables: each stack's newest 5 revisions and the row its `current_revision` points
-at, and the newest 10 versions per config name. `backups`, `webhook_deliveries`,
-`stack_status` and `node_stats` do not cross the fleet; the rest of the history
-stays on the node. The whole file hit 5.2 MB (538 KB gzipped) and every snapshot
-was refused, so the caps are a size decision, not a preference: they live in one
-place in `kitdb.go` and a test packs 500 revisions / 200 versions per group and
-fails if the kit leaves its budget. A promoted leader therefore reconciles each
-stack against its current rendered manifest and can roll a deploy back inside the
-window; a revision older than it still returns `store.ErrRevisionNotFound`, which
-`reconcile` treats as `skipped` (info, once per stack) rather than an error. A
-config rollback further back than ten versions is a leader-side operation, since
-only the leader still has those rows. The payload size is logged at info on every
-publish. A test holds the schema to the table list, so a new migration must be
-classified.
+On every follower→leader transition the leadership goroutine runs
+`noderuntime.AdoptOnLeadershipGain` → `Kit.AdoptOnLeadership`
+(`internal/controlplane/adopt.go`). **Nothing is copied**: the node has been
+mirroring the cluster's state, so it keeps serving that store and becomes the
+writer (ADR 0005). The check decides only whether there is anything to serve — a
+node that has never applied a snapshot AND whose store holds no cluster state
+refuses, loudly, and starts no control loop; a STALE mirror is served and the
+version and age are logged. The encryption key is compared with its own config
+(`pmcluster_state_key_<ts>`) and a mismatch is a warning, not a refusal. While the
+check runs, `adoptionGate` answers 503 + `Retry-After: 1` for every route but
+`/health` (`internal/noderuntime/adoptgate.go`).
+
+The mirror carries the WHOLE control-plane document — every table except
+`backups`, `node_stats`, `github_runners`, `sync_state` and the two structural
+tables, all of which describe the node they live on (`internal/store/mirror_tables.go`
+lists both sets with a reason per table, and a test fails when a migration adds a
+table neither list mentions). It includes `stack_revisions` and `cluster_version`,
+so a promoted leader reads the manifest behind its live stack pointer and continues
+the version counter instead of restarting it. The steady state is a 304 (no body);
+a changed poll is a few megabytes of JSON, accepted.
+
+The leader publishes exactly one Docker config family: the encryption KEY
+(`pmcluster_state_key_<ts>`, `kit.PublishKey` on promotion and on `kit.KeyLoop`'s
+5-minute tick, keeping 2). The data kit (`pmcluster_state_<ts>`) is retired and
+never written.
 
 ### Upgrading the platform
 Push a `v*` tag → `release.yml` cross-compiles 4 tarballs + SHA256SUMS +

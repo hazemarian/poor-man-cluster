@@ -490,11 +490,21 @@ func (s *Store) TableRowCounts(ctx context.Context) (map[string]int, error) {
 	return out, nil
 }
 
-// HasData reports whether this store holds any cluster state at all: a setting, a user, a
-// stack or a secret. It is the difference between "a node that has not mirrored yet" and
-// "a node with nothing to serve", and only the second one must never take leadership.
+// HasData reports whether this store holds any cluster state at all: a row in ANY mirrored
+// table except the seeded `cluster_version` counter. It is the difference between "a node
+// that has not mirrored yet" and "a node with nothing to serve", and only the second one
+// must never take leadership.
+//
+// Every table counts, not a hand-picked few: a store holding one registry credential or one
+// site certificate is not empty, and a list of "interesting" tables is the kind of thing
+// that goes stale the moment a new one is added.
 func (s *Store) HasData(ctx context.Context) (bool, error) {
-	for _, table := range []string{"cluster_settings", "users", "stacks", "secrets", "configs"} {
+	for _, table := range mirroredTables {
+		if table == "cluster_version" {
+			// The migration seeds this row on every database, including one that has never
+			// held a byte of cluster state.
+			continue
+		}
 		var n int
 		if err := s.conn().QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&n); err != nil {
 			return false, fmt.Errorf("count %s: %w", table, err)

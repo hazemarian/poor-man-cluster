@@ -1,35 +1,23 @@
-// Package controlplane implements L2 of the failover story: the swarm leader
-// snapshots the control-plane survivor kit into Raft-replicated Docker
-// configs, so a standby manager promoted to leader can restore the control
-// plane without depending on the per-node tarball archive being shipped to it
-// (the old rsync/tarball dependency).
+// Package controlplane owns the last piece of the control-plane's Docker-config
+// channel: the encryption KEY config, and the leadership-gain check that reads it.
 //
-// The survivor kit is everything a promoted node needs to serve the same
-// control plane: an export of data.db's authoritative tables (users, API keys /
-// token hashes, credential ciphertexts, settings, webhook secrets, the stack
-// list) with a short rollback window on the two history tables (each stack's
-// newest five revisions plus its current one; the newest ten config versions per
-// config name), config.yaml, and the rendered config/ tree (TLS certs, stack
-// pointers). The rest of the history stays behind — see kitdb.go.
+// What is left, and why. ADR 0005 retired the data kit — the mirror carries the whole
+// control-plane document and adoption copies nothing, so no `data.db` ever needs to be
+// replicated as a blob again — but ADR 0003's security split still stands: the cipher
+// key never shares a blob with the ciphertext it unlocks. So this package publishes
+// `pmcluster_state_key_<unixnano>` and nothing else, and compares a node's local key
+// with the cluster's on a leadership gain.
 //
-// Security split: the AES-GCM encryption key (.encryption_key) NEVER shares a
-// config blob with the ciphertext it unlocks. Two config families are kept:
-//
-//	pmcluster_state_<unixnano>     — the data kit (tar.gz), all of the above
-//	pmcluster_state_key_<unixnano> — the .encryption_key bytes, nothing else
-//
-// Swarm replicates both to every manager automatically; a manager's Raft store
-// is the transport, so no host-to-host file shipping is involved.
+// The join-time key route (`POST /internal/api/join/key`, served once, `409` after)
+// replaces both, and then this package goes with them. Do not grow it back into a data
+// channel: cluster state travels by the mTLS pull (internal/clustersnapshot).
 package controlplane
 
 import (
-	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -43,28 +31,21 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
-// Docker config names. Configs are immutable, so every snapshot creates a new
-// name with a zero-padded unixnano suffix; lexicographic ordering of the name
-// IS chronological ordering, which prune and restore rely on.
-const (
-	// StateNamePrefix names the config carrying the data kit.
-	StateNamePrefix = "pmcluster_state"
-	// KeyNamePrefix names the config carrying only the encryption key.
-	KeyNamePrefix = "pmcluster_state_key"
-)
+// KeyNamePrefix names the config carrying only the encryption key. The family is still
+// called `pmcluster_state_key` (not `…key`) so a node upgrading mid-flight finds the
+// config it already knows; the data family it used to be paired with is gone.
+const KeyNamePrefix = "pmcluster_state_key"
 
-// Label keys and values carried on both config families.
+// Label keys and values carried on the key config.
 const (
 	// ManagedLabel marks pmcluster-managed configs (same value as
 	// cluster.PmclusterLabel; kept local to avoid an import cycle).
 	ManagedLabel = "io.pmcluster.managed"
-	// LabelKind distinguishes the state config from the key config.
+	// LabelKind distinguishes config families.
 	LabelKind = "pmcluster.kind"
-	// KindState marks the data-kit config.
-	KindState = "state"
 	// KindKey marks the key-only config.
 	KindKey = "state-key"
-	// LabelSnapshotAt carries the RFC3339Nano snapshot time.
+	// LabelSnapshotAt carries the RFC3339Nano publish time.
 	LabelSnapshotAt = "pmcluster.snapshot-at"
 	// LabelVersion mirrors the pmcluster.version label on the other managed
 	// configs so the version-drift check can identify them.
@@ -72,38 +53,29 @@ const (
 )
 
 const (
-	// MaxConfigBytes is the ceiling for a snapshot payload. Docker rejects
-	// configs above 500 KiB; the control plane is small, so the guard exists
-	// to fail loudly rather than halfway.
-	MaxConfigBytes = 500 << 10
-	// KeepSnapshots is how many snapshots per family are retained. History of
-	// two keeps the newest available to a standby that read an older name
-	// while a prune raced a create.
-	KeepSnapshots = 2
-	// DefaultSnapshotInterval is how often the leader re-checks for changes.
-	DefaultSnapshotInterval = 5 * time.Minute
+	// KeepKeyConfigs is how many key configs are retained. A node reading a name while a
+	// prune races a publish must still find one.
+	KeepKeyConfigs = 2
+	// KeyPublishInterval is how often the leader re-checks the key for changes.
+	KeyPublishInterval = 5 * time.Minute
 )
 
-// ErrNoSnapshots is returned by Restore when no pmcluster_state_* config
-// exists (or Docker is unavailable) — the caller falls back to the tarball
-// archive path for clusters that predate Raft config snapshots.
-var ErrNoSnapshots = errors.New("no control-plane state config exists")
+// ErrNoKeyConfig is returned by newestKey when the cluster has never published one.
+var ErrNoKeyConfig = errors.New("no control-plane key config exists")
 
 // IsSwarmUnavailable reports whether err is a *transient Swarm availability*
 // error rather than a genuine control-plane failure. Two cases qualify:
 //
 //   - this node is a worker ("This node is not a swarm manager") — swarm
-//     configs are manager-only, so the Raft-replicated kit is invisible here;
+//     configs are manager-only, so the replicated key is invisible here;
 //   - the swarm is momentarily without a Raft leader ("does not have a
 //     leader" / "too few managers are online") — quorum was lost, so even a
-//     manager cannot read the replicated configs *right now*.
+//     manager cannot read the config *right now*.
 //
-// Both mean the survivor kit cannot be read at this instant, so callers
-// degrade to standalone/local behaviour (Restore -> ErrNoSnapshots, Snapshot
-// -> no-op) and retry later instead of failing fatally. That matters most
-// when a daemon (re)starts during a quorum outage: without this it exits,
-// systemd restarts it, and every manager crash-loops (seen live: a manager
-// restarted 28 times while the swarm had no leader).
+// Both mean the key config cannot be read at this instant, so callers degrade and retry
+// later instead of failing fatally. That matters most when a daemon (re)starts during a
+// quorum outage: without this it exits, systemd restarts it, and every manager crash-loops
+// (seen live: a manager restarted 28 times while the swarm had no leader).
 // The matched strings are stable Docker messages (daemon/cluster/errors.go
 // errSwarmNotManager; SwarmKit raft errNoLeader).
 func IsSwarmUnavailable(err error) bool {
@@ -116,7 +88,7 @@ func IsSwarmUnavailable(err error) bool {
 		strings.Contains(msg, "too few managers are online") ||
 		// A dead or wedged dockerd: the swarm is unreadable for exactly the same
 		// reason a leaderless one is — this node cannot ask it anything. Treating it
-		// as a control-plane failure made the daemon exit, so systemd restart-looped
+		// as a control-plane failure made the daemon exit, so systemd restart-loop
 		// it to `failed` on the node whose docker had just died, which is the one
 		// node that had to stay up long enough for the docker watchdog to fire
 		// (measured on nxt-sw-6-w, 2026-11-13).
@@ -142,16 +114,11 @@ func isDockerDaemonUnavailable(msg string) bool {
 }
 
 // Kit publishes and reads the control-plane's KEY config, and answers the
-// leadership-gain question about this node's own store.
+// leadership-gain question about this node's own store (see adopt.go).
 //
-// It no longer publishes or restores the data kit: the mirror is the document
-// and adoption copies nothing (ADR 0005). The key still travels in its own
-// config, because the security split from ADR 0003 is unchanged and the
-// join-time key route is a separate decision; see AdoptOnLeadership.
-//
-// Create one per daemon. It holds no per-process state any more — the
-// published-config marker existed only so a leadership gain could avoid
-// re-extracting this node's own snapshot, and nothing is extracted now.
+// It no longer publishes or restores the data kit: the mirror is the document and
+// adoption copies nothing (ADR 0005). Create one per daemon; it holds no per-process
+// state.
 type Kit struct {
 	Docker  runtime.Client
 	DataDir string
@@ -164,575 +131,126 @@ func (k *Kit) DBPath() string { return filepath.Join(k.DataDir, "data.db") }
 // KeyPath returns the encryption key path inside DataDir.
 func (k *Kit) KeyPath() string { return filepath.Join(k.DataDir, ".encryption_key") }
 
-// RevisionPath is the marker recording which snapshot this node's control plane
-// has been brought up to.
+// PublishKey writes the local encryption key into a fresh `pmcluster_state_key_<ts>`
+// config (Raft-replicated to every manager by Swarm itself), when its bytes differ from
+// the newest one already published, then prunes older key configs.
 //
-// The marker exists because an mtime CANNOT serve as the version. A follower
-// writes its own data.db on every reconcile pass, so its mtime is always newer
-// than the newest snapshot while its CONTENT stays wherever it was when the node
-// joined — which is exactly how a manager ends up holding an Oct-12 credential
-// table behind a fresh-looking DB, forever reported as "current".
-func (k *Kit) RevisionPath() string { return filepath.Join(k.DataDir, ".state_revision") }
-
-// readRevision returns the snapshot this node's control plane is at, or the zero
-// time when it has never synced (or the marker is unreadable — treated as
-// "never", because restoring an authoritative kit is the safe direction).
-func (k *Kit) readRevision() time.Time {
-	b, err := os.ReadFile(k.RevisionPath())
-	if err != nil {
-		return time.Time{}
-	}
-	at, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(b)))
-	if err != nil {
-		return time.Time{}
-	}
-	return at
-}
-
-// writeRevision records that this node's control plane now matches snapshot `at`.
-func (k *Kit) writeRevision(at time.Time) error {
-	if err := os.MkdirAll(k.DataDir, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(k.RevisionPath(), []byte(at.UTC().Format(time.RFC3339Nano)), 0o600)
-}
-
-// Snapshot writes the current survivor kit into fresh state + key configs
-// (Raft-replicated to every manager) when the kit changed since the last
-// snapshot, then prunes old snapshots. It is a no-op when Docker is
-// unavailable, the kit is uninitialised (no data.db), or nothing changed.
+// It is a no-op when Docker is unavailable, when this node has no key file, or when the
+// published config already carries exactly these bytes. Comparing CONTENT rather than an
+// mtime is deliberate: the key changes on a rotation and at no other time, and an mtime
+// walk over the data dir was how the old kit re-published itself on every tick.
 //
-// Callers: the leader's periodic loop (Kit.Loop, one tick every
-// DefaultSnapshotInterval) and the leadership-gain path in `serve`, which
-// publishes once on promotion. It is NEVER called on a follower, and it never
-// restores — adoption is Restore (startup) and AdoptOnLeadership (leadership
-// gain).
-func (k *Kit) Snapshot(ctx context.Context) error {
+// Callers: the leader's periodic KeyLoop and the leadership-gain path in `serve`. Never
+// called on a follower — the key config rides Raft, which only the leader writes.
+func (k *Kit) PublishKey(ctx context.Context) error {
 	if k.Docker == nil {
 		return nil // standalone/local mode: nothing to replicate to
 	}
-	dbPath := k.DBPath()
-	if _, err := os.Stat(dbPath); err != nil {
-		return nil // control plane not initialised; nothing to snapshot
-	}
 	log := k.Log.With().Str("component", "controlplane").Logger()
 
-	changed, err := k.needsSnapshot(ctx)
+	key, err := os.ReadFile(k.KeyPath())
+	if err != nil {
+		// No key on this node yet: nothing to publish, and inventing one here would
+		// hand every manager a key the cluster's ciphertext was not written with.
+		log.Debug().Err(err).Str("path", k.KeyPath()).
+			Msg("no local encryption key to publish")
+		return nil
+	}
+
+	existing, err := k.newest(ctx, KindKey)
 	if err != nil {
 		if IsSwarmUnavailable(err) {
-			// Worker node, or the swarm has no Raft leader right now:
-			// swarm configs are unreadable. Nothing to replicate to —
-			// behave like standalone mode and retry on the next tick.
-			log.Debug().Err(err).Msg("swarm unavailable; skipping control-plane snapshot")
+			log.Debug().Err(err).Msg("swarm unavailable; skipping key config publish")
 			return nil
 		}
 		return err
 	}
-	if !changed {
-		log.Debug().Msg("control-plane state unchanged; skipping snapshot")
-		return nil
-	}
-
-	kit, err := k.readKit()
-	if err != nil {
-		return fmt.Errorf("read control-plane kit: %w", err)
-	}
-	// The payload size is logged on EVERY snapshot, before the limit check, not
-	// only in the refusal: growth towards the ceiling is what turns into an
-	// outage (538 KB against a 512 KB cap, 70 refusals in six hours, and the
-	// only trace of it was the error itself). An operator watching the info
-	// line sees the kit creep.
-	log.Info().Int("bytes", len(kit)).Int("limit-bytes", MaxConfigBytes).
-		Int("limit-pct", 100*len(kit)/MaxConfigBytes).
-		Msg("control-plane kit packed")
-	if len(kit) > MaxConfigBytes {
-		return fmt.Errorf("control-plane state payload %d bytes exceeds the %d-byte Docker config limit — the data dir has grown too large for Raft config snapshots; reduce data.db growth or rely on the tarball/offsite backup path", len(kit), MaxConfigBytes)
-	}
-
-	key, err := os.ReadFile(k.KeyPath())
-	if err != nil {
-		return fmt.Errorf("read control-plane encryption key: %w", err)
+	if existing != "" {
+		inspect, err := k.Docker.ConfigInspect(ctx, existing)
+		if err != nil {
+			return fmt.Errorf("inspect newest key config %s: %w", existing, err)
+		}
+		if bytes.Equal(inspect.Data, key) {
+			log.Debug().Str("config", existing).Msg("control-plane key unchanged; skipping publish")
+			return nil
+		}
 	}
 
 	now := time.Now()
-	ts := strconv.FormatInt(now.UnixNano(), 10)
-
-	stateLabels := map[string]string{
-		ManagedLabel:    "true",
-		LabelKind:       KindState,
-		LabelSnapshotAt: now.Format(time.RFC3339Nano),
-		LabelVersion:    buildinfo.Version,
-	}
-	stateName := StateNamePrefix + "_" + ts
-	if err := k.Docker.ConfigCreate(ctx, runtime.ConfigSpec{Name: stateName, Data: kit, Labels: stateLabels}); err != nil {
-		return fmt.Errorf("create control-plane state config: %w", err)
-	}
-	log.Info().Str("config", stateName).Int("bytes", len(kit)).Msg("control-plane state snapshotted to Raft-replicated config")
-
-	keyLabels := map[string]string{
-		ManagedLabel:    "true",
-		LabelKind:       KindKey,
-		LabelSnapshotAt: now.Format(time.RFC3339Nano),
-		LabelVersion:    buildinfo.Version,
-	}
-	keyName := KeyNamePrefix + "_" + ts
-	if err := k.Docker.ConfigCreate(ctx, runtime.ConfigSpec{Name: keyName, Data: key, Labels: keyLabels}); err != nil {
+	name := KeyNamePrefix + "_" + strconv.FormatInt(now.UnixNano(), 10)
+	if err := k.Docker.ConfigCreate(ctx, runtime.ConfigSpec{
+		Name: name,
+		Data: key,
+		Labels: map[string]string{
+			ManagedLabel:    "true",
+			LabelKind:       KindKey,
+			LabelSnapshotAt: now.Format(time.RFC3339Nano),
+			LabelVersion:    buildinfo.Version,
+		},
+	}); err != nil {
 		return fmt.Errorf("create control-plane key config: %w", err)
 	}
-	log.Info().Str("config", keyName).Int("bytes", len(key)).Msg("control-plane encryption key snapshotted to Raft-replicated config")
+	log.Info().Str("config", name).Int("bytes", len(key)).
+		Msg("control-plane encryption key published to a Raft-replicated config")
 
-	// This node IS the source of this snapshot, so its control plane is by
-	// definition at this revision. Without recording it, a demoted-then-promoted
-	// leader would restore its own snapshot over newer local writes.
-	if err := k.writeRevision(now); err != nil {
-		log.Warn().Err(err).Msg("could not record the control-plane revision marker")
-	}
-
-	if err := k.prune(ctx, KindState); err != nil {
-		log.Warn().Err(err).Msg("prune control-plane state configs had issues")
-	}
-	if err := k.prune(ctx, KindKey); err != nil {
+	if err := k.prune(ctx); err != nil {
 		log.Warn().Err(err).Msg("prune control-plane key configs had issues")
 	}
 	return nil
 }
 
-// needsSnapshot reports whether the kit changed since the newest state
-// snapshot: any kit file (data.db, config.yaml, config/, .encryption_key) with
-// an mtime newer than the newest snapshot's timestamp. True when no state
-// config exists yet.
-func (k *Kit) needsSnapshot(ctx context.Context) (bool, error) {
-	newest, err := k.newest(ctx, KindState)
-	if err != nil {
-		return false, err
-	}
-	if newest == "" {
-		return true, nil
-	}
-	inspect, err := k.Docker.ConfigInspect(ctx, newest)
-	if err != nil {
-		return false, fmt.Errorf("inspect newest state config %s: %w", newest, err)
-	}
-	at, err := parseSnapshotAt(inspect.Labels)
-	if err != nil {
-		return false, fmt.Errorf("newest state config %s: %w", newest, err)
-	}
-	mtime, err := k.maxKitMtime()
-	if err != nil {
-		return false, err
-	}
-	return mtime.After(at), nil
-}
-
-// maxKitMtime returns the newest mtime among the kit files (data.db,
-// config.yaml, config/ tree, and the encryption key). The zero time is
-// returned when none exist.
-func (k *Kit) maxKitMtime() (time.Time, error) {
-	var max time.Time
-	err := filepath.Walk(k.DataDir, func(path string, fi os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if fi.IsDir() {
-			rel, _ := filepath.Rel(k.DataDir, path)
-			if rel == "logs" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !fi.Mode().IsRegular() {
-			return nil
-		}
-		// The revision marker is written by this package after every snapshot;
-		// counting it would make the kit look perpetually newer and
-		// re-snapshot on every tick — an endless config churn loop.
-		if filepath.Base(path) == ".state_revision" {
-			return nil
-		}
-		if fi.ModTime().After(max) {
-			max = fi.ModTime()
-		}
-		return nil
-	})
-	if err != nil {
-		return time.Time{}, fmt.Errorf("walk data dir for kit mtimes: %w", err)
-	}
-	return max, nil
-}
-
-// readKit tars + gzips the data kit: data.db, config.yaml, and config/ (the
-// rendered configs + TLS certs). logs/ and .encryption_key are excluded — the
-// key lives in its own config per the security split, and logs are local
-// noise, not survivor state. Entry paths are relative to DataDir.
-//
-// data.db in the tarball is NOT the leader's file: it is an export of the
-// authoritative tables (see kitdb.go), so the kit stays inside Docker's config
-// ceiling. When the export fails the file is packed verbatim — a kit that
-// carries the whole database still beats no kit at all, and the size that is
-// always logged now makes that visible on the first publish instead of at the
-// limit.
-func (k *Kit) readKit() ([]byte, error) {
-	dbPath, cleanup, exportErr := k.exportedDBPath()
-	if exportErr != nil {
-		k.Log.Warn().Err(exportErr).Str("component", "controlplane").
-			Msg("control-plane kit database export failed; packing data.db verbatim (the kit may exceed the Docker config limit)")
-		dbPath = ""
-	}
-	defer cleanup()
-	return k.packKit(dbPath)
-}
-
-// packKit builds the kit tarball. dbPath, when non-empty, replaces data.db in
-// the archive; it is the exported subset database from exportedDBPath.
-func (k *Kit) packKit(dbPath string) ([]byte, error) {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-	base, err := filepath.Abs(k.DataDir)
-	if err != nil {
-		return nil, err
-	}
-	err = filepath.Walk(base, func(path string, fi os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(base, path)
-		if err != nil {
-			return err
-		}
-		if rel == "." {
-			return nil
-		}
-		if rel == "logs" || strings.HasPrefix(rel, "logs"+string(filepath.Separator)) {
-			if fi.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if rel == ".encryption_key" {
-			return nil // security split: key goes to its own config
-		}
-		if rel == ".state_revision" {
-			return nil // node-local bookkeeping, not survivor state
-		}
-		if closeJournal(rel) {
-			// A rollback journal or WAL sidecar describes the state of the
-			// file it was written for. Packing one beside an exported data.db
-			// would leave the promoted node with a "hot journal" that SQLite
-			// replays into a database it does not belong to.
-			return nil
-		}
-		name := filepath.ToSlash(rel)
-		switch {
-		case fi.IsDir():
-			if err := tw.WriteHeader(&tar.Header{Name: name, Mode: int64(fi.Mode().Perm()), Typeflag: tar.TypeDir, ModTime: fi.ModTime()}); err != nil {
-				return err
-			}
-		case fi.Mode().IsRegular():
-			src, size, mode := path, fi.Size(), int64(fi.Mode().Perm())
-			if rel == "data.db" && dbPath != "" {
-				// The exported database, under the name (and mtime) of the
-				// file it stands in for: restore and adoption know only
-				// "data.db".
-				info, err := os.Stat(dbPath)
-				if err != nil {
-					return err
-				}
-				src, size, mode = dbPath, info.Size(), 0o600
-			}
-			hdr := &tar.Header{Name: name, Mode: mode, Size: size, Typeflag: tar.TypeReg, ModTime: fi.ModTime()}
-			if err := tw.WriteHeader(hdr); err != nil {
-				return err
-			}
-			f, err := os.Open(src)
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(tw, f); err != nil {
-				f.Close()
-				return err
-			}
-			f.Close()
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("tar data dir: %w", err)
-	}
-	if err := tw.Close(); err != nil {
-		return nil, err
-	}
-	if err := gz.Close(); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
-}
-
-// closeJournal reports whether rel names a SQLite sidecar of data.db.
-func closeJournal(rel string) bool {
-	switch filepath.Base(rel) {
-	case "data.db-journal", "data.db-wal", "data.db-shm":
-		return true
-	}
-	return false
-}
-
-// snapshot is the newest Raft-replicated control-plane snapshot as read from
-// Docker: the data kit, its matching key config and the snapshot time.
-type snapshot struct {
-	stateConfig string
-	keyConfig   string
-	at          time.Time
-	kit         []byte
-	key         []byte
-	// keyErr is why the key config could not be read (nil when it could). It is
-	// carried rather than raised so the caller can decide: a node whose DB is
-	// current does not care, a node that must adopt cannot proceed.
-	keyErr error
-}
-
-// newestSnapshot loads the newest state config and its key config. It returns
-// ErrNoSnapshots when none exists; a transient swarm error is returned as-is
-// (IsSwarmUnavailable) for the caller to degrade on.
-func (k *Kit) newestSnapshot(ctx context.Context) (*snapshot, error) {
-	if k.Docker == nil {
-		return nil, ErrNoSnapshots // standalone/local mode: no Raft configs to read
-	}
-	newest, err := k.newest(ctx, KindState)
-	if err != nil {
-		return nil, err
-	}
-	if newest == "" {
-		return nil, ErrNoSnapshots
-	}
-	inspect, err := k.Docker.ConfigInspect(ctx, newest)
-	if err != nil {
-		return nil, fmt.Errorf("inspect newest state config %s: %w", newest, err)
-	}
-	at, err := parseSnapshotAt(inspect.Labels)
-	if err != nil {
-		return nil, fmt.Errorf("newest state config %s: %w", newest, err)
-	}
-	keyName := KeyNamePrefix + "_" + strings.TrimPrefix(newest, StateNamePrefix+"_")
-	keyInspect, keyErr := k.Docker.ConfigInspect(ctx, keyName)
-	return &snapshot{
-		stateConfig: newest,
-		keyConfig:   keyName,
-		at:          at,
-		kit:         inspect.Data,
-		key:         keyInspect.Data,
-		keyErr:      keyErr,
-	}, nil
-}
-
-// freshness is the single predicate that decides an adoption, shared by the
-// startup path (Restore) and the leadership-gain path (AdoptOnLeadership) so
-// the two can never disagree about what "current" means.
-type freshness struct {
-	need       bool
-	reason     string
-	localRev   time.Time
-	keyChanged bool
-}
-
-// freshnessOf evaluates the local control plane against a snapshot: no key, a
-// missing or older `.state_revision`, or a key that differs from the cluster's
-// all mean "adopt". The revision marker — not an mtime — is the version, because
-// every follower writes its own data.db on each reconcile pass and would
-// otherwise look newer than the snapshot forever.
-func (k *Kit) freshnessOf(s *snapshot) freshness {
-	localRev := k.readRevision()
-	localKey, localKeyErr := os.ReadFile(k.KeyPath())
-	keyExists := localKeyErr == nil
-	keyChanged := s.keyErr == nil && keyExists && !bytes.Equal(localKey, s.key)
-
-	f := freshness{localRev: localRev, keyChanged: keyChanged}
-	switch {
-	case keyChanged:
-		f.need, f.reason = true, "local encryption key differs from the cluster's"
-	case !keyExists:
-		f.need, f.reason = true, "no local encryption key"
-	case localRev.IsZero():
-		f.need, f.reason = true, "node has never synced"
-	case localRev.Before(s.at):
-		f.need, f.reason = true, "local control plane is behind"
-	default:
-		f.reason = "local control plane is at the newest snapshot"
-	}
-	return f
-}
-
-// Restore brings the control plane up to the newest snapshot when the local
-// data.db is missing or older than it, and repairs a missing encryption key
-// even when the DB is current. Returns (restored, err): restored reports
-// whether anything was written. ErrNoSnapshots is returned when no state
-// config exists — the caller falls back to the tarball archive path.
-//
-// This is the STARTUP form of the check: it writes into DataDir in place and
-// assumes nothing has the store open (serve calls it before store.Open). A
-// running daemon adopts through AdoptOnLeadership, which closes and reopens the
-// store around the same predicate.
-func (k *Kit) Restore(ctx context.Context) (bool, error) {
-	if k.Docker == nil {
-		return false, ErrNoSnapshots // standalone/local mode: no Raft configs to read
-	}
-	log := k.Log.With().Str("component", "controlplane").Logger()
-
-	snap, err := k.newestSnapshot(ctx)
-	switch {
-	case errors.Is(err, ErrNoSnapshots):
-		log.Debug().Msg("no control-plane state config; nothing to restore from Raft")
-		return false, ErrNoSnapshots
-	case err != nil:
-		if IsSwarmUnavailable(err) {
-			// Worker node, or the swarm is momentarily leaderless (quorum
-			// lost): the Raft kit is unreadable right now. Fall back to the
-			// tarball archive path like a pre-L2 / standalone cluster — and,
-			// crucially, do NOT fail: a daemon that starts during a quorum
-			// outage must serve and retry, not crash-loop.
-			log.Warn().Err(err).Msg("swarm unavailable; no Raft state configs to restore (deferring)")
-			return false, ErrNoSnapshots
-		}
-		return false, err
-	}
-
-	dbPath := k.DBPath()
-	f := k.freshnessOf(snap)
-
-	switch {
-	case f.need:
-		// Full restore. The key is mandatory: a data kit without its key is a
-		// control plane that cannot decrypt its own credentials.
-		if snap.keyErr != nil {
-			return false, fmt.Errorf("state config %s exists but key config %s is missing — refusing to restore a ciphertext without its key (security split); investigate before promoting this node", snap.stateConfig, snap.keyConfig)
-		}
-		n, err := k.extractKit(snap.kit, snap.at)
-		if err != nil {
-			return false, fmt.Errorf("restore control plane from %s: %w", snap.stateConfig, err)
-		}
-		// Adopt the cluster key unconditionally: the DB we just wrote is the
-		// cluster's, so any other key would make its ciphertexts unreadable.
-		if err := os.WriteFile(k.KeyPath(), snap.key, 0o600); err != nil {
-			return false, fmt.Errorf("restore control-plane encryption key: %w", err)
-		}
-		if err := os.Chtimes(k.KeyPath(), snap.at, snap.at); err != nil {
-			return false, fmt.Errorf("timestamp restored encryption key: %w", err)
-		}
-		if err := os.Chtimes(dbPath, snap.at, snap.at); err != nil {
-			return false, fmt.Errorf("timestamp restored data.db: %w", err)
-		}
-		if err := k.writeRevision(snap.at); err != nil {
-			return false, fmt.Errorf("record restored control-plane revision: %w", err)
-		}
-		log.Info().Str("config", snap.stateConfig).Str("snapshot-at", snap.at.Format(time.RFC3339Nano)).
-			Int("files", n).Str("reason", f.reason).Msg("control-plane data restored from Raft config")
-		return true, nil
-	default:
-		log.Info().Str("config", snap.stateConfig).Str("revision", f.localRev.Format(time.RFC3339Nano)).
-			Msg("local control plane is at the newest snapshot; no restore from Raft config")
-		return false, nil
-	}
-}
-
-// extractKit gunzips + untars the state config payload into DataDir. data.db
-// is timestamped at the snapshot time so the next freshness check sees an
-// up-to-date DB (an older mtime would re-restore on every promotion); the
-// other kit files keep their snapshot mtimes. Entry paths are validated
-// against escaping DataDir.
-func (k *Kit) extractKit(payload []byte, at time.Time) (int, error) {
-	return k.extractKitTo(k.DataDir, payload, at)
-}
-
-// extractKitTo is extractKit into an arbitrary directory — the startup path
-// uses DataDir itself, an adoption uses a staging directory beside it.
-func (k *Kit) extractKitTo(dir string, payload []byte, at time.Time) (int, error) {
-	gz, err := gzip.NewReader(bytes.NewReader(payload))
-	if err != nil {
-		return 0, fmt.Errorf("gzip open: %w", err)
-	}
-	defer func() { _ = gz.Close() }()
-	tr := tar.NewReader(gz)
-	base, err := filepath.Abs(dir)
-	if err != nil {
-		return 0, err
-	}
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		return 0, err
-	}
-	var count int
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return count, err
-		}
-		name := filepath.Join(base, filepath.FromSlash(hdr.Name))
-		if name != base && !strings.HasPrefix(name, base+string(filepath.Separator)) {
-			return count, fmt.Errorf("config entry escapes data dir: %s", hdr.Name)
-		}
-		switch hdr.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(name, 0o755); err != nil {
-				return count, err
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
-				return count, err
-			}
-			out, err := os.OpenFile(name, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode))
-			if err != nil {
-				return count, err
-			}
-			if _, err := io.Copy(out, tr); err != nil {
-				out.Close()
-				return count, err
-			}
-			out.Close()
-			mt := hdr.ModTime
-			if filepath.Base(name) == "data.db" {
-				mt = at
-			}
-			if err := os.Chtimes(name, mt, mt); err != nil {
-				return count, err
-			}
-			count++
-		}
-	}
-	return count, nil
-}
-
-// Loop re-checks the kit for changes on every tick and snapshots when needed,
-// until ctx is cancelled. The swarm leader runs this alongside the reconcile
-// loop so a mutation is captured within one interval even when no reconcile
-// event fires. A no-op when Docker is unavailable.
-func (k *Kit) Loop(ctx context.Context, interval time.Duration) {
+// KeyLoop re-checks the key for changes on every tick and publishes when it moved, until
+// ctx is cancelled. A no-op when Docker is unavailable.
+func (k *Kit) KeyLoop(ctx context.Context, interval time.Duration) {
 	if k.Docker == nil {
 		return
 	}
 	if interval <= 0 {
-		interval = DefaultSnapshotInterval
+		interval = KeyPublishInterval
 	}
 	log := k.Log.With().Str("component", "controlplane").Logger()
 	t := time.NewTicker(interval)
 	defer t.Stop()
-	log.Debug().Dur("interval", interval).Msg("control-plane snapshot loop armed (leader)")
+	log.Debug().Dur("interval", interval).Msg("control-plane key publish loop armed (leader)")
 	for {
 		select {
 		case <-ctx.Done():
-			log.Debug().Msg("control-plane snapshot loop stopped")
+			log.Debug().Msg("control-plane key publish loop stopped")
 			return
 		case <-t.C:
-			if err := k.Snapshot(ctx); err != nil {
-				log.Warn().Err(err).Msg("control-plane snapshot had issues")
+			if err := k.PublishKey(ctx); err != nil {
+				log.Warn().Err(err).Msg("control-plane key publish had issues")
 			}
 		}
 	}
 }
 
-// newest returns the highest-named config of the given kind (name suffixes are
-// zero-padded unixnano, so lexicographic order is chronological). "" when none.
+// newestKey returns the newest KEY config published on this swarm: its name and the bytes
+// it carries. ErrNoKeyConfig means the cluster has never published one.
+//
+// It reads the key family directly instead of deriving the key's name from a state config,
+// which is what it used to do: a key config is now the only thing in the family, so it has
+// to be findable on its own.
+func (k *Kit) newestKey(ctx context.Context) (name string, key []byte, err error) {
+	if k.Docker == nil {
+		return "", nil, ErrNoKeyConfig // standalone/local mode: no Raft configs to read
+	}
+	name, err = k.newest(ctx, KindKey)
+	if err != nil {
+		return "", nil, err
+	}
+	if name == "" {
+		return "", nil, ErrNoKeyConfig
+	}
+	inspect, err := k.Docker.ConfigInspect(ctx, name)
+	if err != nil {
+		return name, nil, fmt.Errorf("inspect key config %s: %w", name, err)
+	}
+	return name, inspect.Data, nil
+}
+
+// newest returns the highest-named config of the given kind (name suffixes are zero-padded
+// unixnano, so lexicographic order is chronological). "" when none.
 func (k *Kit) newest(ctx context.Context, kind string) (string, error) {
 	names, err := k.Docker.ConfigList(ctx, LabelKind, kind)
 	if err != nil {
@@ -745,61 +263,20 @@ func (k *Kit) newest(ctx context.Context, kind string) (string, error) {
 	return names[len(names)-1], nil
 }
 
-// prune removes all but the KeepSnapshots newest configs of a kind.
-func (k *Kit) prune(ctx context.Context, kind string) error {
-	names, err := k.Docker.ConfigList(ctx, LabelKind, kind)
+// prune removes all but the KeepKeyConfigs newest key configs.
+func (k *Kit) prune(ctx context.Context) error {
+	names, err := k.Docker.ConfigList(ctx, LabelKind, KindKey)
 	if err != nil {
-		return fmt.Errorf("list %s configs for prune: %w", kind, err)
+		return fmt.Errorf("list %s configs for prune: %w", KindKey, err)
 	}
-	if len(names) <= KeepSnapshots {
+	if len(names) <= KeepKeyConfigs {
 		return nil
 	}
 	sort.Strings(names)
-	for _, name := range names[:len(names)-KeepSnapshots] {
+	for _, name := range names[:len(names)-KeepKeyConfigs] {
 		if err := k.Docker.ConfigRemove(ctx, name); err != nil {
 			return fmt.Errorf("prune %s: %w", name, err)
 		}
 	}
 	return nil
-}
-
-// parseSnapshotAt reads the RFC3339Nano snapshot timestamp off a config's
-// labels.
-func parseSnapshotAt(labels map[string]string) (time.Time, error) {
-	if labels == nil {
-		return time.Time{}, fmt.Errorf("missing %s label", LabelSnapshotAt)
-	}
-	raw := labels[LabelSnapshotAt]
-	if raw == "" {
-		return time.Time{}, fmt.Errorf("missing %s label", LabelSnapshotAt)
-	}
-	t, err := time.Parse(time.RFC3339Nano, raw)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse %s label %q: %w", LabelSnapshotAt, raw, err)
-	}
-	return t, nil
-}
-
-// newestKey returns the newest KEY config published on this swarm: its name and the bytes
-// it carries. ErrNoSnapshots means the cluster has never published one.
-//
-// It reads the key family directly rather than deriving the key's name from a state
-// config, which is what it used to do: the data kit is retired (ADR 0005), so a key config
-// is now the only thing this family carries and it must be findable on its own.
-func (k *Kit) newestKey(ctx context.Context) (name string, key []byte, err error) {
-	if k.Docker == nil {
-		return "", nil, ErrNoSnapshots // standalone/local mode: no Raft configs to read
-	}
-	name, err = k.newest(ctx, KindKey)
-	if err != nil {
-		return "", nil, err
-	}
-	if name == "" {
-		return "", nil, ErrNoSnapshots
-	}
-	inspect, err := k.Docker.ConfigInspect(ctx, name)
-	if err != nil {
-		return name, nil, fmt.Errorf("inspect key config %s: %w", name, err)
-	}
-	return name, inspect.Data, nil
 }

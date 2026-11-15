@@ -71,12 +71,6 @@ func runPruneRemote(cmd *cobra.Command, _ []string) error {
 		if len(res.Failed) > 0 {
 			fmt.Fprintf(out, "  %d object(s) could not be deleted\n", len(res.Failed))
 		}
-		// The control-plane family has its own producer and its own age-out.
-		if del, kept, cerr := backups.PruneControlPlaneArchives(ctx, leg.S3, time.Now(), dry); cerr != nil {
-			fmt.Fprintf(out, "%s:%s — control-plane retention skipped: %v\n", leg.Label, leg.S3.Bucket, cerr)
-		} else if del > 0 {
-			fmt.Fprintf(out, "%s:%s — %s %d control-plane archive(s), kept %d\n", leg.Label, leg.S3.Bucket, verb, del, kept)
-		}
 	}
 	return nil
 }

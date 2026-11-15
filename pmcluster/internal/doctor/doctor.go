@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/clustersnapshot"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodever"
@@ -64,7 +64,7 @@ type Input struct {
 	Docker runtime.Client
 	Store  *store.Store
 	Cipher *credentials.Cipher
-	// DataDir is the daemon's data dir (kit configs are read from the swarm,
+	// DataDir is the daemon's data dir (the key config is read from the swarm,
 	// the drill extracts to a temp dir).
 	DataDir string
 	// Version is the running binary version, the reference for skew.
@@ -115,7 +115,7 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 	add(checkPlacementPins(ctx, in))
 	add(checkBackupCoverage(ctx, in))
 	add(checkSkew(ctx, in))
-	add(checkKit(ctx, in))
+	add(checkMirrorVerify(ctx, in))
 	add(checkSecrets(ctx, in))
 	add(checkGitHubApp(ctx, in))
 	add(checkGitHubRunners(ctx, in))
@@ -300,25 +300,32 @@ func checkSkew(ctx context.Context, in Input) Check {
 	return Check{"version skew", StatusOK, fmt.Sprintf("%d manager(s) on %s", len(skew.Nodes), in.Version)}
 }
 
-// checkKit: does the newest control-plane snapshot restore, and how old is it?
-func checkKit(ctx context.Context, in Input) Check {
-	if in.Docker == nil {
-		return Check{"control-plane kit", StatusSkip, "no docker client"}
+// checkMirrorVerify asks the question the control-plane kit drill used to ask, of the thing
+// that now decides it: the MIRROR. Adoption copies nothing (ADR 0005), so the store this
+// node mirrors IS what it would serve as leader — and a mirror nobody has verified is a
+// promotion nobody has tested.
+//
+// It reports the version applied here, the age of the last successful answer from the
+// leader, what the tables actually carry, and whether a key is present. A stale mirror is a
+// WARN (serving it is accepted); no snapshot and no key are FAILs, because those promote a
+// leader that cannot serve its own cluster.
+func checkMirrorVerify(ctx context.Context, in Input) Check {
+	const name = "cluster mirror verify"
+	if in.Store == nil {
+		return Check{name, StatusSkip, "no control-plane store on this node, so there is no mirror to verify"}
 	}
-	kit := &controlplane.Kit{Docker: in.Docker, DataDir: in.DataDir}
-	rep, err := kit.Verify(ctx)
+	rep, err := clustersnapshot.Verify(ctx, in.Store, in.Cipher != nil, time.Now())
 	if err != nil {
-		return Check{"control-plane kit", StatusFail, err.Error()}
+		return Check{name, StatusFail, err.Error()}
 	}
-	detail := fmt.Sprintf("snapshot %s old, %d table(s), %d secret(s) decrypt",
-		rep.SnapshotAge, rep.Tables, rep.SecretsOK)
+	detail := rep.Human()
+	if len(rep.Problems) > 0 {
+		return Check{name, StatusFail, detail + "; " + strings.Join(rep.Problems, "; ")}
+	}
 	if len(rep.Warnings) > 0 {
-		return Check{"control-plane kit", StatusFail, detail + "; " + strings.Join(rep.Warnings, "; ")}
+		return Check{name, StatusWarn, detail + "; " + strings.Join(rep.Warnings, "; ")}
 	}
-	if age, perr := time.ParseDuration(rep.SnapshotAge); perr == nil && age > 30*time.Minute {
-		return Check{"control-plane kit", StatusWarn, detail + " (snapshot is old for a 5-minute cadence — is this the leader?)"}
-	}
-	return Check{"control-plane kit", StatusOK, detail}
+	return Check{name, StatusOK, detail}
 }
 
 // checkSecrets: does every stored secret decrypt with the current key?

@@ -118,6 +118,15 @@ var bootstrapClusterSubcommands = map[string]bool{
 	"leader": true, // move leadership deliberately; needs a manager, not the leader
 }
 
+// nodeLocalClusterSubcommands are `cluster` subcommands that describe THIS node and answer
+// anywhere. `mirror` is one: it reports the cluster state this node has mirrored, which is
+// exactly the question "would a promotion from here work" — asking it only on the leader
+// would be asking the node that needs no proof. The value is the set of subcommands
+// allowed; `true` for the whole family.
+var nodeLocalClusterSubcommands = map[string]bool{
+	"mirror": true,
+}
+
 // mirrorReadable reports whether this invocation reads state a follower mirrors rather
 // than state only the leader holds. Today that is exactly `cluster settings` with no
 // argument or a `get`: its write form (`set`) is refused below.
@@ -149,6 +158,9 @@ func scopeOf(cmd *cobra.Command) commandScope {
 		if bootstrapClusterSubcommands[cmd.Name()] {
 			return scopeBootstrap
 		}
+		if nodeLocalClusterSubcommands[clusterChildOf(cmd)] {
+			return scopeNode
+		}
 		return scopeLeader
 	}
 
@@ -160,6 +172,16 @@ func scopeOf(cmd *cobra.Command) commandScope {
 		return s
 	}
 	return scopeLeader
+}
+
+// clusterChildOf names the `cluster` subcommand a command belongs to (`cluster mirror
+// verify` → "mirror"), so a family can be classified once instead of per leaf.
+func clusterChildOf(cmd *cobra.Command) string {
+	cur := cmd
+	for cur.HasParent() && cur.Parent().Name() != "cluster" {
+		cur = cur.Parent()
+	}
+	return cur.Name()
 }
 
 // enforceScope is the guard wired into the root command's PersistentPreRunE. It

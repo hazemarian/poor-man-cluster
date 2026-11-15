@@ -93,7 +93,7 @@ func RunNodeLocal(ctx context.Context, in NodeInput) *Report {
 	add(Check{
 		Name:   "cluster state",
 		Status: StatusSkip,
-		Detail: "not mirrored, so not answered here: secret DECRYPTION (the cipher key is provisioned at join, never carried by the snapshot), stacks and their revisions, the last apply, and the control-plane kit drill. Run `pmcluster doctor` on the leader, or from your own machine with --api-url",
+		Detail: "not answered on this node: secret DECRYPTION (the cipher key is provisioned at join, never carried by the snapshot) and the last apply, which only the leader records. The mirror itself, its age and the rows it carries are reported above (cluster mirror), and pmcluster cluster mirror verify proves a promotion would work from here",
 	})
 
 	rep.OK = true

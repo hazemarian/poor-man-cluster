@@ -647,6 +647,13 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 				prevRender[s] = []byte(row.RenderedContent)
 			}
 			switch {
+			case len(composeServices(fresh)) == 0:
+				// A platform stack can legitimately render no services — the backup
+				// stack on a cluster with neither an object store nor a data
+				// directory. There is nothing to deploy and nothing to remember, and
+				// recording a hash for an empty document made every later update
+				// report "deployed" for a stack that has no services at all.
+				continue
 			case forceAll:
 				reasons[s] = "forced"
 			case row == nil || row.RenderedHash != store.ConfigHash(string(fresh)):

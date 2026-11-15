@@ -337,13 +337,14 @@ EnvironmentFile=-%s
 # --newest picks this node's newest artifact per stack; the space guard inside
 # the command refuses rather than filling the disk a backup just freed.
 ExecStart=%s backup-agent drill --newest 1
-# The other half of the drill, and the one that used to have none: the control
-# plane itself. The leader publishes data.db + .encryption_key into
-# Raft-replicated configs every five minutes and nothing ever proved that pair
-# restores — it was exercised only when a leader actually died. "|" keeps this
-# step from masking a failed artifact drill; a non-manager fails it with a clear
-# reason, which is honest on a worker and harmless on a manager.
-ExecStart=-/bin/sh -c '%s cluster kit verify' 
+# The other half of the drill: the cluster state THIS node would promote on. It is
+# mirrored by the mTLS pull and adopted in place, so a backup drill that proves an
+# artifact restores still says nothing about whether a promotion from this node would
+# work — which is exactly what the control-plane kit drill used to cover, and this is
+# that check pointed at the mirror (version, age, rows, key). "-" keeps the step from
+# masking a failed artifact drill; a worker fails it with a clear reason, which is
+# honest on a node that holds no mirror by design.
+ExecStart=-/bin/sh -c '%s cluster mirror verify' 
 Nice=15
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7

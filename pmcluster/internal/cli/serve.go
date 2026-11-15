@@ -400,8 +400,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// First publication as leader: the KEY config only. The data kit is retired —
 		// the mirror is the document, so a promoted manager has nothing to fetch from a
 		// Docker config (ADR 0005).
-		if err := kit.Snapshot(cmd.Context()); err != nil {
-			log.Warn().Err(err).Msg("initial control-plane key snapshot had issues")
+		if err := kit.PublishKey(cmd.Context()); err != nil {
+			log.Warn().Err(err).Msg("initial control-plane key publish had issues")
 		}
 
 		checkConfigVersions(cmd.Context(), dc, log)
@@ -669,9 +669,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Leader-only control loop: on becoming Swarm leader the daemon adopts the
-	// newest control-plane kit (when this node is behind it), runs the reconcile
-	// loop (platform configs + app-stack drift + health snapshot) and the
-	// control-plane Raft snapshot loop; on losing leadership the loops stop.
+	// state it has been mirroring (a check, never a copy), runs the reconcile
+	// loop (platform configs + app-stack drift + health snapshot) and the key
+	// publish loop; on losing leadership the loops stop.
 	// Non-manager/standalone nodes serve without the loops.
 	leadership := noderuntime.WatchSwarmLeadership(ctx, dc, log)
 	reconciler := &reconcile.Reconciler{
@@ -723,13 +723,13 @@ func runServe(cmd *cobra.Command, _ []string) error {
 					continue
 				}
 
-				if err := kit.Snapshot(ctx); err != nil {
-					log.Warn().Err(err).Msg("control-plane key snapshot on leadership gain had issues")
+				if err := kit.PublishKey(ctx); err != nil {
+					log.Warn().Err(err).Msg("control-plane key publish on leadership gain had issues")
 				}
 				var loopCtx context.Context
 				loopCtx, loopCancel = context.WithCancel(ctx)
 				go reconciler.Loop(loopCtx)
-				go kit.Loop(loopCtx, controlPlaneSnapshotInterval())
+				go kit.KeyLoop(loopCtx, controlPlaneKeyInterval())
 			} else {
 				log.Info().Msg("control loop: stopped (not the swarm leader)")
 			}
@@ -805,19 +805,19 @@ func checkConfigVersions(ctx context.Context, dc runtime.Client, log zerolog.Log
 	}
 }
 
-// controlPlaneSnapshotInterval returns how often the leader re-checks the
-// control-plane survivor kit for changes and snapshots it into Raft-replicated
-// Docker configs. Defaults to controlplane.DefaultSnapshotInterval; the
-// PMCLUSTER_CONTROLPLANE_SNAPSHOT_INTERVAL env var (seconds) overrides it
-// (tests use 1 to converge in seconds; 0 or negative falls back to default).
-func controlPlaneSnapshotInterval() time.Duration {
+// controlPlaneKeyInterval returns how often the leader re-checks its encryption key and
+// publishes it into a Raft-replicated Docker config. Defaults to
+// controlplane.KeyPublishInterval; the PMCLUSTER_CONTROLPLANE_SNAPSHOT_INTERVAL env var
+// (seconds) still overrides it — the name is kept because the e2e harness sets it and the
+// cadence it controls is the same one (a key rotation instead of a data snapshot).
+func controlPlaneKeyInterval() time.Duration {
 	raw := os.Getenv("PMCLUSTER_CONTROLPLANE_SNAPSHOT_INTERVAL")
 	if raw == "" {
-		return controlplane.DefaultSnapshotInterval
+		return controlplane.KeyPublishInterval
 	}
 	n, err := strconv.Atoi(raw)
 	if err != nil || n <= 0 {
-		return controlplane.DefaultSnapshotInterval
+		return controlplane.KeyPublishInterval
 	}
 	return time.Duration(n) * time.Second
 }

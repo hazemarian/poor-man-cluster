@@ -10,7 +10,7 @@ Sections: [1 volume](#1-the-volume-that-makes-this-possible) ·
 [2 schedule](#2-the-schedule-belongs-to-the-control-plane) ·
 [3 the run](#3-one-run-end-to-end) · [4 artifact](#4-what-an-artifact-is) ·
 [5 destinations](#5-three-destinations-one-mechanism) ·
-[6 retention](#6-retention) · [7 control plane](#7-the-control-plane-agent) ·
+[6 retention](#6-retention) · [7 no control-plane backup](#7-there-is-no-control-plane-backup) ·
 [8 discovery](#8-how-pmcluster-knows-what-exists) · [9 restore](#9-restore) ·
 [10 nothing restored](#10-when-a-restore-extracts-nothing) ·
 [11 on demand](#11-on-demand-runs-and-drills) ·
@@ -124,12 +124,11 @@ plane, and — worse — the response carried the offsite bucket key, which any
 container on the overlay could have read. The policy file removes the question
 entirely: a node never asks another node for permission.
 
-**Why a file and not a read of the node's own store?** Managers carry the full
-settings in their control-plane database, and a promoted leader keeps them (the
-survivor kit restores the newest `pmcluster_state_*` config on promotion, and a
-standby's `data.db` holds the same rows). **Workers do not**: their copy is as old
-as their last restore from the daily archive, so a worker reading its own store
-silently falls back to hourly defaults. That is why the policy is a file the
+**Why a file and not a read of the node's own store?** Managers mirror the full
+settings into their control-plane database and a promoted leader serves that mirror
+(ADR 0005), so a manager could read them. **Workers cannot**: a worker holds no
+mirror by design, so a worker reading its own store silently falls back to hourly
+defaults. That is why the policy is a file the
 platform writes rather than a setting the node looks up. When the file is absent
 the agent falls back to the node's own copy of the store, then to the defaults — a
 cluster that has not configured backups still gets backups.
@@ -322,19 +321,21 @@ artifacts it actually deleted, matched by name).
 
 ---
 
-## 7. The control-plane agent
+## 7. There is no control-plane backup
 
-Separate, and unchanged: `backup_control-plane-backup` still runs only on the
-manager holding `~/.pmcluster`, archiving `data.db`, `.encryption_key`,
-`config.yaml` and the rendered config tree. Daily at `0 3 * * *`, 30-day
-retention, `pmcluster-ctlplane-` prefix — so a lost manager disk is not a full
-re-bootstrap.
+`backup_control-plane-backup` used to run on the manager holding `~/.pmcluster` and
+archive `data.db`, `.encryption_key`, `config.yaml` and the rendered config tree
+daily. It is **deleted** (ADR 0005), together with the functions that restored and
+pruned its archives: **the backup path is service volumes only.**
 
-`RestoreControlPlane(archive, dataDir)` + `NewestControlPlaneArchive(dir)` are used
-by `pmcluster serve` on startup: the newest `pmcluster-ctlplane-*.tar.gz` is
-restored into `~/.pmcluster` **only when the local database is missing or older
-than the archive**. A current database is never clobbered, which is what makes the
-standby-promoted-to-leader path safe.
+Why it could go: cluster state reaches every manager by the mTLS mirror, and a
+promoted manager adopts the store it already holds — no file is copied onto it, so
+there is nothing for a tarball to restore. `pmcluster cluster mirror verify` is the
+drill that replaced it, and it runs on every node rather than only where a kit
+happened to be published.
+
+A leftover `pmcluster-ctlplane-*.tar.gz` on a node's disk is still refused by the
+volume restore: it holds `~/.pmcluster` state, not app data.
 
 ---
 
@@ -486,7 +487,8 @@ Details that prevent the classic accidents:
   whole-disk runs (the legacy archives bake in a `/backup/data/` prefix, which the
   restore strips — `archiveRelPath`). Nothing is ever written outside the volume
   root, and a `pmcluster-ctlplane-*` archive is refused into it: it holds
-  `~/.pmcluster` state, not app data.
+  `~/.pmcluster` state, not app data (the archiver is gone; the refusal guards
+  against leftovers).
 - **The archive dir is one answer for both sides.** `/var/stack/backup` by default,
   resolved through `cluster.BackupRootDir()` so the CLI reads the directory the
   agent wrote to (both honour `PMCLUSTER_BACKUP_DIR`) — not the old

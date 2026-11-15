@@ -281,30 +281,28 @@ Sources: [docs/backup.md](backup.md); pmcluster/internal/cluster/embeds/backup-s
 
 ## 11. Control-plane survivability
 
-The control plane survives the loss of its own leader through a Raft-replicated survivor kit. The leader runs `controlplane.Kit.Loop` — a 5-minute tick plus an immediate snapshot on promotion — publishing two Docker config families: `pmcluster_state_<unixnano>` (a tar.gz of a slim `data.db`, `config.yaml`, and the `config/` tree) and `pmcluster_state_key_<unixnano>` (the `.encryption_key` bytes alone). The `data.db` in the kit is an export of the AUTHORITATIVE tables — users and token hashes, managed credentials, the stack list, webhook secrets, registries, settings, configs, secrets, site-cert metadata, storage-failover markers — plus a bounded rollback window on the two tables that grow without bound: each stack's newest five revisions together with the one its `current_revision` points at (so the rendered manifest behind the live pointer crosses even after a rollback, when the pointer is older than the newest rows), and the newest ten config versions per config name. The rest of that history, plus backup audit rows, webhook delivery history, stack status and node stats, stays behind: it is re-rendered from the repo or rebuilt from the live swarm, and it is not worth the last few bytes of the budget. That window is what keeps the kit publishable at all: when the whole file was packed, `data.db` crossed Docker's 500 KiB config ceiling in stack revisions alone and every publish was refused, so keys and settings created since the last accepted snapshot existed on one disk. The two caps live in one place and are held by a test that packs 500 revisions and 200 versions per group and fails if the kit leaves its size budget. A restore refuses a state config whose key config is missing, so key and ciphertext never share one blob. Swarm's Raft store replicates both to every manager; snapshots prune to the newest two, log the packed payload size on every publish, and fail loudly above the ceiling.
+The control plane survives the loss of its own leader by being copied to every manager, continuously, over the swarm's own mutual-TLS channel. A follower manager polls `GET /internal/api/cluster/snapshot` every 60 seconds — conditional on the `(leader, version)` pair it last applied, so a quiet cluster costs a `304` with no body — and applies the answer to its own SQLite store in one transaction. The snapshot carries the WHOLE control plane: every table the cluster's state lives in (settings, secrets as ciphertext, users and token hashes, managed credentials, stacks and their revisions, configs and their versions, webhook sources, registries, site-cert metadata, failover markers, the GitHub App), minus the tables whose rows describe the node they were written on (`backups`, `node_stats`, `github_runners`, `sync_state`). Two lists hold that classification as data, with a reason per exclusion, and a test fails when a migration adds a table that neither list mentions. The size is accepted: a few megabytes of text per changed poll when a cluster carries a large revision history.
 
-Adoption runs at exactly two call sites: at startup, before the store is opened, and **once on the follower→leader transition** (`Kit.AdoptOnLeadership`). The second one is what a live failover needs: a manager that becomes leader while running holds whatever database it last adopted, so an API key or credential created minutes earlier on the old leader answered 401 until something made the new leader read the newest kit — which is what the transition now does, before the node answers a control-plane read. Adoption closes the SQLite handle (`store.Store.Swap`), renames a staged `data.db` and `.encryption_key` into place — `data.db` last, so it is one atomic rename — writes `.state_revision`, and reopens the same handle every consumer holds; the in-memory cipher is reloaded when the key changed. The window in which the new leader is not yet serving is one extract plus one rename, and it answers `503` with `Retry-After: 1` on every route except `/health` (and never a stale answer) for the duration.
+Adoption needs no file. A manager that gains leadership has been mirroring the state all along, so it keeps serving the store it already has and becomes the writer (`Kit.AdoptOnLeadership`). The check is about trust, not transfer: a stale mirror is SERVED — the alternative is turning a failover into an outage — and the version and age it took over on are logged, so a leader that started on old data says so in the journal. The one hard refusal is "nothing to serve": no snapshot has ever been applied AND the store holds no cluster state, which would make a leader report a cluster with no users and no stacks as the truth. The encryption key still travels in its own Docker config (`pmcluster_state_key_<unixnano>`, key and ciphertext never sharing a blob); moving it to a join-time route is the next decision.
 
-What to look for: the two configs published separately, the startup restore positioned before `store.Open`, and the leadership-gain adoption that closes and reopens the store rather than writing under it.
+What to look for: a route that is GET-only, mounted on the mTLS listener and answered to managers only; an adoption path that reads `sync_state` and touches no file; and a drill (`pmcluster cluster mirror verify`) that proves, on any node, that a promotion from there would work.
 
 ```mermaid
 sequenceDiagram
     participant L as leader daemon
-    participant RAFT as Swarm Raft (config store)
-    participant S as standby manager (promoted)
-    L->>RAFT: pmcluster_state_<unixnano> (data kit)
-    L->>RAFT: pmcluster_state_key_<unixnano> (.encryption_key)
-    RAFT-->>S: replicated to every manager
-    S->>S: startup — restore before store.Open
-    S->>S: leadership gain — check revision, close store, rename kit, reopen
-    Note over S: refuse state without its key
+    participant M as manager (follower)
+    participant S as manager (promoted)
+    L-->>M: GET snapshot (mTLS, If-None-Match)
+    M->>M: apply in one transaction, record sync_state
+    Note over M: steady state is a 304 every 60 s
+    M->>S: elected leader
+    S->>S: read sync_state, serve the store it has
+    Note over S: stale is served and logged; empty refuses
 ```
 
-The invariant it encodes: key and ciphertext live in separate configs, and adoption happens at startup and once per leadership gain — the promoted leader closes its store and replaces the pair by atomic rename, so it never writes data.db under a live connection and never serves the pre-move revision once adoption returns.
+The invariant it encodes: cluster state has exactly one writer and no other transport. There is no replicated data config to restore, no key beside its ciphertext, and no window in which a promoted leader answers from a revision it is in the middle of replacing.
 
-`Restore` writes `data.db` in place, which under a live SQLite connection would split-brain the daemon (stale page-cache rows against a clobbered file) — that is why the startup call site runs before `store.Open` and the promotion call site goes through `store.Store.Swap` instead. Both run the same predicate: the local DB is missing or older than the snapshot, the node has never synced, or its `.encryption_key` differs from the cluster's (a missing key is repaired even when the DB is current). On a worker or a leaderless swarm adoption is a no-op that retries on the next transition — `IsSwarmUnavailable` recognises the stable "not a manager" / "does not have a leader" messages, so a daemon starting during a quorum outage stands by instead of crash-looping.
-
-Sources: pmcluster/internal/controlplane/state.go; pmcluster/internal/controlplane/adopt.go; pmcluster/internal/store/store.go; pmcluster/internal/cli/serve.go; pmcluster/internal/cli/leader.go.
+Sources: pmcluster/internal/clustersnapshot/; pmcluster/internal/store/mirror_tables.go; pmcluster/internal/noderuntime/snapshot_mirror.go; pmcluster/internal/controlplane/adopt.go; pmcluster/internal/cli/serve.go.
 
 ## 12. Networking, ingress, and auth
 
@@ -344,7 +342,7 @@ Grouped by concern: the problem that forced the choice, the option taken, the al
 
 **Content addressing.** `_v1/_v2/…` names churned on unchanged values and collided when two writers raced a counter, so we name configs and secrets `<base>_<sha8>` and keep the in-use object immutable. We rejected version counters as the state that desynchronises between DB and Swarm. The cost is a rebuild-on-missing repair pass.
 
-**The store.** The control plane needs state that survives the leader's disk, so we chose local SQLite plus a Raft-replicated survivor kit of Docker configs. We rejected a shared Postgres — one node's volume dies with the node — and Docker's own config store. The cost is single-writer SQLite, fine when one daemon serves.
+**The store.** The control plane needs state that survives the leader's disk, so we chose local SQLite plus a mirror that every manager pulls over the swarm-mTLS channel. We rejected a shared Postgres — one node's volume dies with the node — and Docker's own config store: a replicated config blob capped at 500 KiB could not hold the whole control plane, and it carried the encryption key beside the ciphertext it unlocks. The cost is single-writer SQLite, fine when one daemon serves, plus one poll per follower per minute.
 
 **SQLite journal mode.** The store originally ran in WAL mode. A second process — the CLI, or any tool — that opened and closed the database deleted the `-wal`/`-shm` sidecars while the long-running daemon still held them open, leaving the daemon writing to an orphaned inode: a split-brain database, 401s for previously-valid tokens, and rows invisible to fresh readers. The store now runs with `journal_mode=DELETE`. We rejected keeping WAL and forbidding multi-process access because the CLI is a second process by design, so the rule would be unenforceable; we rejected moving off SQLite for the reasons above. The cost is lower write throughput, irrelevant with `SetMaxOpenConns(1)`.
 

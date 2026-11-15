@@ -66,87 +66,55 @@ func TestLoadComposeFile_KnownStacks(t *testing.T) {
 	}
 }
 
-// TestLoadComposeFile_BackupControlPlane verifies the backup stack renders
-// the manager-only control-plane backup agent when DataDir is set, and omits
-// it (with no dangling placeholder) when it isn't.
-func TestLoadComposeFile_BackupControlPlane(t *testing.T) {
-
-	in := RenderInput{Domain: "example.com", DataDir: "/root/.pmcluster", VolumeRoot: "/data/apps", BackupDir: "/data/apps/backup"}
-	data, err := LoadComposeFile(StackBackup, in)
-	if err != nil {
-		t.Fatalf("LoadComposeFile(backup): %v", err)
-	}
-	body := string(data)
-	for _, want := range []string{
-		"control-plane-backup",
-		"/root/.pmcluster:/backup/pmcluster:ro",
-		"BACKUP_SOURCES: /backup/pmcluster",
-		"pmcluster-ctlplane-",
-		"node.role == manager",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("rendered backup stack missing %q", want)
-		}
-	}
-	if strings.Contains(body, "${DATA_DIR}") {
-		t.Error("${DATA_DIR} placeholder was not substituted")
-	}
-
-	in2 := RenderInput{Domain: "example.com"}
-	data2, err := LoadComposeFile(StackBackup, in2)
-	if err != nil {
-		t.Fatalf("LoadComposeFile(backup, no DataDir): %v", err)
-	}
-	body2 := string(data2)
-	if strings.Contains(body2, "control-plane-backup") {
-		t.Error("control-plane-backup should be omitted when DataDir is empty")
-	}
-	if strings.Contains(body2, "${DATA_DIR}") {
-		t.Error("dangling ${DATA_DIR} placeholder in no-DataDir render")
-	}
-}
-
-// TestLoadComposeFile_ControlPlaneBackupOffsite verifies the control-plane
-// archiver uploads to the offsite S3 target when backup_s3_* is configured.
+// TestBackupStackHasNoControlPlaneArchiver is the retirement guard (ADR 0005): cluster
+// state travels by the mTLS mirror and a promoted manager adopts the store it already
+// holds, so nothing may archive ~/.pmcluster off the leader again.
 //
-// It used to assert the AWS_* block appeared TWICE (volume-backup and
-// control-plane-backup). The per-volume archiver is gone from the binary: stack
-// data is archived by the node-local agent, so this service is the only offen
-// container left, and the offsite copy of stack data is the store's own S3
-// mirror, not offen's.
-func TestLoadComposeFile_ControlPlaneBackupOffsite(t *testing.T) {
+// It renders with everything that used to summon the archiver — a data dir, an offsite
+// bucket, an in-cluster store — and asserts the whole chain is absent: the service, its
+// source bind, its filename prefix, and the ${DATA_DIR} substitution that existed only for
+// it.
+func TestBackupStackHasNoControlPlaneArchiver(t *testing.T) {
 	in := RenderInput{
-		Domain:   "example.com",
-		DataDir:  "/root/.pmcluster",
-		BackupS3: BackupS3{Endpoint: "https://s3.example.com", Bucket: "offsite-bucket", AccessKey: "AK", SecretKey: "SK", Region: "eu-central-3"},
+		Domain:     "example.com",
+		DataDir:    "/root/.pmcluster",
+		VolumeRoot: "/data/apps",
+		BackupDir:  "/data/apps/backup",
+		BackupS3:   BackupS3{Endpoint: "https://s3.example.com", Bucket: "offsite-bucket", AccessKey: "AK", SecretKey: "SK", Region: "eu-central-3"},
+		Store:      ObjectStore{Enabled: true, Bucket: "store-bucket", AccessKey: "SAK", SecretKey: "SSK"},
 	}
 	body := string(mustLoadBackup(t, in))
-
-	if !strings.Contains(body, "control-plane-backup") {
-		t.Fatal("control-plane-backup should render when DataDir is set")
-	}
-	for _, want := range []string{
-		"AWS_S3_BUCKET_NAME: offsite-bucket",
-		"AWS_ACCESS_KEY_ID: AK",
-		"AWS_ENDPOINT: s3.example.com",
-		"AWS_ENDPOINT_PROTO: https",
-		"AWS_S3_BUCKET_LOOKUP: path",
+	for _, gone := range []string{
+		"control-plane-backup",
+		"/backup/pmcluster",
+		"BACKUP_SOURCES",
+		"pmcluster-ctlplane-",
+		"offen/docker-volume-backup",
+		"DATA_DIR",
 	} {
-		if n := strings.Count(body, want); n != 1 {
-			t.Errorf("expected %q exactly once (the control-plane archiver is the only offen service left), got %d:\n%s", want, n, body)
+		if strings.Contains(body, gone) {
+			t.Errorf("the backup stack still renders %q — the control-plane archive path is retired", gone)
 		}
+	}
+	// The SERVICE volume backup path is untouched: the store is still here, with its own
+	// credentials and its own placement.
+	if !strings.Contains(body, "chrislusf/seaweedfs:4.48") {
+		t.Errorf("the in-cluster store stopped rendering:\n%s", body)
+	}
+	if !strings.Contains(body, "pmcluster-backups-absent") && !strings.Contains(body, "store-bucket") && !strings.Contains(body, "SAK") {
+		t.Errorf("the store's own credentials stopped rendering:\n%s", body)
 	}
 }
 
-// The common production shape — in-cluster store AND an offsite bucket — is the
-// one that was broken. The template emitted both AWS_* blocks, so the render
-// produced a YAML mapping with duplicate keys and `cluster update` died in the
-// parser, leaving the backup stack at whatever had been deployed last. Nothing
-// noticed because the only test with an offsite bucket left the store disabled.
+// The common production shape — in-cluster store AND an offsite bucket — is the one that
+// was broken: the template emitted the same AWS_* keys twice (the per-volume archiver and
+// the control-plane archiver), so the render produced a YAML mapping with duplicate keys
+// and `cluster update` died in the parser, leaving the backup stack at whatever had been
+// deployed last.
 //
-// The assertion is on the PARSED document, and specifically on the archiver's
-// env: duplicate keys make that parse fail, which is exactly how this escaped —
-// it renders plausibly and only breaks when something tries to load it.
+// With both archivers gone this stack has ONE service, and the assertion is that the
+// document still parses and that the store carries ITS credentials and never the offsite
+// ones: a bucket with the wrong key is an upload that fails at 3am, not at deploy time.
 func TestBackupStackTakesOneS3BackendWhenStoreAndOffsiteAreBothSet(t *testing.T) {
 	in := RenderInput{
 		Domain:   "example.com",
@@ -165,29 +133,26 @@ func TestBackupStackTakesOneS3BackendWhenStoreAndOffsiteAreBothSet(t *testing.T)
 	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
 		t.Fatalf("rendered backup stack is not valid YAML (duplicate keys land here): %v\n%s", err, body)
 	}
-	cp, ok := doc.Services["control-plane-backup"]
+	store, ok := doc.Services["seaweedfs"]
 	if !ok {
-		t.Fatalf("control-plane-backup is missing from the render")
+		t.Fatalf("the store is missing from the render:\n%s", body)
 	}
-	// Offsite wins, and the store's credentials must not leak into it: a bucket
-	// with the wrong key is an upload that fails at 3am, not at deploy time.
-	env := cp.Env
-	if len(cp.Environment) > 0 {
-		env = cp.Environment
+	env := store.Env
+	if len(store.Environment) > 0 {
+		env = store.Environment
 	}
 	for key, want := range map[string]string{
-		"AWS_S3_BUCKET_NAME":    "offsite-bucket",
-		"AWS_ACCESS_KEY_ID":     "AK",
-		"AWS_SECRET_ACCESS_KEY": "SK",
-		"AWS_ENDPOINT":          "s3.example.com",
-		"AWS_ENDPOINT_PROTO":    "https",
+		"AWS_ACCESS_KEY_ID":     "SAK",
+		"AWS_SECRET_ACCESS_KEY": "SSK",
 	} {
 		if got := env[key]; got != want {
-			t.Errorf("%s = %q, want %q (the offsite target wins when both are configured)", key, got, want)
+			t.Errorf("%s = %q, want %q (the store uses its own credentials)", key, got, want)
 		}
 	}
-	if strings.Contains(body, "store-bucket") {
-		t.Error("the store bucket was rendered into the archiver alongside the offsite bucket")
+	// The offsite TARGET must not appear at all: this stack has no service that would
+	// upload to it any more, and a bucket paired with the wrong key fails at 3am.
+	if strings.Contains(body, "offsite-bucket") {
+		t.Errorf("the offsite bucket leaked into a stack that only runs the store:\n%s", body)
 	}
 }
 
@@ -255,22 +220,20 @@ func TestLoadComposeFile_BackupSeaweedFS(t *testing.T) {
 }
 
 func TestLoadComposeFile_BackupSeaweedFSDisabled(t *testing.T) {
-	// Store disabled: no SeaweedFS (S3 + in-process WebDAV) renders. The
-	// control-plane archiver is the only offen container left, and it uploads
-	// straight to the offsite endpoint (host + proto, BUG-028).
+	// Store disabled: there is nothing to deploy in this stack any more. The only
+	// in-cluster service it ever carried besides the store was the control-plane archiver,
+	// and that is retired. The assertion is the absence — no SeaweedFS, no offen container,
+	// and no offsite credentials rendered where nothing would read them.
 	in := RenderInput{
 		Domain:   "example.com",
 		DataDir:  "/root/.pmcluster",
 		BackupS3: BackupS3{Endpoint: "https://s3.example.com", Bucket: "offsite-bucket", AccessKey: "AK", SecretKey: "SK", Region: "eu-central-3"},
 	}
 	body := string(mustLoadBackup(t, in))
-	if strings.Contains(body, "chrislusf/seaweedfs") || strings.Contains(body, "rclone/rclone") || strings.Contains(body, "WEBDAV_URL") || strings.Contains(body, "backup-replicate") {
-		t.Errorf("SeaweedFS (S3 + WebDAV) services must not render when disabled:\n%s", body)
-	}
-	// offen rejects a scheme inside AWS_ENDPOINT (BUG-028), so the legacy path
-	// renders the host + AWS_ENDPOINT_PROTO=http(s).
-	if !strings.Contains(body, "AWS_ENDPOINT: s3.example.com") || !strings.Contains(body, "AWS_ENDPOINT_PROTO: https") {
-		t.Errorf("the control-plane archiver should upload to the offsite endpoint host + proto:\n%s", body)
+	for _, gone := range []string{"chrislusf/seaweedfs", "offen/docker-volume-backup", "OFFSITE_BUCKET_NAME", "offsite-bucket", "WEBDAV_URL", "backup-replicate"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("rendered %q with the store disabled and no archiver left:\n%s", gone, body)
+		}
 	}
 }
 
@@ -2098,17 +2061,18 @@ func TestBackupStackNoLongerShipsThePerVolumeArchiver(t *testing.T) {
 		BackupDir:  "/var/stack/backup",
 		DataDir:    "/root/.pmcluster",
 		BackupCron: "0 * * * *",
+		Store:      ObjectStore{Enabled: true, Endpoint: "backup_seaweedfs:8333", Bucket: "pmcluster-backups", AccessKey: "k", SecretKey: "s", Node: "worker-2"},
 	}
 	body := string(mustLoadBackup(t, in))
 	// Match the SERVICE KEY, not the word: the template keeps a comment
-	// explaining why the archiver was removed, and it names it.
-	if strings.Contains(body, "  volume-backup:") {
-		t.Fatalf("backup stack still ships the offen per-volume archiver:\n%s", body)
-	}
-	for _, want := range []string{"control-plane-backup", "BACKUP_CRON_EXPRESSION"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("backup stack lost %q:\n%s", want, body)
+	// explaining why the archivers were removed, and it names them.
+	for _, gone := range []string{"  volume-backup:", "  control-plane-backup:", "BACKUP_CRON_EXPRESSION"} {
+		if strings.Contains(body, gone) {
+			t.Fatalf("backup stack still ships %q:\n%s", gone, body)
 		}
+	}
+	if !strings.Contains(body, "  seaweedfs:") {
+		t.Fatalf("backup stack lost the store:\n%s", body)
 	}
 }
 

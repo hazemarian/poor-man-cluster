@@ -275,9 +275,12 @@ switched the surfaces that used to refuse:
 - `doctor` on a non-leader answers a `cluster mirror` check instead of one blanket "not
   answered here": the leader's name, the version, and the age measured on this node's
   clock. Stale past three poll intervals is a WARN naming the leader; never-applied is a
-  WARN naming the poll. What the mirror never carries is listed separately and honestly —
-  secret decryption (the key is provisioned at join, not by the snapshot), stacks and
-  revisions, the last apply, the kit drill.
+  WARN naming the poll. On the LEADER the report answers `cluster mirror verify` instead —
+  the check the control-plane kit drill used to be, pointed at the mirror: the version
+  applied, the age of the last successful answer, the rows every table carries, and whether
+  a key is present (`clustersnapshot.Verify`). What the mirror never carries is listed
+  separately and honestly — secret decryption (the key is provisioned at join, not by the
+  snapshot) and the last apply.
 - `cluster settings` (the READ form) is answered on a follower, prefixed with the mirror's
   label. `set` still requires the leader: one writer, and a follower that accepted a write
   would persist a value nothing replicates upward. The guard distinguishes them on the
@@ -287,7 +290,10 @@ switched the surfaces that used to refuse:
   the read surfaces cannot disagree about what "three polls" means.
 
 **Not built yet:** the join-time key route (ADR 0005's handoff). Settings travel only by the
-pull now, and adoption copies nothing — see below.
+pull now, adoption copies nothing, the data kit and the control-plane backup archive are
+retired — what is left of the Docker-config channel is the KEY config
+(`internal/controlplane/state.go`: `PublishKey` / `KeyLoop`, `newestKey`), and it goes when
+the key route lands.
 
 **Adoption copies nothing** (`internal/controlplane/adopt.go`, ADR 0005). A manager gaining
 leadership keeps serving the store it has been mirroring; there is no kit to stage, no
@@ -308,6 +314,11 @@ and the operator settled where the line is:
 - **The key is reported, not enforced.** A key that differs from the cluster's key config is a
   WARN in the adoption log and a problem in `cluster mirror verify`; ending up with no leader
   over a key the next change replaces is the wrong trade.
+- **The drill moved, it did not disappear.** `cluster kit verify` became
+  `cluster mirror verify` (`internal/cli/cluster_mirror.go`), the `doctor` line
+  `control-plane kit` became `cluster mirror verify`, and the weekly systemd drill step runs
+  the new command. Losing the only proof that a promotion would work is not a cost of
+  retiring the kit.
 - **Startup says what the node holds.** `noderuntime.ConfirmMirrorAtStartup` replaced the old
   restore-from-config: it reads `sync_state` and states the leader, version and age, or says
   plainly that the node is waiting for its first snapshot. `cli.openServeStore` is the one

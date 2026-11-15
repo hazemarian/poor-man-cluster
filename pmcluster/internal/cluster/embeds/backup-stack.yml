@@ -10,22 +10,15 @@ volumes:
   seaweeddata: ""
 [[ end ]]
 services:
-  # The control-plane archiver — one replica pinned to the LEADER, daily. It
-  # archives pmcluster's own state, never stack volumes: stack data is archived
-  # by the node-local systemd agent (pmcluster-backup.timer), installed by role,
-  # which writes to the store and the offsite bucket itself.
-  # Writes each archive to the in-cluster SeaweedFS store (S3 on 8333, path-style)
-  # whenever the store is enabled, AND to the offsite S3 target (AWS_*) when that
-  # is also configured. Store-only clusters use the S3 API only — SeaweedFS
-  # creates the bucket on first upload, which is why the WebDAV gateway was
-  # deleted; offsite-only clusters fall back to a single S3 write.
-  # The per-volume archiver that used to live here (offen/docker-volume-backup)
-  # is gone from the binary. It tarred a live directory — one growing SQLite
-  # file could abort a node's whole hour — and had no concept of a snapshot.
-  # Stack data is archived by the node-local systemd unit instead
-  # (pmcluster-backup.timer): freeze, snapshot, one verified artifact per stack,
-  # ship to the store below, 15-day retention. This stack keeps only the store
-  # and the control-plane archiver.
+  # This stack is the backup STORE, nothing else. It used to carry two archivers:
+  # a per-volume one (offen/docker-volume-backup, deleted earlier — it tarred a
+  # live directory, so one growing SQLite file could abort a node's whole hour)
+  # and a daily control-plane one that archived ~/.pmcluster off the leader.
+  # The control-plane archiver is gone too: cluster state travels by the mTLS
+  # mirror and a promoted leader adopts the store it already holds, so there is
+  # nothing to restore from a tarball (ADR 0005). Stack data is archived by the
+  # node-local systemd agent (pmcluster-backup.timer), installed by role, which
+  # writes to the store below and to the offsite bucket itself.
 
 [[ if .Store.Enabled ]]
   # The in-cluster backup store. Runs on a NON-storage node via an explicit
@@ -78,63 +71,4 @@ services:
       limits:
         cpus: "0.5"
         memory: 512M
-[[ end ]]
-[[ if .DataDir ]]
-  # The Control-Plane Backup Agent — runs ONLY on the manager node (where
-  # ~/.pmcluster lives). Archives the pmcluster control plane itself so a lost
-  # manager disk doesn't mean a full re-bootstrap. Distinct prefix + longer
-  # retention.
-  control-plane-backup:
-    image: offen/docker-volume-backup:v2
-    # The control plane lives on the LEADER (~/.pmcluster). This task must run
-    # there: pinned anywhere else it archives an empty directory and produces a
-    # backup that restores nothing. It was pinned to the store node, which is a
-    # non-storage worker — so every "control-plane backup" since that placement
-    # was a 9 KB archive of a worker's empty database.
-    placement: "[[ if .LeaderNode ]][[.LeaderNode]][[ else if .BackupNode ]][[.BackupNode]][[ else ]]manager[[ end ]]"
-    restart: any
-    env:
-      BACKUP_CRON_EXPRESSION: "0 3 * * *"
-      BACKUP_FILENAME: "pmcluster-ctlplane-{{ .Node.ID }}-%Y-%m-%dT%H-%M-%S.tar.gz"
-      BACKUP_SOURCES: "/backup/pmcluster"
-      BACKUP_PRUNING_PREFIX: "pmcluster-ctlplane-"
-      BACKUP_RETENTION_DAYS: "30"
-      # ONE backend per process, offsite first. The two branches below describe
-      # the same seven variables, so emitting both — which this template used to
-      # do whenever the store AND an offsite bucket were configured — produced a
-      # YAML mapping with duplicate keys, and every `cluster update` on such a
-      # cluster died in the parser with the backup stack left at whatever was
-      # deployed last. Offsite wins: the offsite copy is the one that survives
-      # the node, and the store is ON the node.
-      [[- if .BackupS3.Configured ]]
-      AWS_S3_BUCKET_NAME: "[[.BackupS3.Bucket]]"
-      AWS_ACCESS_KEY_ID: "[[.BackupS3.AccessKey]]"
-      AWS_SECRET_ACCESS_KEY: "[[.BackupS3.SecretKey]]"
-      AWS_ENDPOINT: "[[.BackupS3.EndpointHost]]"
-      AWS_ENDPOINT_PROTO: "[[.BackupS3.EndpointProto]]"
-      AWS_REGION: "[[.BackupS3.Region]]"
-      AWS_S3_BUCKET_LOOKUP: "path"
-      [[- else if .Store.Enabled ]]
-      # The store is an S3 target, like any other destination. WebDAV was here
-      # because the S3 API "does not auto-create a bucket" — SeaweedFS does, on
-      # first upload, so that reason is gone and with it a whole second protocol.
-      AWS_S3_BUCKET_NAME: "[[.Store.Bucket]]"
-      AWS_ACCESS_KEY_ID: "[[.Store.AccessKey]]"
-      AWS_SECRET_ACCESS_KEY: "[[.Store.SecretKey]]"
-      AWS_ENDPOINT: "backup_seaweedfs:8333"
-      AWS_ENDPOINT_PROTO: "http"
-      AWS_REGION: "us-east-1"
-      AWS_S3_BUCKET_LOOKUP: "path"
-      [[- end ]]
-    binds:
-      - "${DATA_DIR}:/backup/pmcluster:ro"
-      - "[[.BackupDir]]:/archive"
-      - "/etc/localtime:/etc/localtime:ro"
-    resources:
-      reservations:
-        cpus: "0.05"
-        memory: 32M
-      limits:
-        cpus: "0.5"
-        memory: 128M
 [[ end ]]

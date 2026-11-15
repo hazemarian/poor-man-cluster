@@ -1021,7 +1021,9 @@ func TestRunOnce_StackWithoutRevisionIsNotAnError(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
 	notices := 0
 	for _, line := range lines {
-		if strings.Contains(line, "outside the kit's revision window") {
+		// The FIRST notice per stack is the info line; a later pass logs a debug
+		// "still no stored revision" heartbeat, which is deliberate.
+		if strings.Contains(line, "reconcile — no stored revision on this node") {
 			notices++
 			if !strings.Contains(line, `"level":"info"`) {
 				t.Errorf("no-stored-revision notice is not info level: %s", line)

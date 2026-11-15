@@ -256,7 +256,6 @@ processors:
         - 'resource.attributes["service.name"] == "observability_provision"'
         - 'resource.attributes["service.name"] == "sso_oauth2-proxy"'
         - 'resource.attributes["service.name"] == "backup_volume-backup"'
-        - 'resource.attributes["service.name"] == "backup_control-plane-backup"'
         - 'resource.attributes["service.name"] == "backup_seaweedfs"'
 
   # Docker Engine API calls are PLUMBING, and two components emit them by the

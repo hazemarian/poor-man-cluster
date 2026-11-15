@@ -607,7 +607,7 @@ pretend otherwise):
 ✓ local runner       pmc-nxt-sw-6-w-org is running with the filtered socket
 ✓ disk               71.2% free (18.1 GiB of 25.4 GiB) on /var/stack/data
 · swarm              this node is standing by: the node list and quorum are manager-only calls, so they are answered on the leader
-· cluster state      not answered here: secrets, settings, stacks, the last apply and the control-plane kit are only current on the leader…
+· cluster state      not answered here: secret decryption and the last apply are only current on the leader…
 ```
 
 That report is the check that would have caught the whole defect in one line: before

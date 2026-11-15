@@ -72,7 +72,7 @@ pmcluster cluster up --domain=<your-domain> --openobserve-email=admin@<your-doma
 
 `cluster up` deploys four stacks: `infra`, `edge`, `observability`, `backup` (plus `sso` when enabled). It also mints the `edge_admin` console password and the `edge` daemon API token.
 
-The daemon runs as a systemd service. `cluster up`, `cluster update`, and `pmcluster join` install `/etc/systemd/system/pmcluster.service` and (re)start it — no manual unit management. `serve` is leader-aware: it serves on the Swarm leader and stands by (15s poll) on non-leader managers; on promotion it restores the control-plane database from the newest `pmcluster-ctlplane-*.tar.gz` archive only when the local DB is missing or older (safe with shared storage).
+The daemon runs as a systemd service. `cluster up`, `cluster update`, and `pmcluster join` install `/etc/systemd/system/pmcluster.service` and (re)start it — no manual unit management. `serve` is leader-aware: it serves on the Swarm leader and stands by (15s poll) on non-leader managers; on promotion it keeps the store it has been mirroring and becomes the writer — nothing is restored or copied (ADR 0005), and a stale mirror is served with its age logged.
 
 ```bash
 pmcluster serve   # foreground fallback (non-Linux hosts / manual runs)
@@ -559,11 +559,7 @@ pmcluster backup create                    # on-demand snapshot
 
 ### Control-plane backups (pmcluster's own state)
 
-The backup stack ships a second agent, `control-plane-backup`, that runs **only on the manager node**. Every night it archives `~/.pmcluster` itself — `data.db` (users, API keys, webhook secrets, credentials, stack revisions, TLS metadata), the `.encryption_key`, and `config/` — into the same `/var/stack/backup` directory as the volume backups, with a `pmcluster-ctlplane-` prefix and 30-day retention.
-
-```bash
-ls /var/stack/backup/pmcluster-ctlplane-*   # control-plane archives
-```
+The backup stack ships the in-cluster store and nothing else. The control-plane archiver (`control-plane-backup`, `pmcluster-ctlplane-` prefix) is **deleted** (ADR 0005): cluster state reaches every manager by the mTLS mirror, so there is no control-plane backup to take. **Backups are service volumes only.** `pmcluster cluster mirror verify` is the drill that replaced `cluster kit verify`.
 
 This closes the "lost manager disk = full re-bootstrap" gap: app volumes AND the control plane are both archived daily. The `backup` stack is rendered with the daemon's data dir (`${DATA_DIR}`), so the bind mount points at the real `~/.pmcluster` on the manager.
 

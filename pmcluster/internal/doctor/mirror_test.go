@@ -193,10 +193,16 @@ func TestRunNodeLocalNamesWhatTheMirrorCannotAnswer(t *testing.T) {
 	if c.Status != StatusSkip {
 		t.Fatalf("cluster state = %+v, want SKIP", c)
 	}
-	for _, want := range []string{"cipher key", "stacks", "control-plane kit", "--api-url"} {
+	for _, want := range []string{"cipher key", "last apply", "cluster mirror verify"} {
 		if !strings.Contains(c.Detail, want) {
 			t.Errorf("the skip must name %q: %s", want, c.Detail)
 		}
+	}
+	// Stacks are mirrored now (the mirror carries the whole document), so the skip must no
+	// longer list them as unanswerable — that sentence became false when the projection
+	// became the document.
+	if strings.Contains(c.Detail, "stacks and their revisions") {
+		t.Errorf("the skip still claims stacks are not mirrored: %s", c.Detail)
 	}
 	// It must NOT still claim settings are unavailable — that is the sentence slice 3
 	// deleted, and leaving it would contradict the check right above it.

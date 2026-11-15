@@ -558,8 +558,13 @@ func volumeMatch(rel, volume string) bool {
 }
 
 // refuseControlPlaneArchive inspects the first entry of an archive and errors
-// when it belongs to the control-plane subtree (`backup/pmcluster`), whose
-// data does not belong under the volume root.
+// when it belongs to the control-plane subtree (`backup/pmcluster`), whose data does
+// not belong under the volume root.
+//
+// The archiver that produced those tarballs is retired (ADR 0005), so this is a guard
+// against LEFTOVERS on a node's disk rather than a routing rule: restoring a stale copy
+// of data.db over the volume root is the failure it prevents, and it costs one tar
+// header read.
 func refuseControlPlaneArchive(p string) error {
 	// Raw directory backups are never control-plane archives — short-circuit
 	// before attempting to parse them as tar (which would fail with "is a
@@ -616,64 +621,6 @@ func archiveRelPath(name string) string {
 		return strings.TrimPrefix(clean, prefix+"/")
 	}
 	return clean
-}
-
-// ctlplaneRelPath maps a control-plane archive entry to its path relative to
-// the pmcluster data dir. The control-plane agent archives ${DATA_DIR} under
-// a baked-in `backup/pmcluster` prefix (source mount
-// <data-dir>:/backup/pmcluster:ro), so that prefix is stripped.
-func ctlplaneRelPath(name string) string {
-	clean := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(name)), "/")
-	const prefix = "backup/pmcluster"
-	if clean == prefix {
-		return "."
-	}
-	if strings.HasPrefix(clean, prefix+"/") {
-		return strings.TrimPrefix(clean, prefix+"/")
-	}
-	return clean
-}
-
-// RestoreControlPlane extracts a control-plane backup archive back into the
-// pmcluster data directory (the entry prefix `backup/pmcluster` is stripped,
-// so data.db / .encryption_key / config/ land at the right places). Used by
-// leader-aware failover: a standby manager that becomes swarm leader restores
-// the newest control-plane archive before serving when its local DB is
-// missing or older than the archive.
-func RestoreControlPlane(p, dataDir string) (int, error) {
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return 0, err
-	}
-	return restoreArchiveRel(p, dataDir, ctlplaneRelPath)
-}
-
-// NewestControlPlaneArchive returns the control-plane archive in dir with the
-// most recent modification time (i.e. the newest snapshot of ~/.pmcluster).
-// Returns "" when none exist.
-func NewestControlPlaneArchive(dir string) (string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	var newest string
-	var newestMod int64
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasPrefix(e.Name(), "pmcluster-ctlplane-") || !strings.HasSuffix(e.Name(), ".tar.gz") {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if info.ModTime().Unix() > newestMod {
-			newestMod = info.ModTime().Unix()
-			newest = filepath.Join(dir, e.Name())
-		}
-	}
-	return newest, nil
 }
 
 // restoreArchiveRel extracts an archive into target, mapping every entry

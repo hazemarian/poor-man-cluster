@@ -151,7 +151,6 @@ func (f *fakeDocker) ConfigCreate(_ context.Context, spec runtime.ConfigSpec) er
 // that are always present, so it cannot include the conditional store).
 func renderedServices() []string {
 	return append(append([]string{}, bundledServices...),
-		"backup_control-plane-backup",
 		"backup_seaweedfs",
 		// The observability retention one-shot lives in the observability stack
 		// and so must exist for the drift check to see a settled cluster — but

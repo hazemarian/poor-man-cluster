@@ -63,17 +63,23 @@ func TestScopeOf(t *testing.T) {
 		}
 	}
 
-	// cluster: subcommands that bootstrap are allowed anywhere, the rest are not.
+	// cluster: subcommands that bootstrap or describe THIS NODE are allowed anywhere,
+	// the rest are not. `mirror` is node-local on purpose: it answers "would a
+	// promotion from here work", which only a follower can usefully be asked.
 	cluster := find("cluster")
 	if cluster == nil {
 		t.Fatal("cluster command is not registered")
 	}
-	bootstrapSeen := 0
+	bootstrapSeen, nodeLocalSeen := 0, 0
 	for _, sub := range cluster.Commands() {
 		want := scopeLeader
-		if bootstrapClusterSubcommands[sub.Name()] {
+		switch {
+		case bootstrapClusterSubcommands[sub.Name()]:
 			want = scopeBootstrap
 			bootstrapSeen++
+		case nodeLocalClusterSubcommands[sub.Name()]:
+			want = scopeNode
+			nodeLocalSeen++
 		}
 		if got := scopeOf(sub); got != want {
 			t.Errorf("scopeOf(cluster %s) = %v, want %v", sub.Name(), got, want)
@@ -81,6 +87,9 @@ func TestScopeOf(t *testing.T) {
 	}
 	if bootstrapSeen == 0 {
 		t.Error("no cluster subcommand was classified as bootstrap — the carve-outs are gone")
+	}
+	if nodeLocalSeen == 0 {
+		t.Error("no cluster subcommand is node-local — `cluster mirror verify` must answer on a follower, or the drill is refused everywhere but the leader")
 	}
 }
 

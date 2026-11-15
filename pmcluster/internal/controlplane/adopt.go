@@ -189,7 +189,7 @@ func (k *Kit) AdoptOnLeadership(ctx context.Context, st *store.Store, mirrored b
 func (k *Kit) checkClusterKey(ctx context.Context) error {
 	name, published, err := k.newestKey(ctx)
 	switch {
-	case errors.Is(err, ErrNoSnapshots):
+	case errors.Is(err, ErrNoKeyConfig):
 		return nil
 	case err != nil:
 		if IsSwarmUnavailable(err) {
