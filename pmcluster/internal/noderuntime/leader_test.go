@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"archive/tar"
@@ -76,7 +76,7 @@ func TestIsSwarmLeader_HappyPath(t *testing.T) {
 		{ID: "n1", Hostname: "mgr1", IsLeader: false},
 		{ID: "n2", Hostname: "mgr2", IsLeader: true},
 	}}
-	leader, found, err := isSwarmLeader(context.Background(), f, "mgr2")
+	leader, found, err := IsSwarmLeader(context.Background(), f, "mgr2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func TestIsSwarmLeader_HappyPath(t *testing.T) {
 	if !leader {
 		t.Fatal("expected mgr2 to be leader")
 	}
-	notLeader, found, err := isSwarmLeader(context.Background(), f, "mgr1")
+	notLeader, found, err := IsSwarmLeader(context.Background(), f, "mgr1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestIsSwarmLeader_NodeNotFound(t *testing.T) {
 	f := &leaderFake{nodes: []runtime.Node{
 		{ID: "n1", Hostname: "mgr1", IsLeader: true},
 	}}
-	leader, found, err := isSwarmLeader(context.Background(), f, "ghost")
+	leader, found, err := IsSwarmLeader(context.Background(), f, "ghost")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestWaitForSwarmLeadership_NodeListErrorServesImmediately(t *testing.T) {
 	// Docker unreachable (NodeList errors) must NOT block — standalone/local
 	// mode serves right away instead of standing by forever.
 	f := &leaderFake{nodeErr: errors.New("Cannot connect to the Docker daemon")}
-	if err := waitForSwarmLeadership(context.Background(), f, zerolog.Nop()); err != nil {
+	if err := WaitForSwarmLeadership(context.Background(), f, zerolog.Nop()); err != nil {
 		t.Fatalf("expected immediate return on NodeList error, got %v", err)
 	}
 }
@@ -196,7 +196,7 @@ func TestWaitForSwarmLeadership_NodeNotInSwarmServesImmediately(t *testing.T) {
 	// A host that is not a swarm member (no node with our hostname) must not
 	// block — treat it as standalone/local.
 	f := &leaderFake{nodes: []runtime.Node{{ID: "n1", Hostname: "someone-else", IsLeader: true}}}
-	if err := waitForSwarmLeadership(context.Background(), f, zerolog.Nop()); err != nil {
+	if err := WaitForSwarmLeadership(context.Background(), f, zerolog.Nop()); err != nil {
 		t.Fatalf("expected immediate return for non-member, got %v", err)
 	}
 }
@@ -213,7 +213,7 @@ func TestWaitForSwarmLeadership_NonLeaderStandby(t *testing.T) {
 	f := &leaderFake{nodes: []runtime.Node{{ID: "n1", Hostname: host, IsLeader: false}}}
 	done := make(chan error, 1)
 	go func() {
-		done <- waitForSwarmLeadership(ctx, f, zerolog.Nop())
+		done <- WaitForSwarmLeadership(ctx, f, zerolog.Nop())
 	}()
 	time.Sleep(50 * time.Millisecond)
 	select {
@@ -242,7 +242,7 @@ func TestWaitForSwarmLeadership_SwarmWorkerStandsBy(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- waitForSwarmLeadership(ctx, f, log) }()
+	go func() { done <- WaitForSwarmLeadership(ctx, f, log) }()
 
 	// Stand by: it must block rather than return immediately.
 	time.Sleep(200 * time.Millisecond)
@@ -355,7 +355,7 @@ func TestEnsureControlPlaneFresh_KeepsCurrentDB(t *testing.T) {
 
 	cfg := &config.Config{DataDir: dataDir}
 	log := zerolog.Nop()
-	restored, err := ensureControlPlaneFresh(context.Background(), cfg, nil, log)
+	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, nil, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,7 +382,7 @@ func TestEnsureControlPlaneFresh_RestoresWhenStale(t *testing.T) {
 	os.Chtimes(dbPath, now.Add(-24*time.Hour), now.Add(-24*time.Hour)) // older than archive
 
 	cfg := &config.Config{DataDir: dataDir}
-	restored, err := ensureControlPlaneFresh(context.Background(), cfg, nil, zerolog.Nop())
+	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, nil, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func TestEnsureControlPlaneFresh_RestoresWhenMissing(t *testing.T) {
 
 	// Empty data dir — no data.db at all. Expect restore.
 	cfg := &config.Config{DataDir: t.TempDir()}
-	restored, err := ensureControlPlaneFresh(context.Background(), cfg, nil, zerolog.Nop())
+	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, nil, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestEnsureControlPlaneFresh_RestoresWhenMissing(t *testing.T) {
 
 func TestEnsureControlPlaneFresh_NoArchiveKeeps(t *testing.T) {
 	cfg := &config.Config{DataDir: t.TempDir()}
-	restored, err := ensureControlPlaneFresh(context.Background(), cfg, nil, zerolog.Nop())
+	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, nil, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +436,7 @@ func TestEnsureControlPlaneFresh_SwarmLeaderlessIsNonFatal(t *testing.T) {
 	// (BUG-020, reproduced live in TC10-A: 28 restarts on nxt-sw-4-m).
 	withArchiveDir(t, t.TempDir()) // empty: no tarball to fall back to either
 	cfg := &config.Config{DataDir: t.TempDir()}
-	restored, err := ensureControlPlaneFresh(context.Background(), cfg, leaderlessDocker{}, zerolog.Nop())
+	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, leaderlessDocker{}, zerolog.Nop())
 	if err != nil {
 		t.Fatalf("a leaderless swarm must not be fatal, got %v", err)
 	}
@@ -502,7 +502,7 @@ func TestEnsureControlPlaneFresh_RestoresFromStateConfig(t *testing.T) {
 	snapshotInto(t, f, srcDir)
 
 	cfg := &config.Config{DataDir: t.TempDir()}
-	restored, err := ensureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop())
+	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,7 +553,7 @@ func TestEnsureControlPlaneFresh_KeepsCurrentStateConfig(t *testing.T) {
 	}
 
 	cfg := &config.Config{DataDir: curDir}
-	restored, err := ensureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop())
+	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -585,7 +585,7 @@ func TestEnsureControlPlaneFresh_MissingKeyConfigErrors(t *testing.T) {
 	}
 
 	cfg := &config.Config{DataDir: t.TempDir()}
-	if _, err := ensureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop()); err == nil {
+	if _, err := EnsureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop()); err == nil {
 		t.Fatal("restore must refuse a state config whose key config is missing")
 	}
 }
@@ -600,7 +600,7 @@ func TestEnsureControlPlaneFresh_FallsBackToTarballWhenNoStateConfig(t *testing.
 
 	f := &stateFake{configs: map[string]runtime.ConfigInspectResult{}}
 	cfg := &config.Config{DataDir: t.TempDir()}
-	restored, err := ensureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop())
+	restored, err := EnsureControlPlaneFresh(context.Background(), cfg, f, zerolog.Nop())
 	if err != nil {
 		t.Fatal(err)
 	}

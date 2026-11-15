@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"context"
@@ -34,7 +34,7 @@ func TestTelemetrySupervisorRecoversWithoutARestart(t *testing.T) {
 	}
 
 	first := make(chan struct{}, 4)
-	s := newTelemetrySupervisor(zerolog.Nop(), "nxt-sw-6-w", func() { firstCalls.Add(1); first <- struct{}{} })
+	s := NewTelemetrySupervisor(zerolog.Nop(), "nxt-sw-6-w", func() { firstCalls.Add(1); first <- struct{}{} })
 	s.interval = 0
 
 	probe := func() { s.probe(context.Background(), "auto", nil, nil) }
@@ -97,7 +97,7 @@ func TestTelemetrySupervisorFollowsTheLeader(t *testing.T) {
 	}
 
 	leader := "http://10.7.224.11:4318"
-	s := newTelemetrySupervisor(zerolog.Nop(), "nxt-sw-4-m", nil)
+	s := NewTelemetrySupervisor(zerolog.Nop(), "nxt-sw-4-m", nil)
 	s.interval = 0
 	follower := func(context.Context) string { return leader }
 

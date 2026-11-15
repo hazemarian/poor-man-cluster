@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"context"
@@ -24,13 +24,13 @@ const leaderPollInterval = 15 * time.Second
 // pmcluster-ctlplane-*.tar.gz archives. Overridable in tests.
 var controlPlaneArchiveDir = backups.DefaultArchiveDir
 
-// waitForSwarmLeadership blocks until the local Docker node is the current
+// WaitForSwarmLeadership blocks until the local Docker node is the current
 // Swarm leader (or the context is cancelled). Non-leader managers run as
 // standby: the daemon does NOT serve — it polls until Swarm elects this node
 // leader (failover), then the caller proceeds to open the store and serve.
 // It returns immediately when Docker is unavailable or the node is not a
 // swarm member (standalone/local mode) — only a confirmed non-leader blocks.
-func waitForSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Logger) error {
+func WaitForSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Logger) error {
 	if dc == nil {
 		return nil
 	}
@@ -42,8 +42,8 @@ func waitForSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.
 	defer t.Stop()
 	workerLogged := false
 	for {
-		leader, found, err := isSwarmLeader(ctx, dc, host)
-		if err != nil && isSwarmWorker(ctx, dc) {
+		leader, found, err := IsSwarmLeader(ctx, dc, host)
+		if err != nil && IsSwarmWorker(ctx, dc) {
 			// A genuine swarm WORKER (swarm active, ControlAvailable false).
 			// `docker node ls` fails with "this node is not a swarm manager",
 			// but unlike a standalone node it must NOT serve and start a
@@ -82,14 +82,14 @@ func waitForSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.
 	}
 }
 
-// isSwarmWorker reports whether the local Docker daemon is a Swarm WORKER: a
+// IsSwarmWorker reports whether the local Docker daemon is a Swarm WORKER: a
 // member of an ACTIVE swarm that lacks manager (control) access. Such a node
 // can never run the control loop — every manager-only call (node/service/
 // config list) fails with "this node is not a swarm manager" — so the daemon
 // must stand by silently instead of serving and starting a reconcile loop
 // that errors every pass. A standalone node (swarm inactive) or a manager
 // returns false, preserving the existing behaviour.
-func isSwarmWorker(ctx context.Context, dc runtime.Client) bool {
+func IsSwarmWorker(ctx context.Context, dc runtime.Client) bool {
 	if dc == nil {
 		return false
 	}
@@ -102,10 +102,10 @@ func isSwarmWorker(ctx context.Context, dc runtime.Client) bool {
 	return info.SwarmLocalNodeState == "active" && !info.SwarmControlAvailable
 }
 
-// isSwarmLeader reports whether the node with the given hostname is the
+// IsSwarmLeader reports whether the node with the given hostname is the
 // current Swarm leader, per the Raft-elected leader flag on the node list.
 // found is false when the hostname is not present in the node list.
-func isSwarmLeader(ctx context.Context, dc runtime.Client, host string) (leader, found bool, err error) {
+func IsSwarmLeader(ctx context.Context, dc runtime.Client, host string) (leader, found bool, err error) {
 	nodes, err := dc.NodeList(ctx)
 	if err != nil {
 		return false, false, err
@@ -146,9 +146,9 @@ func WatchSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Lo
 		first := true
 		workerLogged := false
 		for {
-			leader, found, err := isSwarmLeader(ctx, dc, host)
+			leader, found, err := IsSwarmLeader(ctx, dc, host)
 			switch {
-			case err != nil && isSwarmWorker(ctx, dc):
+			case err != nil && IsSwarmWorker(ctx, dc):
 				// A genuine swarm WORKER. Stay idle — never emit leader-true,
 				// so the caller never starts the reconcile loop — logging the
 				// standby message once, and re-checking each poll so a later
@@ -201,11 +201,11 @@ func WatchSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Lo
 	return out
 }
 
-// adoptOnLeadershipGain runs the control-plane freshness predicate once for a
+// AdoptOnLeadershipGain runs the control-plane freshness predicate once for a
 // follower→leader transition and adopts the newest Raft-replicated kit when this
 // node is behind it.
 //
-// It is the mid-run twin of the startup check in serve (ensureControlPlaneFresh):
+// It is the mid-run twin of the startup check in serve (EnsureControlPlaneFresh):
 // the same predicate — no key, a missing or older `.state_revision`, or a
 // different encryption key — but the store is already open and serving, so
 // adoption closes the SQLite handle, renames the staged data.db and
@@ -217,7 +217,7 @@ func WatchSwarmLeadership(ctx context.Context, dc runtime.Client, log zerolog.Lo
 // Failure is contained: the Kit logs the reason and leaves the current database
 // in place, and this function keeps serving it. Exiting here would turn a stale
 // leader into no leader at all.
-func adoptOnLeadershipGain(ctx context.Context, kit *controlplane.Kit, swap controlplane.StoreSwapper, cipher *credentials.Cipher, cfg *config.Config, gate *adoptionGate, log zerolog.Logger) {
+func AdoptOnLeadershipGain(ctx context.Context, kit *controlplane.Kit, swap controlplane.StoreSwapper, cipher *credentials.Cipher, cfg *config.Config, gate *AdoptionGate, log zerolog.Logger) {
 	if kit == nil {
 		return
 	}
@@ -257,7 +257,7 @@ func adoptOnLeadershipGain(ctx context.Context, kit *controlplane.Kit, swap cont
 	log.Info().Msg("reloaded the encryption key adopted with the control plane")
 }
 
-// ensureControlPlaneFresh restores the control plane on promotion. Two
+// EnsureControlPlaneFresh restores the control plane on promotion. Two
 // sources, newest-first:
 //
 //  1. The Raft-replicated survivor kit (L2): the leader snapshots the data
@@ -271,7 +271,7 @@ func adoptOnLeadershipGain(ctx context.Context, kit *controlplane.Kit, swap cont
 // shared/replicated storage such as LINSTOR keeps the data dir current on
 // every manager), no restore happens — restoring would clobber a live,
 // current database. Returns (restored bool, err).
-func ensureControlPlaneFresh(ctx context.Context, cfg *config.Config, dc runtime.Client, log zerolog.Logger) (bool, error) {
+func EnsureControlPlaneFresh(ctx context.Context, cfg *config.Config, dc runtime.Client, log zerolog.Logger) (bool, error) {
 	kit := &controlplane.Kit{Docker: dc, DataDir: cfg.DataDir, Log: log}
 	restored, err := kit.Restore(ctx)
 	if err == nil {

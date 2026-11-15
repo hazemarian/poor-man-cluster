@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"context"
@@ -32,7 +32,7 @@ func TestPlanPublishLogsAFailureOncePerDistinctError(t *testing.T) {
 
 	dc := failingDocker{err: errors.New("This node is not a swarm manager")}
 	var lines []string
-	publishBackupPlan(ctx, dc, func(format string, args ...any) {
+	PublishBackupPlan(ctx, dc, func(format string, args ...any) {
 		lines = append(lines, strings.TrimSpace(fmt.Sprintf(format, args...)))
 	})
 	<-ctx.Done()

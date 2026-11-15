@@ -259,4 +259,3 @@ func TestDrillUnitsExistAndAreWeekly(t *testing.T) {
 		t.Errorf("drill timer looks hourly:\n%s", timer)
 	}
 }
-

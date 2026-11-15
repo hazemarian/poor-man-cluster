@@ -17,6 +17,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/doctor"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -107,7 +108,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 			Hostname:   host,
 			ListenAddr: cfg.ListenAddr,
 			SocketPath: socketPath,
-			StatePath:  agentStatePath(cfg.DataDir),
+			StatePath:  noderuntime.AgentStatePath(cfg.DataDir),
 			VolumeRoot: envOr("PMCLUSTER_VOLUME_ROOT", "/var/stack/data"),
 			Docker:     &runners.CLIDocker{},
 			Store:      mirror,

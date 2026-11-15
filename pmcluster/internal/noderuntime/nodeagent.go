@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"context"
@@ -21,8 +21,8 @@ import (
 // The per-node runner machinery.
 //
 // It runs on EVERY node and it starts BEFORE the leadership wait, for the same
-// reason publishBackupPlan and the version publisher do (serve.go): a fence
-// manager blocks in waitForSwarmLeadership forever, and a WORKER blocks there by
+// reason PublishBackupPlan and the version publisher do (serve.go): a fence
+// manager blocks in WaitForSwarmLeadership forever, and a WORKER blocks there by
 // design — it is never a candidate for the control loop. Everything placed after
 // that wait therefore only ever ran on the leader, which is why the runner feature
 // shipped in v0.2.267 was inert everywhere: measured on nxt-sw-6-w and nxt-sw-3-w,
@@ -37,16 +37,16 @@ import (
 //     which now starts as soon as the store is open instead of never (on a
 //     standby) or only after leadership (on the leader).
 
-// lateStore is a handle that is resolved after the leadership wait. The daemon
+// LateStore is a handle that is resolved after the leadership wait. The daemon
 // deliberately does not open the store before then (a standby's DB would be
 // stale, and on promotion the restored control plane must be what gets opened),
 // so the per-node loops take a getter instead of a *store.Store.
-type lateStore struct {
+type LateStore struct {
 	mu sync.RWMutex
 	st *store.Store
 }
 
-func (l *lateStore) set(st *store.Store) {
+func (l *LateStore) Set(st *store.Store) {
 	l.mu.Lock()
 	l.st = st
 	l.mu.Unlock()
@@ -59,9 +59,9 @@ type assignmentFetcher interface {
 	Fetch(ctx context.Context) (runners.Assignment, string, error)
 }
 
-// perNodeDeps is what the per-node loops need. Every dependency is optional so a
+// PerNodeDeps is what the per-node loops need. Every dependency is optional so a
 // test can wire one loop without the other.
-type perNodeDeps struct {
+type PerNodeDeps struct {
 	// Worker is true when this node is a swarm WORKER: it has no store and learns
 	// its runner decision from the leader.
 	Worker bool
@@ -97,12 +97,12 @@ type perNodeLoops struct {
 // Fetches reports how many assignments were successfully fetched.
 func (l *perNodeLoops) Fetches() int64 { return l.assignmentFetches.Load() }
 
-// startPerNodeLoops starts the runner machinery. A worker's assignment loop runs in its
+// StartPerNodeLoops starts the runner machinery. A worker's assignment loop runs in its
 // own goroutine and reports its first pass on FirstAssignment.
 //
 // There is no docker socket to start any more: each job gets a daemon of its own inside
 // a privileged container, so this node never needs to publish a socket for anyone.
-func startPerNodeLoops(ctx context.Context, d perNodeDeps) *perNodeLoops {
+func StartPerNodeLoops(ctx context.Context, d PerNodeDeps) *perNodeLoops {
 	lp := &perNodeLoops{FirstAssignment: make(chan struct{})}
 
 	// A WORKER and a FOLLOWING MANAGER both learn their runner decision from the
@@ -116,7 +116,7 @@ func startPerNodeLoops(ctx context.Context, d perNodeDeps) *perNodeLoops {
 	return lp
 }
 
-func (lp *perNodeLoops) runAssignmentAgent(ctx context.Context, d perNodeDeps) {
+func (lp *perNodeLoops) runAssignmentAgent(ctx context.Context, d PerNodeDeps) {
 	log := d.Log.With().Str("component", "runners").Logger()
 	agent := &runners.Agent{
 		Node:      d.Hostname,
@@ -150,7 +150,7 @@ func (lp *perNodeLoops) runAssignmentAgent(ctx context.Context, d perNodeDeps) {
 		// This check runs per pass, not once at start, because the loops deliberately
 		// start BEFORE leadership is resolved (a worker never gets past that wait).
 		if d.Client != nil {
-			if leader, found, lerr := isSwarmLeader(ctx, d.Client, d.Hostname); lerr == nil && found && leader {
+			if leader, found, lerr := IsSwarmLeader(ctx, d.Client, d.Hostname); lerr == nil && found && leader {
 				return
 			}
 		}
@@ -268,19 +268,19 @@ func (b *boundedWarn) log(msg string, err error) {
 	ev.Msg(msg)
 }
 
-// isStandby reports whether this node must serve its API on loopback only: a
+// IsStandby reports whether this node must serve its API on loopback only: a
 // swarm WORKER always, and a manager that is not (or cannot prove it is) the
 // leader. Fail-safe in the direction that matters — a node that cannot answer "am
 // I the leader?" must not bind all interfaces and answer cluster questions from a
 // stale store.
-func isStandby(worker, leader, found bool, err error) bool {
+func IsStandby(worker, leader, found bool, err error) bool {
 	if worker {
 		return true
 	}
 	return err == nil && found && !leader
 }
 
-// apiAddr is the address this node's daemon API binds.
+// ApiAddr is the address this node's daemon API binds.
 //
 // The leader binds what the operator configured (0.0.0.0:9090 by default: the
 // edge container reaches it through host.docker.internal, and Traefik routes
@@ -288,7 +288,7 @@ func isStandby(worker, leader, found bool, err error) bool {
 // standing by, so its API answers nothing cluster-wide, but the runner loop needs
 // a local surface and doctor/`/health` must work on every node. Exposing that off
 // the host would turn every worker into a second, stale API — never.
-func apiAddr(configured string, worker bool) string {
+func ApiAddr(configured string, worker bool) string {
 	host, port, err := net.SplitHostPort(strings.TrimSpace(configured))
 	if err != nil {
 		// A bare port ("9090") or a value we cannot parse: keep the port if we
@@ -334,10 +334,10 @@ func assignmentAddr(nodeAddr string) string {
 	return net.JoinHostPort(nodeAddr, fmt.Sprintf("%d", runners.AssignmentPort))
 }
 
-// managerHosts returns the swarm manager addresses a worker can try, from the
+// ManagerHosts returns the swarm manager addresses a worker can try, from the
 // live swarm itself (`docker info`): the addresses Swarm already uses between
 // nodes, so no DNS, no published port and no firewall change is involved.
-func managerHosts(ctx context.Context, dc runtime.Client) ([]string, error) {
+func ManagerHosts(ctx context.Context, dc runtime.Client) ([]string, error) {
 	if dc == nil {
 		return nil, errors.New("no docker client: cannot read the manager addresses")
 	}
@@ -362,10 +362,10 @@ func managerHosts(ctx context.Context, dc runtime.Client) ([]string, error) {
 	return out, nil
 }
 
-// agentStatePath is where a worker records the assignment it applied. The dir is
+// AgentStatePath is where a worker records the assignment it applied. The dir is
 // the daemon's data dir (0700), the file is 0600: it names the node, the org and
 // the runner assignment, which is written 0600 because it carries a registration token.
-func agentStatePath(dataDir string) string {
+func AgentStatePath(dataDir string) string {
 	if strings.TrimSpace(dataDir) == "" {
 		return ""
 	}

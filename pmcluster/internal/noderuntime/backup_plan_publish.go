@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"context"
@@ -18,7 +18,7 @@ import (
 // Overridable in tests, like the daemon's other intervals.
 var planPublishInterval = 15 * time.Minute
 
-// publishBackupPlan keeps this node's backup plan in step with the swarm.
+// PublishBackupPlan keeps this node's backup plan in step with the swarm.
 //
 // The agent archives one artifact per directory under the volume root, because a
 // directory cannot know whether its stack still exists. The daemon can: it lists
@@ -29,7 +29,7 @@ var planPublishInterval = 15 * time.Minute
 // A node that cannot list services (a worker, which by role holds no data) simply
 // keeps the disk-derived fallback — the same behaviour as before, which is why
 // this is additive rather than a migration.
-func publishBackupPlan(ctx context.Context, dc runtime.Client, log func(format string, args ...any)) {
+func PublishBackupPlan(ctx context.Context, dc runtime.Client, log func(format string, args ...any)) {
 	if dc == nil {
 		if log != nil {
 			log("backup plan not published: no docker client, so the agent keeps the volume-root fallback")
@@ -85,7 +85,7 @@ func writeBackupPlanOnce(ctx context.Context, dc runtime.Client) error {
 		return err
 	}
 	plan.VolumeRoot = root
-	return backupagent.WritePlan(filepath.Join(defaultStateDir, planCacheName), plan)
+	return backupagent.WritePlan(filepath.Join(nodeunits.AgentStateDir, nodeunits.PlanCacheName), plan)
 }
 
 // agentVolumeRootFromPolicy reads the volume root the backup agent was installed
@@ -96,7 +96,7 @@ func agentVolumeRootFromPolicy() string {
 	if v := os.Getenv("PMCLUSTER_VOLUME_ROOT"); v != "" {
 		return v
 	}
-	root := defaultVolumeRoot
+	root := nodeunits.AgentVolumeRoot
 	b, err := os.ReadFile(nodeunits.PolicyFile)
 	if err != nil {
 		return root

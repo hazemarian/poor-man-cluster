@@ -53,6 +53,21 @@ type Store struct {
 	Log zerolog.Logger
 }
 
+// OpenExisting opens the SQLite DB at dbPath and REFUSES when the file is not
+// there, where Open would create it.
+//
+// The distinction matters on a node that was never initialised: an empty database
+// makes every "run pmcluster init first" guard pass, so `doctor` reports a healthy
+// store and a manager with no stacks reads as a manager with no stacks. Every
+// caller that only wants to READ a setting should use this one; Open is for init
+// and join, which are the two places a database is meant to come into being.
+func OpenExisting(dbPath string) (*Store, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("no control-plane database at %s yet: %w", dbPath, err)
+	}
+	return Open(dbPath)
+}
+
 // Open opens (or creates) the SQLite DB, applies migrations, and returns
 // a ready *Store. Parent directories get mode 0700.
 func Open(dbPath string) (*Store, error) {

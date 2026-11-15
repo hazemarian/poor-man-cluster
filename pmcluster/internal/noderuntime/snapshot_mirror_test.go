@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"bytes"
@@ -225,7 +225,7 @@ func TestMirrorTickAppliesAcrossALeaderChange(t *testing.T) {
 // node that has no control plane — and the mirror would then serve an empty one.
 func TestOpenMirroredStoreRefusesToCreateADatabase(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nested", "data.db")
-	if _, err := openExistingStore(missing); err == nil {
+	if _, err := store.OpenExisting(missing); err == nil {
 		t.Fatal("openExistingStore created a database: the uninitialised-node guard is defeated")
 	}
 	if _, statErr := os.Stat(missing); !os.IsNotExist(statErr) {
@@ -241,7 +241,7 @@ func TestOpenMirroredStoreRefusesToCreateADatabase(t *testing.T) {
 	if err := seed.Close(); err != nil {
 		t.Fatalf("close seed: %v", err)
 	}
-	st, err := openExistingStore(existing)
+	st, err := store.OpenExisting(existing)
 	if err != nil {
 		t.Fatalf("openExistingStore on an existing database: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestStartSnapshotMirrorPollsThenStopsOnDemand(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	stop, done := startSnapshotMirror(ctx, d)
+	stop, done := StartSnapshotMirror(ctx, d)
 
 	// Wait for the tick to be APPLIED, read back through a second handle (sqlite allows
 	// it: the store uses the rollback journal precisely so the CLI can read alongside the

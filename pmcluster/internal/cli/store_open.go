@@ -53,10 +53,7 @@ func requireInitialised(cfg *config.Config, hint string) error {
 // opener that starts while another process is mid-migration fails once and then
 // finds the work already done.
 func openExistingStore(dbPath string) (*store.Store, error) {
-	if _, err := os.Stat(dbPath); err != nil {
-		return nil, fmt.Errorf("no control-plane database at %s yet: %w", dbPath, err)
-	}
-	return store.Open(dbPath)
+	return store.OpenExisting(dbPath)
 }
 
 // openOrCreateStore is the ONLY place a missing database is created, and it names

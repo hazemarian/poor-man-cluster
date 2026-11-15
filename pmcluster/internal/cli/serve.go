@@ -31,6 +31,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/mcpserver"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodever"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile"
@@ -98,7 +99,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// promotion the restored control plane has to be what gets opened. The
 	// per-node loops below take this handle, so they can start before the
 	// leadership wait without pre-empting that ordering.
-	served := &lateStore{}
+	served := &noderuntime.LateStore{}
 	hostname, _ := os.Hostname()
 
 	// Self-telemetry is SUPERVISED, not decided once at startup. The collector
@@ -114,13 +115,13 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// all. Its OTLP half is a no-op until the probe finds one.
 	go func() {
 		if dc != nil {
-			startNodeStatSampler(cmd.Context(), dc, log)
+			noderuntime.StartNodeStatSampler(cmd.Context(), dc, log)
 		}
 	}()
-	telemetryCtl := newTelemetrySupervisor(log, hostname, func() {
+	telemetryCtl := noderuntime.NewTelemetrySupervisor(log, hostname, func() {
 	})
 	go telemetryCtl.Loop(cmd.Context(), cfg.OTLPEndpoint, func(ctx context.Context) bool {
-		leader, _, err := isSwarmLeader(ctx, dc, hostname)
+		leader, _, err := noderuntime.IsSwarmLeader(ctx, dc, hostname)
 		return err == nil && leader
 	}, func(ctx context.Context) string {
 		// A follower answers where the leader is, and it finds it the way the mTLS
@@ -131,15 +132,15 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			return ""
 		}
 		return collectorEndpointFor(ctx, func(c context.Context) ([]string, error) {
-			return managerHosts(c, dc)
+			return noderuntime.ManagerHosts(c, dc)
 		}, dialCollector)
 	})
-	defer telemetryCtl.stop(context.Background())
+	defer telemetryCtl.Stop(context.Background())
 	// worker decides which runner path this node takes: a swarm WORKER cannot read
 	// cluster settings (Docker configs are manager-only), so it learns its runner
 	// decision from the leader instead. Cheap and best-effort: any doubt (no
 	// docker, no swarm) keeps the settings-based path.
-	worker := dockerErr == nil && isSwarmWorker(cmd.Context(), dc)
+	worker := dockerErr == nil && noderuntime.IsSwarmWorker(cmd.Context(), dc)
 	// standby says this node is not the leader right now (a worker, or a follower
 	// manager), so its API must answer on loopback only until it is elected. A
 	// standby that bound all interfaces would be a second, stale control plane.
@@ -148,8 +149,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		if worker {
 			standby = true
 		} else {
-			leader, found, err := isSwarmLeader(cmd.Context(), dc, hostname)
-			standby = isStandby(worker, leader, found, err)
+			leader, found, err := noderuntime.IsSwarmLeader(cmd.Context(), dc, hostname)
+			standby = noderuntime.IsStandby(worker, leader, found, err)
 		}
 	}
 
@@ -172,9 +173,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 		// Every daemon — leader or not — keeps the volume directories of the
 		// stateful services the Swarm placed on this node. A standby manager
-		// blocks in waitForSwarmLeadership below, so the loop starts here and
+		// blocks in noderuntime.WaitForSwarmLeadership below, so the loop starts here and
 		// touches the runtime client only, never the store.
-		startVolumeRepairLoop(cmd.Context(), dc, cluster.NewDockerCLIDeployer(os.Stderr), func() string {
+		noderuntime.StartVolumeRepairLoop(cmd.Context(), dc, cluster.NewDockerCLIDeployer(os.Stderr), func() string {
 			if s, _ := storageRoot.Load().(string); s != "" {
 				return s
 			}
@@ -196,7 +197,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// read the service list, and every storage node needs its own plan for the
 		// volumes it actually holds — publishing only on the leader left the other
 		// managers archiving directories of stacks that no longer exist.
-		go publishBackupPlan(cmd.Context(), dc, func(format string, args ...any) {
+		go noderuntime.PublishBackupPlan(cmd.Context(), dc, func(format string, args ...any) {
 			log.Warn().Msgf(format, args...)
 		})
 
@@ -212,7 +213,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// the local store, which on a worker is always absent, so the feature silently
 		// did nothing on exactly the nodes it was written for (measured on
 		// nxt-sw-6-w: setting true, unit never gained the flag).
-		sock := defaultDockerSocket
+		sock := noderuntime.DefaultDockerSocket
 		// Only a store that HOLDS the decision may write the node policy. A worker's
 		// store cannot answer a leader-owned setting, and writing its default there
 		// disarmed the docker watchdog at the worst possible moment (nxt-sw-6-w,
@@ -295,13 +296,13 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		//   - a manager keeps the store-based reconcile, which starts as soon as
 		//     the store and the App exist (further down) — it cannot start before
 		//     them, and a standby manager is refused as a runner host anyway.
-		startPerNodeLoops(cmd.Context(), perNodeDeps{
+		noderuntime.StartPerNodeLoops(cmd.Context(), noderuntime.PerNodeDeps{
 			Worker:     worker,
 			Hostname:   hostname,
 			Container:  &runners.CLIDocker{},
-			Assignment: assignmentClientFor(dc),
+			Assignment: noderuntime.AssignmentClientFor(dc),
 			Client:     dc,
-			StatePath:  agentStatePath(cfg.DataDir),
+			StatePath:  noderuntime.AgentStatePath(cfg.DataDir),
 			Log:        log,
 		})
 
@@ -311,7 +312,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// instead of failing because the daemon never bound at all. The leader
 		// keeps binding what the operator configured (all interfaces), below.
 		if standby {
-			localAPIStop, localAPIDone = startWorkerAPI(cmd.Context(), dc, apiAddr(cfg.ListenAddr, true), log)
+			localAPIStop, localAPIDone = noderuntime.StartWorkerAPI(cmd.Context(), dc, noderuntime.ApiAddr(cfg.ListenAddr, true), log)
 			defer func() {
 				if localAPIStop != nil {
 					localAPIStop()
@@ -333,10 +334,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// This is the safe window: nothing has the store open yet, so replacing
 		// data.db cannot truncate it under a live sqlite connection. Best-effort:
 		// a worker, or a swarm without a readable Raft config, must still serve.
-		// The mid-run twin of this check is adoptOnLeadershipGain: a node that
+		// The mid-run twin of this check is noderuntime.AdoptOnLeadershipGain: a node that
 		// BECOMES leader later adopts through the open store (close, replace,
 		// reopen) on the same predicate.
-		if _, err := ensureControlPlaneFresh(cmd.Context(), cfg, dc, log); err != nil {
+		if _, err := noderuntime.EnsureControlPlaneFresh(cmd.Context(), cfg, dc, log); err != nil {
 			log.Warn().Err(err).Msg("control-plane restore at startup had issues (continuing)")
 		}
 
@@ -358,7 +359,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		var mirrorStop func()
 		var mirrorDone <-chan struct{}
 		if standby && !worker {
-			mirrorStop, mirrorDone = startSnapshotMirror(cmd.Context(), snapshotMirrorFor(cfg, dc, hostname, log))
+			mirrorStop, mirrorDone = noderuntime.StartSnapshotMirror(cmd.Context(), noderuntime.SnapshotMirrorFor(cfg, dc, hostname, log))
 			defer func() {
 				if mirrorStop != nil {
 					mirrorStop()
@@ -367,7 +368,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}()
 		}
 
-		if err := waitForSwarmLeadership(cmd.Context(), dc, log); err != nil {
+		if err := noderuntime.WaitForSwarmLeadership(cmd.Context(), dc, log); err != nil {
 			return fmt.Errorf("standby: %w", err)
 		}
 
@@ -398,7 +399,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// clusters fall back to the tarball archive. Shared/replicated
 		// storage (LINSTOR) keeps the DB current on every manager — never
 		// clobber a fresh DB.
-		if _, err := ensureControlPlaneFresh(cmd.Context(), cfg, dc, log); err != nil {
+		if _, err := noderuntime.EnsureControlPlaneFresh(cmd.Context(), cfg, dc, log); err != nil {
 			return fmt.Errorf("control-plane restore: %w", err)
 		}
 
@@ -437,8 +438,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 	defer func() { _ = st.Close() }()
 	// Now the per-node loops can see the settings they were started without.
-	served.set(st)
-	storageRoot.Store(localVolumeRoot(cmd.Context(), st))
+	served.Set(st)
+	storageRoot.Store(noderuntime.LocalVolumeRoot(cmd.Context(), st))
 
 	// The persisted log_level cluster setting overrides the config-file
 	// default, so a console change survives daemon restarts. Invalid values
@@ -641,8 +642,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	// The gate answers 503 while a leadership-gain adoption is swapping the
 	// store, so no request is answered from the revision being replaced.
-	gate := &adoptionGate{}
-	handler = gate.wrap(handler)
+	gate := &noderuntime.AdoptionGate{}
+	handler = gate.Wrap(handler)
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -659,7 +660,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// else is a deliberate widening of the cluster's attack surface — review it
 	// as one.
 	if !worker {
-		startAssignmentListener(ctx, assignmentListenerOptions{
+		noderuntime.StartAssignmentListener(ctx, noderuntime.AssignmentListenerOptions{
 			Store:        st,
 			Hostname:     hostname,
 			CacheReports: cacheReports,
@@ -678,7 +679,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// loop (platform configs + app-stack drift + health snapshot) and the
 	// control-plane Raft snapshot loop; on losing leadership the loops stop.
 	// Non-manager/standalone nodes serve without the loops.
-	leadership := WatchSwarmLeadership(ctx, dc, log)
+	leadership := noderuntime.WatchSwarmLeadership(ctx, dc, log)
 	reconciler := &reconcile.Reconciler{
 		Store:         st,
 		Docker:        dc,
@@ -727,7 +728,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 				// on a state change, so a node that stays leader never re-runs
 				// this — a per-tick check would close and reopen the store under
 				// every request, for nothing.
-				adoptOnLeadershipGain(ctx, kit, st, cipher, cfg, gate, log)
+				noderuntime.AdoptOnLeadershipGain(ctx, kit, st, cipher, cfg, gate, log)
 
 				if err := kit.Snapshot(ctx); err != nil {
 					log.Warn().Err(err).Msg("control-plane snapshot on leadership gain had issues")
@@ -744,9 +745,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	// The leader binds what the operator configured (all interfaces by default:
 	// the edge container reaches it through host.docker.internal, and Traefik
-	// routes pmcluster.<domain> here). apiAddr states the rule in one place and
+	// routes pmcluster.<domain> here). noderuntime.ApiAddr states the rule in one place and
 	// leaves the value untouched for a non-worker.
-	listenAddr := apiAddr(cfg.ListenAddr, false)
+	listenAddr := noderuntime.ApiAddr(cfg.ListenAddr, false)
 	log.Info().Str("addr", listenAddr).Msg("pmcluster serve listening")
 	if err := server.Run(ctx, listenAddr, handler); err != nil {
 		return fmt.Errorf("server: %w", err)
@@ -811,16 +812,6 @@ func checkConfigVersions(ctx context.Context, dc runtime.Client, log zerolog.Log
 	}
 }
 
-// serviceName returns the OTel resource service.name. It prefers the
-// OTEL_SERVICE_NAME env var so deployments can override it, falling back to
-// "pmcluster" for local runs.
-func serviceName() string {
-	if n := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); n != "" {
-		return n
-	}
-	return "pmcluster"
-}
-
 // controlPlaneSnapshotInterval returns how often the leader re-checks the
 // control-plane survivor kit for changes and snapshots it into Raft-replicated
 // Docker configs. Defaults to controlplane.DefaultSnapshotInterval; the
@@ -869,7 +860,7 @@ func ensureLocalStorageRoots(ctx context.Context, cfg *config.Config, log zerolo
 	// guard below.
 	if _, statErr := os.Stat(cfg.DBPath()); statErr == nil {
 		if st, err := openExistingStore(cfg.DBPath()); err == nil {
-			root = localVolumeRoot(ctx, st)
+			root = noderuntime.LocalVolumeRoot(ctx, st)
 			_ = st.Close()
 		}
 	}

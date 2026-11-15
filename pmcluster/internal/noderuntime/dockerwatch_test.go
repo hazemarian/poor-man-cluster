@@ -1,9 +1,10 @@
-package cli
+package noderuntime
 
 import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,8 +25,8 @@ type dockerHarness struct {
 	out          bytes.Buffer
 }
 
-func (h *dockerHarness) deps() dockerWatchDeps {
-	return dockerWatchDeps{
+func (h *dockerHarness) deps() DockerWatchDeps {
+	return DockerWatchDeps{
 		Probe:      func(context.Context) error { return h.probe },
 		UnitActive: func(context.Context) (bool, error) { return h.unitActive, nil },
 		Restart: func(context.Context) error {
@@ -44,7 +45,7 @@ func (h *dockerHarness) deps() dockerWatchDeps {
 func newDockerHarness(t *testing.T) (*dockerHarness, string) {
 	t.Helper()
 	h := &dockerHarness{unitActive: true, now: time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)}
-	return h, filepath.Join(t.TempDir(), dockerWatchStateFile)
+	return h, filepath.Join(t.TempDir(), DockerWatchStateFile)
 }
 
 // failPasses drives the check and returns the verdict of the last pass.
@@ -52,7 +53,7 @@ func failPasses(t *testing.T, h *dockerHarness, state string, n int) dockerVerdi
 	t.Helper()
 	var last dockerVerdict
 	for i := 0; i < n; i++ {
-		last, _ = watchDockerOnce(context.Background(), state, h.deps())
+		last, _ = WatchDockerOnce(context.Background(), state, h.deps())
 	}
 	return last
 }
@@ -73,7 +74,7 @@ func TestDockerWatchRestartsAHungDaemon(t *testing.T) {
 	// The restart's verification probe still fails, so this pass reports the node as
 	// needing an operator. That is the honest outcome for a daemon that never came
 	// back, and it must not be reported as success.
-	if _, err := watchDockerOnce(context.Background(), state, h.deps()); err == nil {
+	if _, err := WatchDockerOnce(context.Background(), state, h.deps()); err == nil {
 		t.Fatal("a daemon that never answered after a restart was reported as recovered")
 	}
 	if h.restarted != 1 {
@@ -138,13 +139,13 @@ func TestDockerWatchRateLimitStopsABouncingDaemon(t *testing.T) {
 func TestDockerWatchResetsOnRecovery(t *testing.T) {
 	h, state := newDockerHarness(t)
 	h.probe = errors.New("blip")
-	_, _ = watchDockerOnce(context.Background(), state, h.deps())
+	_, _ = WatchDockerOnce(context.Background(), state, h.deps())
 
 	h.probe = nil
-	if v, err := watchDockerOnce(context.Background(), state, h.deps()); err != nil || v != DockerVerdictHealthy {
+	if v, err := WatchDockerOnce(context.Background(), state, h.deps()); err != nil || v != DockerVerdictHealthy {
 		t.Fatalf("verdict = %s (%v), want healthy", v, err)
 	}
-	st, _ := loadWatchdogState(state)
+	st, _ := LoadWatchdogState(state)
 	if st.Failures != 0 {
 		t.Fatalf("failures = %d after recovery, want 0", st.Failures)
 	}
@@ -154,20 +155,20 @@ func TestDockerWatchResetsOnRecovery(t *testing.T) {
 // between a watchdog that can restart dockerd and one that cannot, so both shapes are
 // asserted.
 func TestWatchdogServiceOnlyWatchesDockerWhenEnabled(t *testing.T) {
-	off := renderWatchdogServiceWithDocker("/usr/local/bin/pmcluster", "/root/.pmcluster/watchdog.json",
-		defaultWatchdogProbeURL, "")
+	off := nodeunits.RenderWatchdogServiceWithDocker("/usr/local/bin/pmcluster", "/root/.pmcluster/watchdog.json",
+		nodeunits.DefaultWatchdogProbeURL, "")
 	if strings.Contains(off, "--docker-socket") {
 		t.Fatalf("the default unit already watches docker:\n%s", off)
 	}
-	on := renderWatchdogServiceWithDocker("/usr/local/bin/pmcluster", "/root/.pmcluster/watchdog.json",
-		defaultWatchdogProbeURL, defaultDockerSocket)
-	if !strings.Contains(on, "--docker-socket "+defaultDockerSocket) {
+	on := nodeunits.RenderWatchdogServiceWithDocker("/usr/local/bin/pmcluster", "/root/.pmcluster/watchdog.json",
+		nodeunits.DefaultWatchdogProbeURL, DefaultDockerSocket)
+	if !strings.Contains(on, "--docker-socket "+DefaultDockerSocket) {
 		t.Fatalf("the enabled unit does not pass the socket:\n%s", on)
 	}
 	// Capability and permission are separate flags: the socket is what the watchdog
 	// CAN reach, the policy file is what the leader SAID. A unit with the socket and
 	// no policy stays disarmed, which is the safe ship state.
-	if !strings.Contains(on, "--policy-file /root/.pmcluster/"+nodePolicyFileName) {
+	if !strings.Contains(on, "--policy-file /root/.pmcluster/"+nodeunits.NodePolicyFileName) {
 		t.Fatalf("the unit does not read the node policy document:\n%s", on)
 	}
 }
@@ -177,30 +178,30 @@ func TestWatchdogServiceOnlyWatchesDockerWhenEnabled(t *testing.T) {
 // nothing"; only an explicit true may arm it.
 func TestNodePolicyArmsDockerIsFailClosed(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, nodePolicyFileName)
+	path := filepath.Join(dir, nodeunits.NodePolicyFileName)
 
-	if nodePolicyArmsDocker("") {
+	if NodePolicyArmsDocker("") {
 		t.Fatal("an empty path armed docker")
 	}
-	if nodePolicyArmsDocker(path) {
+	if NodePolicyArmsDocker(path) {
 		t.Fatal("a missing policy file armed docker")
 	}
 	if err := os.WriteFile(path, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if nodePolicyArmsDocker(path) {
+	if NodePolicyArmsDocker(path) {
 		t.Fatal("a malformed policy file armed docker")
 	}
 	if err := os.WriteFile(path, []byte(`{"docker_restart":false}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if nodePolicyArmsDocker(path) {
+	if NodePolicyArmsDocker(path) {
 		t.Fatal("an explicit false armed docker")
 	}
 	if err := os.WriteFile(path, []byte(`{"docker_restart":true}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !nodePolicyArmsDocker(path) {
+	if !NodePolicyArmsDocker(path) {
 		t.Fatal("an explicit true did not arm docker")
 	}
 }
@@ -213,7 +214,7 @@ func TestNodePolicyArmsDockerIsFailClosed(t *testing.T) {
 func TestHealControlPlaneAfterDockerRestart(t *testing.T) {
 	t.Run("a daemon that survived the restart is left alone", func(t *testing.T) {
 		calls := 0
-		healed, err := healControlPlaneAfterDockerRestart(context.Background(), healDeps{
+		healed, err := HealControlPlaneAfterDockerRestart(context.Background(), HealDeps{
 			UnitActive:  func(context.Context) (bool, error) { return true, nil },
 			ResetFailed: func(context.Context) error { calls++; return nil },
 			Start:       func(context.Context) error { calls++; return nil },
@@ -229,7 +230,7 @@ func TestHealControlPlaneAfterDockerRestart(t *testing.T) {
 	t.Run("reset-failed runs before the start, and a reset failure is not fatal", func(t *testing.T) {
 		var order []string
 		var out bytes.Buffer
-		healed, err := healControlPlaneAfterDockerRestart(context.Background(), healDeps{
+		healed, err := HealControlPlaneAfterDockerRestart(context.Background(), HealDeps{
 			UnitActive:  func(context.Context) (bool, error) { return false, nil },
 			ResetFailed: func(context.Context) error { order = append(order, "reset-failed"); return errors.New("nope") },
 			Start:       func(context.Context) error { order = append(order, "start"); return nil },
@@ -250,7 +251,7 @@ func TestHealControlPlaneAfterDockerRestart(t *testing.T) {
 	})
 
 	t.Run("a start that fails is reported", func(t *testing.T) {
-		_, err := healControlPlaneAfterDockerRestart(context.Background(), healDeps{
+		_, err := HealControlPlaneAfterDockerRestart(context.Background(), HealDeps{
 			UnitActive: func(context.Context) (bool, error) { return false, nil },
 			Start:      func(context.Context) error { return errors.New("start request repeated too quickly") },
 		})

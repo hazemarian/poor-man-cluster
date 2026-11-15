@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"context"
@@ -180,7 +180,7 @@ func TestUnderVolumeRoot(t *testing.T) {
 
 func TestLocalVolumeRoot(t *testing.T) {
 	ctx := context.Background()
-	if got := localVolumeRoot(ctx, nil); got != manifest.DefaultVolumeRoot {
+	if got := LocalVolumeRoot(ctx, nil); got != manifest.DefaultVolumeRoot {
 		t.Fatalf("nil store = %q, want %q", got, manifest.DefaultVolumeRoot)
 	}
 	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
@@ -188,19 +188,19 @@ func TestLocalVolumeRoot(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer func() { _ = st.Close() }()
-	if got := localVolumeRoot(ctx, st); got != manifest.DefaultVolumeRoot {
+	if got := LocalVolumeRoot(ctx, st); got != manifest.DefaultVolumeRoot {
 		t.Fatalf("unset setting = %q, want the default", got)
 	}
 	if err := st.SetSetting(ctx, cluster.SettingVolumeRoot(), ""); err != nil {
 		t.Fatalf("set empty: %v", err)
 	}
-	if got := localVolumeRoot(ctx, st); got != manifest.DefaultVolumeRoot {
+	if got := LocalVolumeRoot(ctx, st); got != manifest.DefaultVolumeRoot {
 		t.Fatalf("empty setting = %q, want the default (an empty row counts as unset)", got)
 	}
 	if err := st.SetSetting(ctx, cluster.SettingVolumeRoot(), "/srv/stack/data"); err != nil {
 		t.Fatalf("set value: %v", err)
 	}
-	if got := localVolumeRoot(ctx, st); got != "/srv/stack/data" {
+	if got := LocalVolumeRoot(ctx, st); got != "/srv/stack/data" {
 		t.Fatalf("configured setting = %q, want /srv/stack/data", got)
 	}
 }

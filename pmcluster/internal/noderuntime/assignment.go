@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"context"
@@ -25,23 +25,23 @@ import (
 // The two halves of the assignment channel that live in the daemon: the leader
 // serves it (on a dedicated mTLS listener, on one route), a worker fetches it.
 
-// assignmentClientFor builds the worker's fetcher. A manager gets nil: it reads
+// AssignmentClientFor builds the worker's fetcher. A manager gets nil: it reads
 // the settings itself, and a manager fetching its own assignment would be a
 // second code path for the same decision.
-// assignmentClientFor builds the client every node that is NOT the leader uses to learn
+// AssignmentClientFor builds the client every node that is NOT the leader uses to learn
 // its runner decision. That used to mean "a worker" only, which left a following manager
 // with no path at all: it has no current settings to read, so selecting it in the console
 // produced nothing, forever, with no error anywhere. The leader keeps using its store.
-func assignmentClientFor(dc runtime.Client) assignmentFetcher {
+func AssignmentClientFor(dc runtime.Client) assignmentFetcher {
 	if dc == nil {
 		return nil
 	}
 	return &runners.Client{
-		Managers: func(ctx context.Context) ([]string, error) { return managerHosts(ctx, dc) },
+		Managers: func(ctx context.Context) ([]string, error) { return ManagerHosts(ctx, dc) },
 	}
 }
 
-// startWorkerAPI serves the daemon's API on the given (loopback) address while a
+// StartWorkerAPI serves the daemon's API on the given (loopback) address while a
 // worker stands by.
 //
 // It is a store-less daemon on purpose: a worker has no current control plane, and
@@ -49,7 +49,7 @@ func assignmentClientFor(dc runtime.Client) assignmentFetcher {
 // plausible — the exact failure the CLI's leader guard exists to prevent. So this
 // listener answers /health and nothing else, and the runner loop gets the local
 // surface it needs without pretending to be a leader.
-func startWorkerAPI(ctx context.Context, dc runtime.Client, addr string, log zerolog.Logger) (func(), <-chan struct{}) {
+func StartWorkerAPI(ctx context.Context, dc runtime.Client, addr string, log zerolog.Logger) (func(), <-chan struct{}) {
 	h := server.New(server.Deps{Docker: dc})
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -64,8 +64,8 @@ func startWorkerAPI(ctx context.Context, dc runtime.Client, addr string, log zer
 	return cancel, done
 }
 
-// assignmentListenerOptions is the leader's side wiring.
-type assignmentListenerOptions struct {
+// AssignmentListenerOptions is the leader's side wiring.
+type AssignmentListenerOptions struct {
 	Store    *store.Store
 	Hostname string
 	Docker   runtime.Client
@@ -87,7 +87,7 @@ type assignmentListenerOptions struct {
 	KeyFile  string
 }
 
-// startAssignmentListener serves the node-facing routes — the runner assignment,
+// StartAssignmentListener serves the node-facing routes — the runner assignment,
 // the node report, and the cluster snapshot — to nodes of this swarm, over mutual
 // TLS, on a dedicated listener bound to this node's swarm data-path address.
 //
@@ -104,7 +104,7 @@ type assignmentListenerOptions struct {
 //  3. It fails CLOSED and loudly: no swarm CA or no node certificate means the
 //     endpoint is not served and one WARN says so — never an unauthenticated
 //     fallback.
-func startAssignmentListener(ctx context.Context, o assignmentListenerOptions) {
+func StartAssignmentListener(ctx context.Context, o AssignmentListenerOptions) {
 	log := o.Log.With().Str("component", "runner-assignment").Logger()
 	if o.Docker == nil {
 		log.Warn().Msg("runner assignment endpoint NOT served: no docker client on this daemon")

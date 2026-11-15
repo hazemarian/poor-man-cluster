@@ -19,6 +19,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
@@ -841,7 +842,7 @@ func backupReportSender() func(ctx context.Context, rec store.ArtifactRecord) er
 	if err != nil {
 		return nil
 	}
-	sender := nodeReportSender(dc)
+	sender := noderuntime.NodeReportSender(dc)
 	if sender == nil {
 		return nil
 	}

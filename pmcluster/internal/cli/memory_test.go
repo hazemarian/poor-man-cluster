@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"bytes"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"os"
 	"path/filepath"
 	"strconv"

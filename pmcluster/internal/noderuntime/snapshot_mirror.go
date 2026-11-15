@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 // The follower side of the cluster-state channel (slice 2 of
 // docs/adr/0003-cluster-state-by-pull.md): a manager that is NOT the leader pulls the
@@ -129,15 +129,15 @@ func mirrorTick(ctx context.Context, d mirrorDeps, st *store.Store) error {
 	return nil
 }
 
-// snapshotMirrorFor assembles the loop from a running daemon's parts.
+// SnapshotMirrorFor assembles the loop from a running daemon's parts.
 //
 // The transport is the node-facing client the runner assignment already uses: same
 // certificate, same CA checks, same candidate manager walk. Only the path differs.
-func snapshotMirrorFor(cfg *config.Config, dc runtime.Client, hostname string, log zerolog.Logger) mirrorDeps {
+func SnapshotMirrorFor(cfg *config.Config, dc runtime.Client, hostname string, log zerolog.Logger) mirrorDeps {
 	componentLog := log.With().Str("component", "cluster-mirror").Logger()
 	client := &clustersnapshot.Client{
 		Do: &runners.Client{
-			Managers: func(ctx context.Context) ([]string, error) { return managerHosts(ctx, dc) },
+			Managers: func(ctx context.Context) ([]string, error) { return ManagerHosts(ctx, dc) },
 			Log:      componentLog,
 		},
 		Log: componentLog,
@@ -145,23 +145,23 @@ func snapshotMirrorFor(cfg *config.Config, dc runtime.Client, hostname string, l
 	return mirrorDeps{
 		// Its own handle, opened lazily: on a follower the daemon holds no store at all
 		// (a standby must not serve a stale one), and this loop is the only writer.
-		Store: func() (*store.Store, error) { return openExistingStore(cfg.DBPath()) },
+		Store: func() (*store.Store, error) { return store.OpenExisting(cfg.DBPath()) },
 		Fetch: client.Fetch,
 		Leads: func(ctx context.Context) bool {
-			leader, _, err := isSwarmLeader(ctx, dc, hostname)
+			leader, _, err := IsSwarmLeader(ctx, dc, hostname)
 			return err == nil && leader
 		},
 		Log: componentLog,
 	}
 }
 
-// startSnapshotMirror runs the poll loop until stop is called (or ctx ends), and
+// StartSnapshotMirror runs the poll loop until stop is called (or ctx ends), and
 // returns a done channel that closes only after the loop has finished its last tick
 // and closed its store handle.
 //
 // Callers MUST wait on done before opening their own handle on data.db: that ordering
 // is what keeps a single writer.
-func startSnapshotMirror(ctx context.Context, d mirrorDeps) (stop func(), done <-chan struct{}) {
+func StartSnapshotMirror(ctx context.Context, d mirrorDeps) (stop func(), done <-chan struct{}) {
 	runCtx, cancel := context.WithCancel(ctx)
 	finished := make(chan struct{})
 	go func() {

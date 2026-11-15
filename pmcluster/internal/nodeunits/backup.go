@@ -43,6 +43,12 @@ const CanonicalAgentPath = "/usr/local/bin/pmcluster"
 // StoreServiceName is the Swarm service that carries the in-cluster store.
 const StoreServiceName = "backup_seaweedfs"
 
+// PlanCacheName is the node's cached copy of the backup plan. The daemon publishes
+// it every few minutes and the agent prefers it over asking the leader, so a run
+// never depends on the control plane being reachable — one name, or the writer and
+// the reader drift and every hourly run plans from nothing.
+const PlanCacheName = "plan.json"
+
 // Paths and directories the units use. Variables, not constants, because every
 // test that proves "a node that is not a storage node gets no timer" has to point
 // them at a temp dir instead of /etc.

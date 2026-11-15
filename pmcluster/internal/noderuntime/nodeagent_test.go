@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"context"
@@ -118,7 +118,7 @@ func workerFake(t *testing.T) *leaderFake {
 }
 
 // TestWorkerLoopsStartBeforeLeadershipIsResolved is the regression test for the
-// whole defect: the runner machinery used to start AFTER waitForSwarmLeadership, which
+// whole defect: the runner machinery used to start AFTER WaitForSwarmLeadership, which
 // a worker never returns from — so the feature was inert on exactly the nodes allowed to
 // host a runner.
 func TestWorkerLoopsStartBeforeLeadershipIsResolved(t *testing.T) {
@@ -131,7 +131,7 @@ func TestWorkerLoopsStartBeforeLeadershipIsResolved(t *testing.T) {
 	defer cancel()
 
 	// The premise: this client really is a worker, so the wait below really blocks.
-	if !isSwarmWorker(ctx, fake) {
+	if !IsSwarmWorker(ctx, fake) {
 		t.Fatal("the fake does not look like a swarm worker; the test would prove nothing")
 	}
 
@@ -145,7 +145,7 @@ func TestWorkerLoopsStartBeforeLeadershipIsResolved(t *testing.T) {
 		},
 		source: "https://10.7.224.11:9092",
 	}
-	loops := startPerNodeLoops(ctx, perNodeDeps{
+	loops := StartPerNodeLoops(ctx, PerNodeDeps{
 		Worker:     true,
 		Hostname:   host,
 		Container:  docker,
@@ -155,7 +155,7 @@ func TestWorkerLoopsStartBeforeLeadershipIsResolved(t *testing.T) {
 	})
 
 	// The assignment loop ran before anything asked about leadership: the fetch
-	// completes while waitForSwarmLeadership (called after this returns) would still be
+	// completes while WaitForSwarmLeadership (called after this returns) would still be
 	// blocking, and the runner was started from it.
 	select {
 	case <-loops.FirstAssignment:
@@ -186,8 +186,8 @@ func TestAPIBindAddresses(t *testing.T) {
 		{"", true, "127.0.0.1:9090"},
 	}
 	for _, tc := range cases {
-		if got := apiAddr(tc.configured, tc.worker); got != tc.want {
-			t.Errorf("apiAddr(%q, worker=%t) = %q, want %q", tc.configured, tc.worker, got, tc.want)
+		if got := ApiAddr(tc.configured, tc.worker); got != tc.want {
+			t.Errorf("ApiAddr(%q, worker=%t) = %q, want %q", tc.configured, tc.worker, got, tc.want)
 		}
 	}
 }
@@ -211,8 +211,8 @@ func TestIsStandby(t *testing.T) {
 		{"node list unreadable", false, false, false, errors.New("boom"), false},
 	}
 	for _, tc := range cases {
-		if got := isStandby(tc.worker, tc.leader, tc.found, tc.err); got != tc.want {
-			t.Errorf("%s: isStandby = %t, want %t", tc.name, got, tc.want)
+		if got := IsStandby(tc.worker, tc.leader, tc.found, tc.err); got != tc.want {
+			t.Errorf("%s: IsStandby = %t, want %t", tc.name, got, tc.want)
 		}
 	}
 }
@@ -239,7 +239,7 @@ func TestWorkerWithoutSwarmCertificateWarnsOnceAndStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	loops := startPerNodeLoops(ctx, perNodeDeps{
+	loops := StartPerNodeLoops(ctx, PerNodeDeps{
 		Worker:     true,
 		Hostname:   "w1",
 		Container:  newFakeLocalDocker(),
@@ -281,7 +281,7 @@ func TestFetchFailureKeepsLastStateAndWarnsOnce(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	loops := startPerNodeLoops(ctx, perNodeDeps{
+	loops := StartPerNodeLoops(ctx, PerNodeDeps{
 		Worker:     true,
 		Hostname:   "w1",
 		Container:  docker,
@@ -319,9 +319,9 @@ func TestManagerHostsFromDockerInfo(t *testing.T) {
 	f := &leaderFake{info: runtime.Info{
 		SwarmRemoteManagers: []string{"10.7.224.11:2377", "10.7.224.12:2377"},
 	}}
-	hosts, err := managerHosts(context.Background(), f)
+	hosts, err := ManagerHosts(context.Background(), f)
 	if err != nil {
-		t.Fatalf("managerHosts: %v", err)
+		t.Fatalf("ManagerHosts: %v", err)
 	}
 	if len(hosts) != 2 || hosts[0] != "10.7.224.11" || hosts[1] != "10.7.224.12" {
 		t.Fatalf("hosts = %v", hosts)
@@ -329,10 +329,10 @@ func TestManagerHostsFromDockerInfo(t *testing.T) {
 	// A node with no manager list falls back to its own swarm address, and an
 	// unreachable docker is an error (never an empty success).
 	single := &leaderFake{info: runtime.Info{SwarmNodeAddr: "10.7.224.11"}}
-	if hosts, _ := managerHosts(context.Background(), single); len(hosts) != 1 || hosts[0] != "10.7.224.11" {
+	if hosts, _ := ManagerHosts(context.Background(), single); len(hosts) != 1 || hosts[0] != "10.7.224.11" {
 		t.Fatalf("single-manager hosts = %v", hosts)
 	}
-	if _, err := managerHosts(context.Background(), nil); err == nil {
+	if _, err := ManagerHosts(context.Background(), nil); err == nil {
 		t.Fatal("no docker client must be an error")
 	}
 }
@@ -340,10 +340,10 @@ func TestManagerHostsFromDockerInfo(t *testing.T) {
 // TestAgentStatePathIsInTheDataDir keeps the doctor and the daemon agreeing on
 // where the applied assignment is recorded.
 func TestAgentStatePathIsInTheDataDir(t *testing.T) {
-	if got := agentStatePath("/root/.pmcluster"); got != "/root/.pmcluster/runner_assignment.json" {
-		t.Fatalf("agentStatePath = %q", got)
+	if got := AgentStatePath("/root/.pmcluster"); got != "/root/.pmcluster/runner_assignment.json" {
+		t.Fatalf("AgentStatePath = %q", got)
 	}
-	if got := agentStatePath(""); got != "" {
+	if got := AgentStatePath(""); got != "" {
 		t.Fatalf("empty data dir → %q", got)
 	}
 }
@@ -352,7 +352,7 @@ func TestAgentStatePathIsInTheDataDir(t *testing.T) {
 // assignment cache: what the agent writes is what the doctor parses.
 func TestWorkerRecordIsReadableByTheDoctor(t *testing.T) {
 	dir := t.TempDir()
-	path := agentStatePath(dir)
+	path := AgentStatePath(dir)
 	agent := &runners.Agent{Node: "nxt-sw-6-w", Docker: newFakeLocalDocker(), StatePath: path, Log: zerolog.Nop()}
 	if _, err := agent.Apply(context.Background(), runners.Assignment{
 		Node: "nxt-sw-6-w", Enabled: true, Org: "acme", Group: "pmcluster",
@@ -409,7 +409,7 @@ func TestFollowerManagerAppliesTheLeadersAssignment(t *testing.T) {
 		},
 		source: "https://10.7.224.11:9092",
 	}
-	loops := startPerNodeLoops(ctx, perNodeDeps{
+	loops := StartPerNodeLoops(ctx, PerNodeDeps{
 		// Not a worker: a manager. Client answers "am I the leader" — this fake says no.
 		Worker:     false,
 		Client:     &leaderFake{info: runtime.Info{SwarmLocalNodeState: "active", SwarmControlAvailable: true}},
@@ -442,7 +442,7 @@ func TestTheLeaderDoesNotFetchFromItself(t *testing.T) {
 	defer cancel()
 
 	fetcher := &countingFetcher{}
-	loops := startPerNodeLoops(ctx, perNodeDeps{
+	loops := StartPerNodeLoops(ctx, PerNodeDeps{
 		Client: &leaderFake{
 			info: runtime.Info{SwarmLocalNodeState: "active", SwarmControlAvailable: true},
 			// The node list says this node IS the leader.

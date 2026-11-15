@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 // Self-telemetry that recovers on its own.
 //
@@ -60,8 +60,8 @@ type telemetrySupervisor struct {
 	interval        time.Duration
 }
 
-// newTelemetrySupervisor returns a supervisor that is not yet running.
-func newTelemetrySupervisor(log zerolog.Logger, node string, onFirstEndpoint func()) *telemetrySupervisor {
+// NewTelemetrySupervisor returns a supervisor that is not yet running.
+func NewTelemetrySupervisor(log zerolog.Logger, node string, onFirstEndpoint func()) *telemetrySupervisor {
 	return &telemetrySupervisor{
 		node:            node,
 		log:             log.With().Str("component", "telemetry").Logger(),
@@ -83,7 +83,7 @@ func (s *telemetrySupervisor) Loop(ctx context.Context, configured string, isLea
 	for {
 		select {
 		case <-ctx.Done():
-			s.stop(context.Background())
+			s.Stop(context.Background())
 			return
 		case <-t.C:
 			s.probe(ctx, configured, isLeader, leaderEndpoint)
@@ -126,12 +126,12 @@ func (s *telemetrySupervisor) probe(ctx context.Context, configured string, isLe
 	}
 	shutdown, err := initTelemetry(ctx, telemetry.Options{
 		Endpoint:       endpoint,
-		ServiceName:    serviceName(),
+		ServiceName:    ServiceName(),
 		ServiceVersion: buildinfo.Version,
 		// The node rides the RESOURCE, so logs and spans carry it too — not just the
 		// metrics, which add it per datapoint on their own.
 		Node:     s.node,
-		Failures: telemetryFailureLogger(s.log),
+		Failures: TelemetryFailureLogger(s.log),
 	})
 	if err != nil {
 		s.log.Warn().Err(err).Str("endpoint", endpoint).Msg("OTel telemetry disabled")
@@ -150,7 +150,7 @@ func (s *telemetrySupervisor) probe(ctx context.Context, configured string, isLe
 }
 
 // stop tears the exporter down (used at shutdown).
-func (s *telemetrySupervisor) stop(ctx context.Context) {
+func (s *telemetrySupervisor) Stop(ctx context.Context) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stopLocked(ctx)

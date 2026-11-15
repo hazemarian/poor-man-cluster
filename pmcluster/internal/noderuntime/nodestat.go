@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 // Per-node resource visibility, daemon side.
 //
@@ -43,7 +43,7 @@ const (
 	// /var/stack lives elsewhere.
 )
 
-// startNodeStatSampler runs the /proc sampler for this node until ctx ends.
+// StartNodeStatSampler runs the /proc sampler for this node until ctx ends.
 //
 // It is started on EVERY node (not just the leader): the whole point is that each node
 // describes itself. It no longer waits for a collector endpoint — after the collector
@@ -51,7 +51,7 @@ const (
 // exactly how four nodes went missing from the panel. The sample is POSTed to the leader
 // on the swarm mTLS channel instead; the OTLP publish is still attempted and is a no-op
 // where there is no exporter.
-func startNodeStatSampler(ctx context.Context, dc runtime.Client, log zerolog.Logger) {
+func StartNodeStatSampler(ctx context.Context, dc runtime.Client, log zerolog.Logger) {
 	go func() {
 		host := nodeStatHostname(ctx, dc, log)
 		role := localRole(ctx, dc)
@@ -76,7 +76,7 @@ func startNodeStatSampler(ctx context.Context, dc runtime.Client, log zerolog.Lo
 // Suppressing the leader's own sample was the bug that left the leader without
 // a row in the Node resources panel.
 func nodeStatTick(ctx context.Context, dc runtime.Client, s *nodestat.Sampler, log zerolog.Logger) {
-	nodeStatTickWith(ctx, dc, s, log, nodeReportSender(dc))
+	nodeStatTickWith(ctx, dc, s, log, NodeReportSender(dc))
 }
 
 // localHostname prefers the swarm's name for this node over a short hostname:
@@ -115,15 +115,15 @@ func localRole(ctx context.Context, dc runtime.Client) string {
 	return ""
 }
 
-// nodeReportSender builds the client a node uses to report itself to the leader. It is
+// NodeReportSender builds the client a node uses to report itself to the leader. It is
 // the same transport the runner assignment uses: swarm mTLS, manager addresses from the
 // live swarm, no published port and no shared secret.
-func nodeReportSender(dc runtime.Client) *runners.Client {
+func NodeReportSender(dc runtime.Client) *runners.Client {
 	if dc == nil {
 		return nil
 	}
 	return &runners.Client{Managers: func(ctx context.Context) ([]string, error) {
-		return managerHosts(ctx, dc)
+		return ManagerHosts(ctx, dc)
 	}}
 }
 

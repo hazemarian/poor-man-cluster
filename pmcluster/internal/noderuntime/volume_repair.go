@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"context"
@@ -19,11 +19,11 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
-// localVolumeRoot is the effective storage root for this node: the volume_root
+// LocalVolumeRoot is the effective storage root for this node: the volume_root
 // setting when it holds a value, otherwise the default. An empty row (the
 // setting can exist but be blank) counts as unset — otherwise the directory
 // work below would be silently skipped.
-func localVolumeRoot(ctx context.Context, st *store.Store) string {
+func LocalVolumeRoot(ctx context.Context, st *store.Store) string {
 	if st != nil {
 		if v := st.SettingDefault(ctx, cluster.SettingVolumeRoot(), ""); v != "" {
 			return v
@@ -120,7 +120,7 @@ func (s *repairState) sweepDue(path string) bool {
 	return true
 }
 
-// startVolumeRepairLoop keeps the volume directories of the stateful services
+// StartVolumeRepairLoop keeps the volume directories of the stateful services
 // the Swarm placed on THIS node present on disk. The deploying host is not
 // necessarily the node a stack is pinned to (stateful placement round-robins
 // over the storage nodes), and the Swarm refuses to start a task whose bind
@@ -128,7 +128,7 @@ func (s *repairState) sweepDue(path string) bool {
 // <volume_root>/<app>/<name>: no such file or directory`. Creating the
 // directories is inherently node-local, so every daemon does its own, leader
 // or not.
-func startVolumeRepairLoop(ctx context.Context, dc runtime.Client, forcer serviceForcer, volumeRoot func() string, log zerolog.Logger) {
+func StartVolumeRepairLoop(ctx context.Context, dc runtime.Client, forcer serviceForcer, volumeRoot func() string, log zerolog.Logger) {
 	go func() {
 		tick := time.NewTicker(volumeRepairInterval)
 		defer tick.Stop()

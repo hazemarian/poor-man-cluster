@@ -1,11 +1,11 @@
-package cli
+package noderuntime
 
 import (
 	"net/http"
 	"sync/atomic"
 )
 
-// adoptionGate answers 503 while the daemon is swapping its control-plane
+// AdoptionGate answers 503 while the daemon is swapping its control-plane
 // store, so a request that depends on control-plane state is never served from
 // the revision the node is in the middle of replacing.
 //
@@ -19,21 +19,21 @@ import (
 //
 // /health stays ungated: liveness must answer during an adoption, or Swarm (and
 // the console) would see a leader that appears down.
-type adoptionGate struct {
+type AdoptionGate struct {
 	busy atomic.Bool
 }
 
 // begin marks the daemon as adopting and returns the function that ends it.
-func (g *adoptionGate) begin() func() {
+func (g *AdoptionGate) begin() func() {
 	g.busy.Store(true)
 	return func() { g.busy.Store(false) }
 }
 
 // adopting reports whether an adoption is in progress.
-func (g *adoptionGate) adopting() bool { return g.busy.Load() }
+func (g *AdoptionGate) adopting() bool { return g.busy.Load() }
 
 // wrap gates h behind the flag.
-func (g *adoptionGate) wrap(h http.Handler) http.Handler {
+func (g *AdoptionGate) Wrap(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if g.adopting() && r.URL.Path != "/health" {
 			w.Header().Set("Retry-After", "1")

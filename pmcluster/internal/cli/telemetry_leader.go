@@ -34,7 +34,7 @@ const collectorDialTimeout = 700 * time.Millisecond
 // collectorEndpointFor returns the base URL of the first manager that answers on the
 // collector's OTLP port, or "" when none does.
 //
-// hosts is the swarm's manager addresses (managerHosts); dial is injected so a test can
+// hosts is the swarm's manager addresses (noderuntime.ManagerHosts); dial is injected so a test can
 // answer without binding a port.
 func collectorEndpointFor(ctx context.Context, hosts func(context.Context) ([]string, error), dial func(context.Context, string) bool) string {
 	if hosts == nil || dial == nil {

@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"net/http"
@@ -16,8 +16,8 @@ func TestAdoptionGateAnswersRetryableServiceUnavailable(t *testing.T) {
 		served++
 		w.WriteHeader(http.StatusOK)
 	})
-	gate := &adoptionGate{}
-	h := gate.wrap(next)
+	gate := &AdoptionGate{}
+	h := gate.Wrap(next)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/nodes", nil))
@@ -60,7 +60,7 @@ func TestAdoptionGateAnswersRetryableServiceUnavailable(t *testing.T) {
 // unconditionally, so a failed adoption cannot leave the daemon answering 503
 // forever.
 func TestAdoptionGateEndsTheWindowEvenOnError(t *testing.T) {
-	gate := &adoptionGate{}
+	gate := &AdoptionGate{}
 	func() {
 		defer gate.begin()()
 		if !gate.adopting() {

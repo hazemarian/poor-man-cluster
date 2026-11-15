@@ -1,4 +1,4 @@
-package cli
+package noderuntime
 
 import (
 	"context"
@@ -45,15 +45,14 @@ const (
 	DockerWatchRestartFloor = 30 * time.Minute
 	// DockerWatchProbeTimeout bounds the socket probe.
 	DockerWatchProbeTimeout = 5 * time.Second
-	// dockerWatchStateFile is persisted separately from the pmcluster counter: the
+	// DockerWatchStateFile is persisted separately from the pmcluster counter: the
 	// two failures mean different things and must not share a rate limit.
-	dockerWatchStateFile = "watchdog-docker.json"
-	// defaultDockerSocket is where dockerd listens on every node this platform runs.
-	defaultDockerSocket = "/var/run/docker.sock"
-	// nodePolicyFileName is the document the leader's node-level decisions reach this
+	DockerWatchStateFile = "watchdog-docker.json"
+	// DefaultDockerSocket is where dockerd listens on every node this platform runs.
+	DefaultDockerSocket = "/var/run/docker.sock"
+	// nodeunits.NodePolicyFileName is the document the leader's node-level decisions reach this
 	// node through. Written by the runner agent (worker) or the daemon (manager), read
 	// by the watchdog.
-	nodePolicyFileName = "node-policy.json"
 )
 
 // dockerVerdict is what one docker-watch run decided.
@@ -67,9 +66,9 @@ const (
 	DockerVerdictRateLimited dockerVerdict = "rate-limited"
 )
 
-// dockerWatchDeps are the seams; every side effect is injectable so the decision
+// DockerWatchDeps are the seams; every side effect is injectable so the decision
 // table is testable without systemd, docker, or a sleeping test.
-type dockerWatchDeps struct {
+type DockerWatchDeps struct {
 	// Probe returns nil when the docker socket answered.
 	Probe func(ctx context.Context) error
 	// UnitActive reports whether systemd says docker.service is active.
@@ -84,23 +83,23 @@ type dockerWatchDeps struct {
 	Now func() time.Time
 }
 
-func (d dockerWatchDeps) now() time.Time {
+func (d DockerWatchDeps) now() time.Time {
 	if d.Now != nil {
 		return d.Now()
 	}
 	return time.Now()
 }
 
-// healDeps are the seams for completing a docker restart: the unit that docker's
+// HealDeps are the seams for completing a docker restart: the unit that docker's
 // restart can take down with it, and the three systemd verbs needed to bring it back.
-type healDeps struct {
+type HealDeps struct {
 	UnitActive  func(ctx context.Context) (bool, error)
 	ResetFailed func(ctx context.Context) error
 	Start       func(ctx context.Context) error
 	Out         io.Writer
 }
 
-// healControlPlaneAfterDockerRestart brings this node's daemon back when the docker
+// HealControlPlaneAfterDockerRestart brings this node's daemon back when the docker
 // restart this run just performed left it down.
 //
 // Restarting docker.service propagates to pmcluster through `PartOf=` (docker.service
@@ -114,7 +113,7 @@ type healDeps struct {
 //
 // reset-failed FIRST for the same reason the docker path needs it: a start-limited unit
 // refuses a start, and that refusal is silent.
-func healControlPlaneAfterDockerRestart(ctx context.Context, d healDeps) (bool, error) {
+func HealControlPlaneAfterDockerRestart(ctx context.Context, d HealDeps) (bool, error) {
 	out := d.Out
 	if out == nil {
 		out = io.Discard
@@ -141,14 +140,14 @@ func healControlPlaneAfterDockerRestart(ctx context.Context, d healDeps) (bool, 
 // assert the log line without reaching into the command wiring.
 const dockerWatchUnitName = "pmcluster"
 
-// watchDockerOnce is one tick of the docker check.
-func watchDockerOnce(ctx context.Context, statePath string, d dockerWatchDeps) (dockerVerdict, error) {
+// WatchDockerOnce is one tick of the docker check.
+func WatchDockerOnce(ctx context.Context, statePath string, d DockerWatchDeps) (dockerVerdict, error) {
 	out := d.Out
 	if out == nil {
 		out = io.Discard
 	}
 	now := d.now()
-	st, _ := loadWatchdogState(statePath)
+	st, _ := LoadWatchdogState(statePath)
 
 	if err := d.Probe(ctx); err == nil {
 		if st.Failures > 0 {
@@ -156,7 +155,7 @@ func watchDockerOnce(ctx context.Context, statePath string, d dockerWatchDeps) (
 				now.UTC().Format(time.RFC3339), st.Failures)
 			st.Failures = 0
 			st.LastProbe = now.Unix()
-			_ = saveWatchdogState(statePath, st)
+			_ = SaveWatchdogState(statePath, st)
 		}
 		return DockerVerdictHealthy, nil
 	} else {
@@ -168,12 +167,12 @@ func watchDockerOnce(ctx context.Context, statePath string, d dockerWatchDeps) (
 	}
 
 	if st.Failures < DockerWatchFailuresBeforeRestart {
-		_ = saveWatchdogState(statePath, st)
+		_ = SaveWatchdogState(statePath, st)
 		return DockerVerdictRecorded, nil
 	}
 
 	if st.LastRestart > 0 && now.Sub(time.Unix(st.LastRestart, 0)) < DockerWatchRestartFloor {
-		_ = saveWatchdogState(statePath, st)
+		_ = SaveWatchdogState(statePath, st)
 		fmt.Fprintf(out, "%s pmcluster-watchdog: docker is still down, but it was restarted %s ago (floor %s); not restarting again\n",
 			now.UTC().Format(time.RFC3339),
 			now.Sub(time.Unix(st.LastRestart, 0)).Round(time.Minute), DockerWatchRestartFloor)
@@ -195,7 +194,7 @@ func watchDockerOnce(ctx context.Context, statePath string, d dockerWatchDeps) (
 		now.UTC().Format(time.RFC3339), st.Failures)
 	if err := d.Restart(ctx); err != nil {
 		st.LastRestart = now.Unix()
-		_ = saveWatchdogState(statePath, st)
+		_ = SaveWatchdogState(statePath, st)
 		return verdict, fmt.Errorf("restart docker: %w", err)
 	}
 
@@ -204,7 +203,7 @@ func watchDockerOnce(ctx context.Context, statePath string, d dockerWatchDeps) (
 	if err := d.Probe(ctx); err != nil {
 		st.LastRestart = now.Unix()
 		st.Failures = 0
-		_ = saveWatchdogState(statePath, st)
+		_ = SaveWatchdogState(statePath, st)
 		fmt.Fprintf(out, "%s pmcluster-watchdog: docker STILL does not answer after a restart (%v) — this node needs an operator\n",
 			now.UTC().Format(time.RFC3339), err)
 		return verdict, fmt.Errorf("docker did not answer after a restart: %w", err)
@@ -213,16 +212,16 @@ func watchDockerOnce(ctx context.Context, statePath string, d dockerWatchDeps) (
 	fmt.Fprintf(out, "%s pmcluster-watchdog: docker answers again after the restart\n", now.UTC().Format(time.RFC3339))
 	st.Failures = 0
 	st.LastRestart = now.Unix()
-	_ = saveWatchdogState(statePath, st)
+	_ = SaveWatchdogState(statePath, st)
 	return verdict, nil
 }
 
-// nodePolicyArmsDocker reads the leader's decision from the node policy document.
+// NodePolicyArmsDocker reads the leader's decision from the node policy document.
 //
 // Anything unreadable, missing or malformed means NOT armed: this decides whether a
 // root timer restarts a node's docker daemon, and every failure mode must fall towards
 // doing nothing.
-func nodePolicyArmsDocker(path string) bool {
+func NodePolicyArmsDocker(path string) bool {
 	if path == "" {
 		return false
 	}
@@ -239,12 +238,12 @@ func nodePolicyArmsDocker(path string) bool {
 	return doc.DockerRestart
 }
 
-// probeDockerSocket asks the daemon for /_ping over its unix socket. Using the API
+// ProbeDockerSocket asks the daemon for /_ping over its unix socket. Using the API
 // rather than the CLI keeps the watchdog independent of every workflow's docker
 // binary and of DOCKER_HOST being set in a root timer's environment.
-func probeDockerSocket(ctx context.Context, socketPath string) error {
+func ProbeDockerSocket(ctx context.Context, socketPath string) error {
 	if socketPath == "" {
-		socketPath = defaultDockerSocket
+		socketPath = DefaultDockerSocket
 	}
 	tr := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {

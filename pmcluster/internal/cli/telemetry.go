@@ -4,10 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/rs/zerolog"
-
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 )
 
@@ -43,7 +42,7 @@ func initCLITelemetry() func() {
 
 	shutdown, err := telemetry.Init(context.Background(), telemetry.Options{
 		Endpoint:       endpoint,
-		ServiceName:    serviceName(),
+		ServiceName:    noderuntime.ServiceName(),
 		ServiceVersion: buildinfo.Version,
 	})
 	if err != nil {
@@ -53,31 +52,5 @@ func initCLITelemetry() func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = shutdown(ctx)
-	}
-}
-
-// telemetryFailureLogger renders the exporter's rate-limited failure events as
-// daemon log lines. The reporter decides WHEN (first failure, one summary per
-// interval, one recovery); this decides only how they read.
-func telemetryFailureLogger(log zerolog.Logger) func(telemetry.FailureEvent) {
-	return func(ev telemetry.FailureEvent) {
-		switch ev.Kind {
-		case telemetry.FailureRecovered:
-			log.Info().
-				Int("suppressed", ev.Suppressed).
-				Dur("window", ev.Interval).
-				Msg("OTel export recovered")
-		case telemetry.FailureOngoing:
-			log.Warn().
-				Err(ev.Err).
-				Int("suppressed", ev.Suppressed).
-				Dur("window", ev.Interval).
-				Msg("OTel export still failing")
-		default:
-			log.Warn().
-				Err(ev.Err).
-				Dur("suppress_for", ev.Interval).
-				Msg("OTel export failed; repeats suppressed")
-		}
 	}
 }

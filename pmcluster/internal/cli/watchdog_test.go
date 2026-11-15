@@ -1,10 +1,11 @@
 package cli
 
 import (
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,7 +43,9 @@ func newWatchdogHarness(t *testing.T) *watchdogHarness {
 	return h
 }
 
-func (h *watchdogHarness) statePath() string { return filepath.Join(h.dir, watchdogStateFile) }
+func (h *watchdogHarness) statePath() string {
+	return filepath.Join(h.dir, noderuntime.WatchdogStateFile)
+}
 
 func (h *watchdogHarness) deps() watchdogDeps {
 	return watchdogDeps{
@@ -77,9 +80,9 @@ func (h *watchdogHarness) step(t *testing.T, d time.Duration) watchdogVerdict {
 	return v
 }
 
-func (h *watchdogHarness) state(t *testing.T) watchdogState {
+func (h *watchdogHarness) state(t *testing.T) noderuntime.WatchdogState {
 	t.Helper()
-	st, ok := loadWatchdogState(h.statePath())
+	st, ok := noderuntime.LoadWatchdogState(h.statePath())
 	if !ok {
 		t.Fatalf("watchdog state file %s is missing", h.statePath())
 	}
@@ -277,7 +280,7 @@ func TestWatchdog_StateSurvivesTheFilesystem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read state: %v", err)
 	}
-	var disk watchdogState
+	var disk noderuntime.WatchdogState
 	if err := json.Unmarshal(raw, &disk); err != nil {
 		t.Fatalf("state file is not JSON: %v\n%s", err, raw)
 	}
@@ -337,8 +340,8 @@ func TestHostLoopbackURL(t *testing.T) {
 		{"127.0.0.1:9090", "http://127.0.0.1:9090/health"},
 		{"[::]:9090", "http://[::1]:9090/health"},
 		{":9090", "http://127.0.0.1:9090/health"},
-		{"", defaultWatchdogProbeURL},
-		{"garbage", defaultWatchdogProbeURL},
+		{"", nodeunits.DefaultWatchdogProbeURL},
+		{"garbage", nodeunits.DefaultWatchdogProbeURL},
 	} {
 		if got := hostLoopbackURL(tc.in); got != tc.want {
 			t.Errorf("hostLoopbackURL(%q) = %q, want %q", tc.in, got, tc.want)
@@ -350,10 +353,10 @@ func TestHostLoopbackURL(t *testing.T) {
 // depends on: a 60 s timer, a oneshot service, and the three arguments the
 // command needs to work as root without reading the operator's config.
 func TestWatchdogUnits_AreWiredEveryMinute(t *testing.T) {
-	timer := unitSections(t, renderWatchdogTimer())
+	timer := unitSections(t, nodeunits.RenderWatchdogTimer())
 	tim, ok := timer["Timer"]
 	if !ok {
-		t.Fatalf("timer has no [Timer] section:\n%s", renderWatchdogTimer())
+		t.Fatalf("timer has no [Timer] section:\n%s", nodeunits.RenderWatchdogTimer())
 	}
 	if got := unitSeconds(t, "OnUnitActiveSec", tim["OnUnitActiveSec"]); got != time.Minute {
 		t.Errorf("OnUnitActiveSec = %s, want 1m0s", got)
@@ -365,8 +368,8 @@ func TestWatchdogUnits_AreWiredEveryMinute(t *testing.T) {
 		t.Error("Persistent must not be set: a run missed while the node was down has nothing to probe")
 	}
 
-	svc := unitSections(t, renderWatchdogService(
-		"/usr/local/bin/pmcluster", "/home/pmuser/.pmcluster/watchdog.json", defaultWatchdogProbeURL))
+	svc := unitSections(t, nodeunits.RenderWatchdogService(
+		"/usr/local/bin/pmcluster", "/home/pmuser/.pmcluster/watchdog.json", nodeunits.DefaultWatchdogProbeURL))
 	s, ok := svc["Service"]
 	if !ok {
 		t.Fatalf("service has no [Service] section")
@@ -380,7 +383,7 @@ func TestWatchdogUnits_AreWiredEveryMinute(t *testing.T) {
 	for _, want := range []string{
 		"health-watch",
 		"--state-file /home/pmuser/.pmcluster/watchdog.json",
-		"--probe-url " + defaultWatchdogProbeURL,
+		"--probe-url " + nodeunits.DefaultWatchdogProbeURL,
 		"--unit pmcluster",
 	} {
 		if !strings.Contains(s["ExecStart"], want) {

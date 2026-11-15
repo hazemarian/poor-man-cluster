@@ -196,4 +196,3 @@ func runCredsRotate(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(cmd.OutOrStdout(), "\n✅ Cluster update applied the rotated credential to dependent services.\n")
 	return nil
 }
-
