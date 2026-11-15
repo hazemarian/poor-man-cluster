@@ -297,7 +297,7 @@ sequenceDiagram
     Note over M: steady state is a 304 every 60 s
     M->>S: elected leader
     S->>S: read sync_state, serve the store it has
-    Note over S: stale is served and logged; empty refuses
+    Note over S: stale is served and logged, empty refuses
 ```
 
 The invariant it encodes: cluster state has exactly one writer and no other transport. There is no replicated data config to restore, no key beside its ciphertext, and no window in which a promoted leader answers from a revision it is in the middle of replacing.
