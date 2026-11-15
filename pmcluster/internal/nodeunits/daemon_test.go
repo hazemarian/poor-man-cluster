@@ -1,4 +1,4 @@
-package cli
+package nodeunits
 
 import (
 	"bytes"
@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 )
 
 // fakeSystemctl writes the received arguments into a log file so tests can
@@ -30,8 +28,8 @@ func TestWriteFileSudoAsRoot(t *testing.T) {
 		t.Skip("requires root to exercise the direct-write path")
 	}
 	p := filepath.Join(t.TempDir(), "unit")
-	if err := nodeunits.WriteFileSudo(p, []byte("hello"), 0o644); err != nil {
-		t.Fatalf("nodeunits.WriteFileSudo: %v", err)
+	if err := WriteFileSudo(p, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFileSudo: %v", err)
 	}
 	got, err := os.ReadFile(p)
 	if err != nil || string(got) != "hello" {
@@ -41,19 +39,19 @@ func TestWriteFileSudoAsRoot(t *testing.T) {
 
 func TestEnsureDaemonRunningWritesUnitAndStarts(t *testing.T) {
 	// Save + restore the overridable globals.
-	oldPath := daemonUnitPath
-	oldSys := nodeunits.Systemctl
-	oldHostOS := nodeunits.HostOS
-	oldHasSys := nodeunits.HasSystemctl
-	oldWrite := nodeunits.WriteUnit
+	oldPath := DaemonUnitPath
+	oldSys := Systemctl
+	oldHostOS := HostOS
+	oldHasSys := HasSystemctl
+	oldWrite := WriteUnit
 	oldPMCLUSTER_USER, hadPM := os.LookupEnv("PMCLUSTER_USER")
 	oldSUDO_USER, hadSUDO := os.LookupEnv("SUDO_USER")
 	defer func() {
-		daemonUnitPath = oldPath
-		nodeunits.Systemctl = oldSys
-		nodeunits.HostOS = oldHostOS
-		nodeunits.HasSystemctl = oldHasSys
-		nodeunits.WriteUnit = oldWrite
+		DaemonUnitPath = oldPath
+		Systemctl = oldSys
+		HostOS = oldHostOS
+		HasSystemctl = oldHasSys
+		WriteUnit = oldWrite
 		if hadPM {
 			os.Setenv("PMCLUSTER_USER", oldPMCLUSTER_USER)
 		} else {
@@ -65,19 +63,19 @@ func TestEnsureDaemonRunningWritesUnitAndStarts(t *testing.T) {
 			os.Unsetenv("SUDO_USER")
 		}
 	}()
-	nodeunits.HostOS = "linux"
-	nodeunits.HasSystemctl = func() bool { return true }
-	nodeunits.WriteUnit = os.WriteFile
+	HostOS = "linux"
+	HasSystemctl = func() bool { return true }
+	WriteUnit = os.WriteFile
 	os.Setenv("PMCLUSTER_USER", "testuser")
 
 	unitPath := filepath.Join(t.TempDir(), "pmcluster.service")
-	daemonUnitPath = unitPath
+	DaemonUnitPath = unitPath
 	callLog := filepath.Join(t.TempDir(), "calls.log")
-	nodeunits.Systemctl = fakeSystemctl(t, callLog)
+	Systemctl = fakeSystemctl(t, callLog)
 
 	var out bytes.Buffer
-	if err := ensureDaemonRunning(&out); err != nil {
-		t.Fatalf("ensureDaemonRunning: %v", err)
+	if err := EnsureDaemonRunning(&out, filepath.Join(t.TempDir(), "config.yaml")); err != nil {
+		t.Fatalf("EnsureDaemonRunning: %v", err)
 	}
 
 	unit, err := os.ReadFile(unitPath)
@@ -102,39 +100,39 @@ func TestEnsureDaemonRunningWritesUnitAndStarts(t *testing.T) {
 }
 
 func TestEnsureDaemonRunningIdempotentUnit(t *testing.T) {
-	oldPath := daemonUnitPath
-	oldSys := nodeunits.Systemctl
-	oldHostOS := nodeunits.HostOS
-	oldHasSys := nodeunits.HasSystemctl
-	oldWrite := nodeunits.WriteUnit
+	oldPath := DaemonUnitPath
+	oldSys := Systemctl
+	oldHostOS := HostOS
+	oldHasSys := HasSystemctl
+	oldWrite := WriteUnit
 	oldPM, hadPM := os.LookupEnv("PMCLUSTER_USER")
 	defer func() {
-		daemonUnitPath = oldPath
-		nodeunits.Systemctl = oldSys
-		nodeunits.HostOS = oldHostOS
-		nodeunits.HasSystemctl = oldHasSys
-		nodeunits.WriteUnit = oldWrite
+		DaemonUnitPath = oldPath
+		Systemctl = oldSys
+		HostOS = oldHostOS
+		HasSystemctl = oldHasSys
+		WriteUnit = oldWrite
 		if hadPM {
 			os.Setenv("PMCLUSTER_USER", oldPM)
 		} else {
 			os.Unsetenv("PMCLUSTER_USER")
 		}
 	}()
-	nodeunits.HostOS = "linux"
-	nodeunits.HasSystemctl = func() bool { return true }
-	nodeunits.WriteUnit = os.WriteFile
+	HostOS = "linux"
+	HasSystemctl = func() bool { return true }
+	WriteUnit = os.WriteFile
 	os.Setenv("PMCLUSTER_USER", "testuser")
 
 	unitPath := filepath.Join(t.TempDir(), "pmcluster.service")
-	daemonUnitPath = unitPath
-	nodeunits.Systemctl = func(...string) error { return nil }
+	DaemonUnitPath = unitPath
+	Systemctl = func(...string) error { return nil }
 
 	var out1, out2 bytes.Buffer
-	if err := ensureDaemonRunning(&out1); err != nil {
+	if err := EnsureDaemonRunning(&out1, filepath.Join(t.TempDir(), "config.yaml")); err != nil {
 		t.Fatal(err)
 	}
 	// Second run: unit already matches → must NOT report "installed".
-	if err := ensureDaemonRunning(&out2); err != nil {
+	if err := EnsureDaemonRunning(&out2, filepath.Join(t.TempDir(), "config.yaml")); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out2.String(), "installed systemd unit") {
@@ -143,7 +141,7 @@ func TestEnsureDaemonRunningIdempotentUnit(t *testing.T) {
 }
 
 func TestSystemctlSudoErrorWrapping(t *testing.T) {
-	err := nodeunits.SystemctlSudo("bogus-command-xyz")
+	err := SystemctlSudo("bogus-command-xyz")
 	if err == nil {
 		t.Skip("systemctl accepted bogus command (unusual) — nothing to assert")
 	}
@@ -160,34 +158,34 @@ func TestEnsureDaemonRunning_FallsBackToRootDataDir(t *testing.T) {
 	if os.Getenv("HOME") == "" {
 		t.Skip("no HOME to compare against")
 	}
-	oldPath := daemonUnitPath
-	oldSys := nodeunits.Systemctl
-	oldHasSys := nodeunits.HasSystemctl
-	oldWrite := nodeunits.WriteUnit
-	oldRoot := rootDataDir
-	oldHost := nodeunits.HostOS
+	oldPath := DaemonUnitPath
+	oldSys := Systemctl
+	oldHasSys := HasSystemctl
+	oldWrite := WriteUnit
+	oldRoot := RootDataDir
+	oldHost := HostOS
 	oldSUDO := os.Getenv("SUDO_USER")
 	t.Cleanup(func() {
-		daemonUnitPath = oldPath
-		nodeunits.Systemctl = oldSys
-		nodeunits.HasSystemctl = oldHasSys
-		nodeunits.WriteUnit = oldWrite
-		rootDataDir = oldRoot
-		nodeunits.HostOS = oldHost
+		DaemonUnitPath = oldPath
+		Systemctl = oldSys
+		HasSystemctl = oldHasSys
+		WriteUnit = oldWrite
+		RootDataDir = oldRoot
+		HostOS = oldHost
 		os.Setenv("SUDO_USER", oldSUDO)
 	})
-	nodeunits.HasSystemctl = func() bool { return true }
-	nodeunits.HostOS = "linux"
-	nodeunits.Systemctl = func(...string) error { return nil }
-	daemonUnitPath = filepath.Join(t.TempDir(), "pmcluster.service")
+	HasSystemctl = func() bool { return true }
+	HostOS = "linux"
+	Systemctl = func(...string) error { return nil }
+	DaemonUnitPath = filepath.Join(t.TempDir(), "pmcluster.service")
 	// Simulate a root-initialised install: only /root/.pmcluster exists.
-	rootDataDir = filepath.Join(t.TempDir(), ".pmcluster")
-	if err := os.MkdirAll(rootDataDir, 0o700); err != nil {
+	RootDataDir = filepath.Join(t.TempDir(), ".pmcluster")
+	if err := os.MkdirAll(RootDataDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 
 	var wrote = map[string][]byte{}
-	nodeunits.WriteUnit = func(path string, data []byte, mode os.FileMode) error {
+	WriteUnit = func(path string, data []byte, mode os.FileMode) error {
 		wrote[path] = data
 		return nil
 	}
@@ -196,10 +194,10 @@ func TestEnsureDaemonRunning_FallsBackToRootDataDir(t *testing.T) {
 	os.Setenv("SUDO_USER", "sudoser")
 	t.Setenv("HOME", "/tmp/nonexistent-sudoser-home")
 	var out bytes.Buffer
-	if err := ensureDaemonRunning(&out); err != nil {
-		t.Fatalf("ensureDaemonRunning: %v", err)
+	if err := EnsureDaemonRunning(&out, filepath.Join(t.TempDir(), "config.yaml")); err != nil {
+		t.Fatalf("EnsureDaemonRunning: %v", err)
 	}
-	unit := wrote[daemonUnitPath]
+	unit := wrote[DaemonUnitPath]
 	if !bytes.Contains(unit, []byte("User=root")) {
 		t.Errorf("unit must run as root when only /root/.pmcluster holds state:\n%s", unit)
 	}
@@ -212,13 +210,13 @@ func TestEnsureDaemonRunning_FallsBackToRootDataDir(t *testing.T) {
 // timestamp and clobber a just-minted admin token).
 func TestEnsureDaemonRunning_SkipEnv(t *testing.T) {
 	t.Setenv("PMCLUSTER_SKIP_DAEMON", "1")
-	nodeunits.HostOS = "linux"
-	nodeunits.HasSystemctl = func() bool { return true }
+	HostOS = "linux"
+	HasSystemctl = func() bool { return true }
 	// If the guard is missing, this would try to write /etc/... via sudo and
 	// fail on non-root dev hosts — a nil return + hint proves the skip fired.
 	var out bytes.Buffer
-	if err := ensureDaemonRunning(&out); err != nil {
-		t.Fatalf("ensureDaemonRunning with PMCLUSTER_SKIP_DAEMON=1: %v", err)
+	if err := EnsureDaemonRunning(&out, filepath.Join(t.TempDir(), "config.yaml")); err != nil {
+		t.Fatalf("EnsureDaemonRunning with PMCLUSTER_SKIP_DAEMON=1: %v", err)
 	}
 	if !strings.Contains(out.String(), "PMCLUSTER_SKIP_DAEMON set") {
 		t.Errorf("output missing skip hint:\n%s", out.String())

@@ -6,6 +6,18 @@ import (
 	"strings"
 )
 
+// WatchdogStateFile lives under the daemon's data dir, NOT in /run: the failure
+// count has to survive the restart it triggers, or every restart would reset the
+// count to zero and the watchdog would restart once a minute instead of once per
+// rate limit. It is named here because the unit that runs the watchdog and the
+// runtime that writes the counter have to agree.
+const WatchdogStateFile = "watchdog.json"
+
+// WatchdogFailuresBeforeRestart is N: three consecutive failed probes, one minute
+// apart. One failure is a blip (a GC pause, a busy CPU during a build); three is a
+// minute of silence, which a healthy daemon cannot do.
+const WatchdogFailuresBeforeRestart = 3
+
 // NodePolicyFileName is the document the leader's node-level decisions reach this
 // node in (today: whether docker may be restarted). It sits beside the watchdog's
 // state file, so the unit that reads it and the code that writes it agree on one

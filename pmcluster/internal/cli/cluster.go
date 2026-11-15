@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
+
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
@@ -194,7 +196,7 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintln(cmd.OutOrStdout(), "This node is a Swarm manager with no local control-plane state yet (it has not been promoted — the store is restored from the Raft snapshot on promotion). The cluster exists; nothing to update here.")
 			// A standby manager still needs a current daemon + systemd unit so it
 			// can take over cleanly (and so unit changes roll out to it).
-			if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+			if err := nodeunits.EnsureDaemonRunning(cmd.OutOrStdout(), configPath); err != nil {
 				return fmt.Errorf("ensure daemon running: %w", err)
 			}
 			return nil
@@ -236,7 +238,7 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 
 	// The daemon is managed by the CLI now (not install.sh): make sure it is
 	// installed + running with the current binary.
-	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+	if err := nodeunits.EnsureDaemonRunning(cmd.OutOrStdout(), configPath); err != nil {
 		return fmt.Errorf("ensure daemon running: %w", err)
 	}
 	return nil
@@ -346,7 +348,7 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 		defer closeProbe()
 		if classifyLocalCluster(ctx, st, probe) == stateStandby {
 			fmt.Fprintln(cmd.OutOrStdout(), "This node is a Swarm manager with no local control-plane state yet (it has not been promoted — the store is restored from the Raft snapshot on promotion). Rebuild from the leader with `pmcluster cluster reset` there, or let this node be promoted.")
-			if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+			if err := nodeunits.EnsureDaemonRunning(cmd.OutOrStdout(), configPath); err != nil {
 				return fmt.Errorf("ensure daemon running: %w", err)
 			}
 			return nil
@@ -388,7 +390,7 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 	printResetResult(cmd.OutOrStdout(), res)
 
 	// Rebuild is done — make sure the daemon is installed + running.
-	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+	if err := nodeunits.EnsureDaemonRunning(cmd.OutOrStdout(), configPath); err != nil {
 		return fmt.Errorf("ensure daemon running: %w", err)
 	}
 	return nil
@@ -567,7 +569,7 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 
 	// The daemon is managed by the CLI now (not install.sh): make sure it is
 	// installed + running with the current binary.
-	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+	if err := nodeunits.EnsureDaemonRunning(cmd.OutOrStdout(), configPath); err != nil {
 		return fmt.Errorf("ensure daemon running: %w", err)
 	}
 	return nil
@@ -718,7 +720,7 @@ func runClusterDown(cmd *cobra.Command, _ []string) error {
 	// Purge must stop the daemon FIRST (best-effort, systemd-only) so it cannot
 	// resurrect swarm resources while we remove them.
 	if purge {
-		stopDaemon(out)
+		nodeunits.StopDaemon(out)
 	}
 
 	dc, err := docker.New()

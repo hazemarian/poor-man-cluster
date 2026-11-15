@@ -1,4 +1,4 @@
-package cli
+package nodeunits
 
 import (
 	"bytes"
@@ -9,13 +9,13 @@ import (
 	"strings"
 )
 
-// stopUnitDropIn is where the memory bounds live. A drop-in is merged by systemd
+// StopUnitDropIn is where the memory bounds live. A drop-in is merged by systemd
 // and cannot clobber ExecStart/User, so converging it from inside the daemon is
 // safe on any node regardless of how it was installed.
-// Overridable in tests, like daemonUnitPath.
-var stopUnitDropIn = "/etc/systemd/system/pmcluster.service.d/memory.conf"
+// Overridable in tests, like DaemonUnitPath.
+var StopUnitDropIn = "/etc/systemd/system/pmcluster.service.d/memory.conf"
 
-// convergeSystemd keeps this node's systemd protection in step with the binary
+// ConvergeSystemd keeps this node's systemd protection in step with the binary
 // that is actually running.
 //
 // install and join render the main unit ONCE, when the node is built. An upgrade
@@ -40,7 +40,7 @@ var stopUnitDropIn = "/etc/systemd/system/pmcluster.service.d/memory.conf"
 //
 // Best effort by design: a container without systemd, a dev box or a non-root run
 // must start normally, so every failure is a log line, never an error.
-func convergeSystemd(logf func(string, ...any), dockerSocket, dataDir string) {
+func ConvergeSystemd(logf func(string, ...any), dockerSocket, dataDir string) {
 	if os.Geteuid() != 0 {
 		return
 	}
@@ -48,7 +48,7 @@ func convergeSystemd(logf func(string, ...any), dockerSocket, dataDir string) {
 		return
 	}
 	// Only a systemd-managed install has a unit to attach to.
-	if _, err := os.Stat(daemonUnitPath); err != nil {
+	if _, err := os.Stat(DaemonUnitPath); err != nil {
 		return
 	}
 	exe, err := os.Executable()
@@ -57,10 +57,10 @@ func convergeSystemd(logf func(string, ...any), dockerSocket, dataDir string) {
 		return
 	}
 
-	mem := memoryLimitsFor(hostMemTotalMiB())
-	memChanged, err := writeMemoryDropIn(mem)
+	mem := MemoryLimitsFor(HostMemTotalMiB())
+	memChanged, err := WriteMemoryDropIn(mem)
 	if err != nil {
-		logf("systemd convergence: cannot write %s: %v", stopUnitDropIn, err)
+		logf("systemd convergence: cannot write %s: %v", StopUnitDropIn, err)
 	} else if memChanged {
 		if mem.TotalMiB > 0 {
 			logf("memory bounds written for this host (MemoryHigh=%dM, MemoryMax=%dM of %d MiB) — they apply on the next restart",
@@ -74,17 +74,17 @@ func convergeSystemd(logf func(string, ...any), dockerSocket, dataDir string) {
 	// different fault: a unit that is old enough to have BindsTo. Same rule as the
 	// memory drop-in — the daemon owns it, and it is rewritten from scratch each start.
 	reload := false
-	if changed, err := writeDependencyDropIn(); err != nil {
-		logf("systemd convergence: cannot write %s: %v", dependencyDropIn, err)
+	if changed, err := WriteDependencyDropIn(); err != nil {
+		logf("systemd convergence: cannot write %s: %v", DependencyDropIn, err)
 	} else if changed {
 		logf("docker dependency written (PartOf=docker.service) — a docker restart now restarts this agent")
 		reload = true
 	}
 	// …and the BindsTo itself, which no drop-in can take away.
-	if changed, err := repairDaemonUnitDependency(); err != nil {
-		logf("systemd convergence: cannot repair %s: %v (a dockerd outage will still stop this agent)", daemonUnitPath, err)
+	if changed, err := RepairDaemonUnitDependency(); err != nil {
+		logf("systemd convergence: cannot repair %s: %v (a dockerd outage will still stop this agent)", DaemonUnitPath, err)
 	} else if changed {
-		logf("docker dependency repaired: removed BindsTo=docker.service from %s — this agent no longer goes down with dockerd", daemonUnitPath)
+		logf("docker dependency repaired: removed BindsTo=docker.service from %s — this agent no longer goes down with dockerd", DaemonUnitPath)
 		reload = true
 	}
 	if memChanged {
@@ -105,7 +105,7 @@ func convergeSystemd(logf func(string, ...any), dockerSocket, dataDir string) {
 		// reading different files.
 		dataDir = filepath.Join(os.Getenv("HOME"), ".pmcluster")
 	}
-	installWatchdog(&buf, exe, dataDir, dockerSocket)
+	InstallWatchdog(&buf, exe, dataDir, dockerSocket)
 	if out := strings.TrimSpace(buf.String()); out != "" {
 		logf("watchdog: %s", strings.ReplaceAll(out, "\n", "; "))
 	}
@@ -114,7 +114,7 @@ func convergeSystemd(logf func(string, ...any), dockerSocket, dataDir string) {
 	}
 }
 
-// dependencyDropIn overrides the unit's dependency on docker.
+// DependencyDropIn overrides the unit's dependency on docker.
 //
 // The main unit is rendered once at install/join and an upgrade never re-renders
 // it, so a node built before v0.2.290 keeps BindsTo=docker.service forever — the
@@ -125,14 +125,14 @@ func convergeSystemd(logf func(string, ...any), dockerSocket, dataDir string) {
 // systemd 259 (2026-11-13, nxt-sw-6-w) it does not — after `daemon-reload`,
 // `systemctl show pmcluster -p BindsTo` still answered `BindsTo=docker.service`,
 // and a minimal scratch unit reproduced it. So the inherited directive is removed by
-// repairing the unit file itself (repairDaemonUnitDependency), and this drop-in only
+// repairing the unit file itself (RepairDaemonUnitDependency), and this drop-in only
 // adds what a drop-in can add: PartOf, which propagates a restart of docker to this
 // unit.
-var dependencyDropIn = "/etc/systemd/system/pmcluster.service.d/docker-dependency.conf"
+var DependencyDropIn = "/etc/systemd/system/pmcluster.service.d/docker-dependency.conf"
 
-// writeDependencyDropIn writes the dependency override and reports whether the
+// WriteDependencyDropIn writes the dependency override and reports whether the
 // file changed.
-func writeDependencyDropIn() (bool, error) {
+func WriteDependencyDropIn() (bool, error) {
 	const want = `# Managed by pmcluster — do not edit: rewritten on every daemon start.
 # PartOf propagates a RESTART of docker to this unit, which is what a docker
 # restart needs: without it the node agent stays down while dockerd comes back up,
@@ -140,21 +140,21 @@ func writeDependencyDropIn() (bool, error) {
 # stays pinned for hours with the console showing "queued".
 # Nothing here cancels BindsTo: an empty assignment does NOT reset a dependency
 # inherited from the main unit (measured on systemd 259), so that directive is
-# removed from the unit file by repairDaemonUnitDependency instead.
+# removed from the unit file by RepairDaemonUnitDependency instead.
 [Unit]
 PartOf=docker.service
 `
-	existing, err := os.ReadFile(dependencyDropIn)
+	existing, err := os.ReadFile(DependencyDropIn)
 	if err == nil && string(existing) == want {
 		return false, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(dependencyDropIn), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(DependencyDropIn), 0o755); err != nil {
 		return false, err
 	}
-	return true, os.WriteFile(dependencyDropIn, []byte(want), 0o644)
+	return true, os.WriteFile(DependencyDropIn, []byte(want), 0o644)
 }
 
-// repairDaemonUnitDependency removes an inherited `BindsTo=docker.service` from the
+// RepairDaemonUnitDependency removes an inherited `BindsTo=docker.service` from the
 // daemon's unit file, preserving every other line.
 //
 // This is the half the drop-in cannot do, and it is the difference between a node
@@ -172,8 +172,8 @@ PartOf=docker.service
 //
 // A node whose unit predates the docker check has no BindsTo at all, so this is a
 // no-op there (and reports no change, so nothing churns daemon-reload).
-func repairDaemonUnitDependency() (bool, error) {
-	body, err := os.ReadFile(daemonUnitPath)
+func RepairDaemonUnitDependency() (bool, error) {
+	body, err := os.ReadFile(DaemonUnitPath)
 	if err != nil {
 		return false, err
 	}
@@ -207,7 +207,7 @@ func repairDaemonUnitDependency() (bool, error) {
 
 	// Write through a temp file and rename: systemd may reload at any moment, and a
 	// half-written unit is a service that does not start.
-	dir := filepath.Dir(daemonUnitPath)
+	dir := filepath.Dir(DaemonUnitPath)
 	tmp, err := os.CreateTemp(dir, ".pmcluster-unit-*.tmp")
 	if err != nil {
 		return false, err
@@ -225,10 +225,10 @@ func repairDaemonUnitDependency() (bool, error) {
 	if err := tmp.Close(); err != nil {
 		return false, err
 	}
-	return true, os.Rename(tmp.Name(), daemonUnitPath)
+	return true, os.Rename(tmp.Name(), DaemonUnitPath)
 }
 
-// writeMemoryDropIn writes the memory bounds and reports whether the file changed.
+// WriteMemoryDropIn writes the memory bounds and reports whether the file changed.
 //
 // The drop-in is the ONLY place these numbers live. They used to be rendered into
 // the main unit as well, which is how a node ends up with two answers to "what is
@@ -239,7 +239,7 @@ func repairDaemonUnitDependency() (bool, error) {
 //
 // OOMScoreAdjust is written even when MemTotal is unreadable: -500 does not depend
 // on knowing the host's size, and the ordering is worth having either way.
-func writeMemoryDropIn(mem MemoryLimits) (bool, error) {
+func WriteMemoryDropIn(mem MemoryLimits) (bool, error) {
 	var want string
 	if mem.TotalMiB > 0 {
 		want = fmt.Sprintf(`# Managed by pmcluster — do not edit: rewritten on every daemon start.
@@ -260,12 +260,12 @@ OOMScoreAdjust=-500
 OOMScoreAdjust=-500
 `
 	}
-	existing, err := os.ReadFile(stopUnitDropIn)
+	existing, err := os.ReadFile(StopUnitDropIn)
 	if err == nil && string(existing) == want {
 		return false, nil
 	}
-	if err := os.MkdirAll(filepath.Dir(stopUnitDropIn), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(StopUnitDropIn), 0o755); err != nil {
 		return false, err
 	}
-	return true, os.WriteFile(stopUnitDropIn, []byte(want), 0o644)
+	return true, os.WriteFile(StopUnitDropIn, []byte(want), 0o644)
 }

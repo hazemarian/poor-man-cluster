@@ -1,4 +1,4 @@
-package cli
+package nodeunits
 
 import (
 	"fmt"
@@ -9,9 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 )
 
 // The control plane's own memory boundaries.
@@ -27,8 +24,8 @@ import (
 // room the daemon needs to notice MemoryHigh and act — finish a write, return a
 // 503 — instead of being killed the instant it crosses one line.
 const (
-	memoryHighPercent = 60
-	memoryMaxPercent  = 70
+	MemoryHighPercent = 60
+	MemoryMaxPercent  = 70
 )
 
 // MemoryLimits are the cgroup bounds written into the daemon unit, with the
@@ -41,18 +38,18 @@ type MemoryLimits struct {
 	MaxMiB   int64
 }
 
-// memoryLimitsFor computes the boundaries from a host's total RAM in MiB.
+// MemoryLimitsFor computes the boundaries from a host's total RAM in MiB.
 //
 // Rounded DOWN, and clamped so that High < Max < Total even on a tiny host: a
 // Max equal to the host would let the cgroup consume everything the kernel needs
 // to keep the SSH session alive, which is the state the two dead nodes were in.
-func memoryLimitsFor(totalMiB int64) MemoryLimits {
+func MemoryLimitsFor(totalMiB int64) MemoryLimits {
 	if totalMiB <= 0 {
 		return MemoryLimits{}
 	}
 	l := MemoryLimits{TotalMiB: totalMiB}
-	l.HighMiB = totalMiB * memoryHighPercent / 100
-	l.MaxMiB = totalMiB * memoryMaxPercent / 100
+	l.HighMiB = totalMiB * MemoryHighPercent / 100
+	l.MaxMiB = totalMiB * MemoryMaxPercent / 100
 	if l.MaxMiB >= totalMiB {
 		l.MaxMiB = totalMiB - 1
 	}
@@ -68,12 +65,12 @@ func memoryLimitsFor(totalMiB int64) MemoryLimits {
 	return l
 }
 
-// hostMemTotalMiB reads this host's total RAM, in MiB. Overridable in tests.
+// HostMemTotalMiB reads this host's total RAM, in MiB. Overridable in tests.
 //
 // /proc/meminfo, not `docker info`: the daemon's own cgroup boundary is a
 // property of the machine it runs on, and Docker's number is what the ENGINE
 // was told, which on a VM can be different.
-var hostMemTotalMiB = func() int64 {
+var HostMemTotalMiB = func() int64 {
 	b, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		return 0
@@ -92,7 +89,7 @@ var hostMemTotalMiB = func() int64 {
 	return 0
 }
 
-// renderSystemdUnit builds the pmcluster systemd unit file. The daemon is
+// RenderSystemdUnit builds the pmcluster systemd unit file. The daemon is
 // managed by the CLI (cluster up/update, join) — install.sh never writes it.
 //
 // PartOf=docker.service (not BindsTo=, not Requires=) is what propagates both a
@@ -119,11 +116,11 @@ var hostMemTotalMiB = func() int64 {
 // state an operator can see and act on. A crash loop is a bug to fix, not a
 // rhythm to keep; the unit must not be the loudest writer in the journal while
 // somebody is trying to read it.
-// renderSystemdUnit writes the unit WITHOUT memory bounds: they live in
+// RenderSystemdUnit writes the unit WITHOUT memory bounds: they live in
 // pmcluster.service.d/memory.conf, owned by the daemon's own convergence, because
 // that file is recomputed from /proc/meminfo on every start. Two owners meant two
-// answers to "what is the limit?" (see writeMemoryDropIn).
-func renderSystemdUnit(pmUser, group, home, execStart string) string {
+// answers to "what is the limit?" (see WriteMemoryDropIn).
+func RenderSystemdUnit(pmUser, group, home, execStart string) string {
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster API Server
 After=docker.service
@@ -149,31 +146,31 @@ WantedBy=docker.service
 `, pmUser, group, home, execStart)
 }
 
-// daemonUnitPath is the systemd unit location. Overridable in tests.
-var daemonUnitPath = "/etc/systemd/system/pmcluster.service"
+// DaemonUnitPath is the systemd unit location. Overridable in tests.
+var DaemonUnitPath = "/etc/systemd/system/pmcluster.service"
 
-// watchdogUnitPaths returns the watchdog's two unit files. They live NEXT TO the
+// WatchdogUnitPaths returns the watchdog's two unit files. They live NEXT TO the
 // daemon unit, so a test (or a host with a non-standard unit directory) keeps
 // both in one place and nothing writes to /etc that was not asked to.
-func watchdogUnitPaths() (service, timer string) {
-	dir := filepath.Dir(daemonUnitPath)
+func WatchdogUnitPaths() (service, timer string) {
+	dir := filepath.Dir(DaemonUnitPath)
 	return filepath.Join(dir, "pmcluster-watchdog.service"),
 		filepath.Join(dir, "pmcluster-watchdog.timer")
 }
 
-// installWatchdog writes and enables the watchdog units for this node's data
+// InstallWatchdog writes and enables the watchdog units for this node's data
 // dir. A failure is a warning, never fatal: the daemon is already running by the
 // time this is called, and refusing to finish an update because a timer could
 // not be enabled would trade a degraded node for a broken one.
-func installWatchdog(out io.Writer, exe, dataDir, dockerSocket string) {
-	servicePath, timerPath := watchdogUnitPaths()
-	statePath := filepath.Join(dataDir, noderuntime.WatchdogStateFile)
+func InstallWatchdog(out io.Writer, exe, dataDir, dockerSocket string) {
+	servicePath, timerPath := WatchdogUnitPaths()
+	statePath := filepath.Join(dataDir, WatchdogStateFile)
 	units := []struct {
 		path string
 		body string
 	}{
-		{servicePath, nodeunits.RenderWatchdogServiceWithDocker(exe, statePath, nodeunits.DefaultWatchdogProbeURL, dockerSocket)},
-		{timerPath, nodeunits.RenderWatchdogTimer()},
+		{servicePath, RenderWatchdogServiceWithDocker(exe, statePath, DefaultWatchdogProbeURL, dockerSocket)},
+		{timerPath, RenderWatchdogTimer()},
 	}
 	changed := false
 	for _, u := range units {
@@ -181,7 +178,7 @@ func installWatchdog(out io.Writer, exe, dataDir, dockerSocket string) {
 		if string(existing) == u.body {
 			continue
 		}
-		if err := nodeunits.WriteUnit(u.path, []byte(u.body), 0o644); err != nil {
+		if err := WriteUnit(u.path, []byte(u.body), 0o644); err != nil {
 			fmt.Fprintf(out, "  ⚠ health watchdog not installed: %v\n", err)
 			return
 		}
@@ -191,39 +188,39 @@ func installWatchdog(out io.Writer, exe, dataDir, dockerSocket string) {
 		fmt.Fprintf(out, "→ installed health watchdog units %s, %s\n", servicePath, timerPath)
 	}
 	for _, args := range [][]string{{"daemon-reload"}, {"enable", "pmcluster-watchdog.timer"}, {"restart", "pmcluster-watchdog.timer"}} {
-		if err := nodeunits.Systemctl(args...); err != nil {
+		if err := Systemctl(args...); err != nil {
 			fmt.Fprintf(out, "  ⚠ health watchdog may not run: systemctl %s: %v\n", strings.Join(args, " "), err)
 			return
 		}
 	}
 	fmt.Fprintf(out, "→ health watchdog active (probes %s every 60 s; restarts the unit after %d consecutive failures)\n",
-		nodeunits.DefaultWatchdogProbeURL, WatchdogFailuresBeforeRestart)
+		DefaultWatchdogProbeURL, WatchdogFailuresBeforeRestart)
 }
 
-// rootDataDir is where the daemon's state lives when it was initialised under
-// root (see ensureDaemonRunning's SUDO_USER fallback). Overridable in tests.
-var rootDataDir = "/root/.pmcluster"
+// RootDataDir is where the daemon's state lives when it was initialised under
+// root (see EnsureDaemonRunning's SUDO_USER fallback). Overridable in tests.
+var RootDataDir = "/root/.pmcluster"
 
 // The systemd seams (systemctl, the unit writer, the host OS, the systemctl
 // probe) live in internal/nodeunits, because the backup agent's six units and the
 // daemon's own unit must be installed through the same three calls and stubbed by
 // the same tests.
 
-// daemonExecStart returns the ExecStart command the systemd unit runs. The
+// DaemonExecStart returns the ExecStart command the systemd unit runs. The
 // daemon is the `serve` subcommand — the unit must never run the bare binary
 // (which would print help and exit, crash-looping the service).
-func daemonExecStart(exe string) string {
+func DaemonExecStart(exe string) string {
 	return exe + " serve"
 }
 
-// ensureDaemonRunning installs the pmcluster systemd unit (when missing or
+// EnsureDaemonRunning installs the pmcluster systemd unit (when missing or
 // stale) and starts/restarts the daemon. On non-Linux hosts or systems without
 // systemctl it prints a hint and returns nil — the daemon can always be run in
 // the foreground with `pmcluster serve`.
 //
 // Executed from `pmcluster cluster up`, `pmcluster cluster update` and
 // `pmcluster join`, so install.sh no longer needs to manage the service.
-func ensureDaemonRunning(out io.Writer) error {
+func EnsureDaemonRunning(out io.Writer, configPath string) error {
 	if os.Getenv("PMCLUSTER_SKIP_DAEMON") != "" {
 		// Test/e2e escape hatch: the harness starts its own foreground
 		// daemon, and a stray systemd daemon on the same swarm would
@@ -232,11 +229,11 @@ func ensureDaemonRunning(out io.Writer) error {
 		fmt.Fprintln(out, "  (PMCLUSTER_SKIP_DAEMON set — start the daemon with: pmcluster serve)")
 		return nil
 	}
-	if nodeunits.HostOS != "linux" {
+	if HostOS != "linux" {
 		fmt.Fprintln(out, "  (non-Linux host — start the daemon with: pmcluster serve)")
 		return nil
 	}
-	if !nodeunits.HasSystemctl() {
+	if !HasSystemctl() {
 		fmt.Fprintln(out, "  (systemctl not found — start the daemon with: pmcluster serve)")
 		return nil
 	}
@@ -277,7 +274,7 @@ func ensureDaemonRunning(out io.Writer) error {
 		// permission-denied — /root is 0700, so non-root processes get
 		// EACCES, not ENOENT) but root does, the daemon must run as root.
 		if _, err := os.Stat(filepath.Join(home, ".pmcluster")); err != nil {
-			if _, rerr := os.Stat(rootDataDir); rerr == nil {
+			if _, rerr := os.Stat(RootDataDir); rerr == nil {
 				pmUser, home = "root", "/root"
 			}
 		}
@@ -296,40 +293,40 @@ func ensureDaemonRunning(out io.Writer) error {
 		return fmt.Errorf("resolve binary path for unit: %w", err)
 	}
 
-	unit := renderSystemdUnit(pmUser, group, home, daemonExecStart(exe))
+	unit := RenderSystemdUnit(pmUser, group, home, DaemonExecStart(exe))
 
 	// Write the unit only when missing or changed (operator edits win).
-	existing, _ := os.ReadFile(daemonUnitPath)
+	existing, _ := os.ReadFile(DaemonUnitPath)
 	if string(existing) != unit {
-		if err := nodeunits.WriteUnit(daemonUnitPath, []byte(unit), 0o644); err != nil {
-			return fmt.Errorf("write %s: %w", daemonUnitPath, err)
+		if err := WriteUnit(DaemonUnitPath, []byte(unit), 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", DaemonUnitPath, err)
 		}
-		fmt.Fprintf(out, "→ installed systemd unit %s (user %s, group %s)\n", daemonUnitPath, pmUser, group)
+		fmt.Fprintf(out, "→ installed systemd unit %s (user %s, group %s)\n", DaemonUnitPath, pmUser, group)
 	}
 
 	// The memory bounds go in a drop-in, which is also what the daemon rewrites on
 	// every start. Writing them here as well is what made a fresh install and an
 	// upgrade disagree about the same number.
-	mem := memoryLimitsFor(hostMemTotalMiB())
-	if changed, err := writeMemoryDropIn(mem); err != nil {
-		fmt.Fprintf(out, "  ⚠ could not write %s: %v\n", stopUnitDropIn, err)
+	mem := MemoryLimitsFor(HostMemTotalMiB())
+	if changed, err := WriteMemoryDropIn(mem); err != nil {
+		fmt.Fprintf(out, "  ⚠ could not write %s: %v\n", StopUnitDropIn, err)
 	} else if mem.TotalMiB > 0 {
 		note := ""
 		if changed {
 			note = " (updated)"
 		}
 		fmt.Fprintf(out, "  memory bounds: MemoryHigh=%dM, MemoryMax=%dM (%d%%/%d%% of this host's %d MiB)%s\n",
-			mem.HighMiB, mem.MaxMiB, memoryHighPercent, memoryMaxPercent, mem.TotalMiB, note)
+			mem.HighMiB, mem.MaxMiB, MemoryHighPercent, MemoryMaxPercent, mem.TotalMiB, note)
 	} else {
 		fmt.Fprintf(out, "  ⚠ could not read this host's MemTotal: no MemoryHigh/MemoryMax written (a guessed limit could exceed the host)\n")
 	}
 
 	for _, args := range [][]string{{"daemon-reload"}, {"enable", "pmcluster"}} {
-		if err := nodeunits.Systemctl(args...); err != nil {
+		if err := Systemctl(args...); err != nil {
 			return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
 		}
 	}
-	if err := nodeunits.Systemctl("restart", "pmcluster"); err != nil {
+	if err := Systemctl("restart", "pmcluster"); err != nil {
 		return fmt.Errorf("systemctl restart pmcluster: %w", err)
 	}
 	fmt.Fprintln(out, "→ pmcluster daemon started via systemd (pmcluster serve)")
@@ -342,7 +339,7 @@ func ensureDaemonRunning(out io.Writer) error {
 	// stays off here and is turned on by the daemon's own convergence, which can read
 	// the setting. A fresh node must never start restarting its own docker because of
 	// a default.
-	installWatchdog(out, exe, filepath.Join(home, ".pmcluster"), "")
+	InstallWatchdog(out, exe, filepath.Join(home, ".pmcluster"), "")
 
 	// The snapshot agent is installed only when the operator opts this node in.
 	//
@@ -354,21 +351,21 @@ func ensureDaemonRunning(out io.Writer) error {
 	// Removing the offen agent before the agent is live would leave the node
 	// with no working backup at all.
 	if os.Getenv("PMCLUSTER_BACKUP_AGENT") != "" {
-		return nodeunits.EnsureBackupAgent(out, configPath)
+		return EnsureBackupAgent(out, configPath)
 	}
 	return nil
 }
 
-// stopDaemon stops the pmcluster daemon via systemd, best-effort. Called before
+// StopDaemon stops the pmcluster daemon via systemd, best-effort. Called before
 // `cluster down --purge` so the daemon cannot resurrect swarm resources while
 // the purge removes them. Only acts on Linux hosts with systemctl; a
 // foreground daemon (or a non-systemd host) gets a hint and the purge proceeds.
 // Never fatal.
-func stopDaemon(out io.Writer) {
-	if nodeunits.HostOS != "linux" || !nodeunits.HasSystemctl() {
+func StopDaemon(out io.Writer) {
+	if HostOS != "linux" || !HasSystemctl() {
 		return
 	}
-	if err := nodeunits.Systemctl("stop", "pmcluster"); err != nil {
+	if err := Systemctl("stop", "pmcluster"); err != nil {
 		fmt.Fprintf(out, "  ⚠ could not stop the daemon: %v (continue — re-run purge after stopping it manually if resources reappear)\n", err)
 		return
 	}

@@ -8,12 +8,6 @@ import (
 	"strings"
 )
 
-// WatchdogStateFile lives under the daemon's data dir, NOT in /run: the failure
-// count has to survive the restart it triggers, or every restart would reset the
-// count to zero and the watchdog would restart once a minute instead of once per
-// rate limit.
-const WatchdogStateFile = "watchdog.json"
-
 // WatchdogState is the persisted evidence, one small JSON file.
 type WatchdogState struct {
 	// Failures is the CONSECUTIVE failed-probe count. It is reset by one

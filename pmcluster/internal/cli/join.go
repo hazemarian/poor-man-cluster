@@ -337,7 +337,7 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Install + start the daemon (systemd on Linux, hint otherwise).
-	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+	if err := nodeunits.EnsureDaemonRunning(cmd.OutOrStdout(), configPath); err != nil {
 		return err
 	}
 

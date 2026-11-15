@@ -8,6 +8,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
+
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
@@ -115,7 +117,7 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 			Role:       self.Role,
 			// This machine's RAM, so the runner's cap is checked against the node
 			// that would have to survive it. Unknown (0) skips the check.
-			MemTotalMiB: hostMemTotalMiB(),
+			MemTotalMiB: nodeunits.HostMemTotalMiB(),
 			// The app-data ownership check needs to know which services run here
 			// and what user their images declare. A runtime that cannot be opened
 			// is not an error: the check skips with a line saying so.

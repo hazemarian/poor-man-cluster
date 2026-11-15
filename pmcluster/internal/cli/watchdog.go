@@ -41,10 +41,6 @@ import (
 // first state, or a probe that fails because the machine is ALREADY restarting.
 
 const (
-	// WatchdogFailuresBeforeRestart is N: three consecutive failed probes, one
-	// minute apart. One failure is a blip (a GC pause, a busy CPU during a
-	// build); three is a minute of silence, which a healthy daemon cannot do.
-	WatchdogFailuresBeforeRestart = 3
 
 	// WatchdogRestartRateLimit is the floor between two restarts. A daemon that
 	// cannot answer 10 minutes after being restarted will not be fixed by being
@@ -63,7 +59,7 @@ const (
 	WatchdogProbeTimeout = 5 * time.Second
 
 	// The state file name lives with the runtime that owns the counter; the
-	// reasoning for its location is in noderuntime.WatchdogStateFile.
+	// reasoning for its location is in nodeunits.WatchdogStateFile.
 
 	// nodeunits.DefaultWatchdogProbeURL lives in nodeunits with the rest of the watchdog
 	// contract; this node's timer and this node's runtime must probe one URL.
@@ -156,7 +152,7 @@ func watchOnce(ctx context.Context, statePath string, d watchdogDeps) (watchdogV
 		// turn `systemctl stop pmcluster` into a fight.
 		return VerdictInactive, nil
 	}
-	if st.Failures < WatchdogFailuresBeforeRestart {
+	if st.Failures < nodeunits.WatchdogFailuresBeforeRestart {
 		return VerdictRecorded, nil
 	}
 	if age, known := d.UnitAge(ctx); known && age < WatchdogMinUnitAge {
@@ -343,7 +339,7 @@ update'. Hidden because it is not an operator command.`,
 				return fmt.Errorf("resolve the data dir for the watchdog state: %w", err)
 			}
 			if statePath == "" {
-				statePath = filepath.Join(cfg.DataDir, noderuntime.WatchdogStateFile)
+				statePath = filepath.Join(cfg.DataDir, nodeunits.WatchdogStateFile)
 			}
 			if !cmd.Flags().Changed("probe-url") {
 				probeURL = hostLoopbackURL(cfg.ListenAddr)
@@ -402,7 +398,7 @@ update'. Hidden because it is not an operator command.`,
 
 func init() {
 	healthWatchCmd.Flags().StringVar(&watchdogStatePath, "state-file", "",
-		"path to the watchdog state file (default <data_dir>/"+noderuntime.WatchdogStateFile+")")
+		"path to the watchdog state file (default <data_dir>/"+nodeunits.WatchdogStateFile+")")
 	healthWatchCmd.Flags().StringVar(&watchdogProbeURL, "probe-url", nodeunits.DefaultWatchdogProbeURL,
 		"URL probed with a "+WatchdogProbeTimeout.String()+" timeout")
 	healthWatchCmd.Flags().StringVar(&watchdogPolicyFile, "policy-file", "",

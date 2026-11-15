@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
+
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
@@ -230,7 +232,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// everywhere except the node that decided it.
 		applyNodePolicyOnce(cmd.Context(), cfg, log)
 		go nodePolicyLoop(cmd.Context(), cfg, log)
-		go convergeSystemd(func(f string, a ...any) { log.Info().Msgf(f, a...) }, sock, cfg.DataDir)
+		go nodeunits.ConvergeSystemd(func(f string, a ...any) { log.Info().Msgf(f, a...) }, sock, cfg.DataDir)
 
 		// The console's storage toggle sets INTENT; provisioning is local work (loop
 		// file, LVM, mkfs, mounts), so the node that the intent names has to do it —

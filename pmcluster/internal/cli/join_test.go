@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
+
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +21,7 @@ import (
 // back, and pmcluster owns the runner's docker socket — so every job on that node
 // hangs instead of failing. PartOf propagates the restart.
 func TestRenderSystemdUnit(t *testing.T) {
-	unit := renderSystemdUnit("pmuser", "docker", "/home/pmuser", "/usr/local/bin/pmcluster serve")
+	unit := nodeunits.RenderSystemdUnit("pmuser", "docker", "/home/pmuser", "/usr/local/bin/pmcluster serve")
 	for _, want := range []string{
 		"[Unit]",
 		"Description=pmcluster API Server",
@@ -54,8 +56,8 @@ func TestRenderSystemdUnit(t *testing.T) {
 // Regression: the systemd unit must run `pmcluster serve`, never the bare
 // binary. A bare ExecStart prints help and exits, crash-looping the service.
 func TestDaemonExecStart_IncludesServe(t *testing.T) {
-	if got := daemonExecStart("/usr/local/bin/pmcluster"); got != "/usr/local/bin/pmcluster serve" {
-		t.Fatalf("daemonExecStart(/usr/local/bin/pmcluster) = %q, want %q", got, "/usr/local/bin/pmcluster serve")
+	if got := nodeunits.DaemonExecStart("/usr/local/bin/pmcluster"); got != "/usr/local/bin/pmcluster serve" {
+		t.Fatalf("nodeunits.DaemonExecStart(/usr/local/bin/pmcluster) = %q, want %q", got, "/usr/local/bin/pmcluster serve")
 	}
 }
 
