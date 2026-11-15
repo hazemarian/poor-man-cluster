@@ -855,64 +855,35 @@ func checkBackupCoverage(ctx context.Context, in Input) Check {
 		return Check{Name: name, Status: StatusSkip, Detail: "no application stack holds a volume"}
 	}
 
-	// Newest recorded archive per stack.
-	newest := map[string]int64{}
-	rows, lerr := in.Store.ListBackups(ctx, 2000)
-	if lerr != nil {
-		return Check{Name: name, Status: StatusSkip,
-			Detail: "could not read the backup records (" + lerr.Error() + "), so coverage was not checked"}
-	}
-	now := in.Now
-	if now.IsZero() {
-		now = time.Now()
-	}
-	for _, b := range rows {
-		if b.Status != "succeeded" || !b.StackName.Valid {
-			continue
-		}
-		if b.StartedAt > newest[b.StackName.String] {
-			newest[b.StackName.String] = b.StartedAt
-		}
-	}
-
-	// What this check may and may not claim:
+	// What this check may and may not claim.
 	//
-	//   - It CAN know where a stack's data lives, and whether that node is part of
-	//     the storage set. That is structural and always answerable.
-	//   - It CANNOT know, from the leader, what every storage node has archived:
-	//     the agent writes a sidecar next to each artifact on the node that took
-	//     it, and only some runs end up as rows here. Measured 2026-11-15: `abbas`
-	//     had a fresh hourly artifact and no row at all, so "no row" is not "no
-	//     archive". Claiming it would have made this check cry wolf on nine
-	//     stacks and taught the operator to ignore it.
+	// It CAN know where a stack's data lives and whether that node is part of the
+	// storage set — structural, always answerable from the pins and the setting.
 	//
-	// So staleness is asserted only where a history exists, and "never archived"
-	// is never asserted from the database.
-	var outside, stale []string
+	// It CANNOT know, from the leader, which storage node has archived what. The
+	// agent writes a sidecar beside each artifact on the node that took it, and
+	// the backups table is not a reliable clock: measured 2026-11-15, `abbas` had
+	// a fresh hourly artifact and zero rows, while `test-erp` had a 07:00 artifact
+	// and a row stuck at 5 Nov. Reporting either as unbacked made this check cry
+	// wolf on eleven stacks, which is how an operator learns to ignore it.
+	//
+	// Freshness belongs to a check sourced from the nodes themselves, not guessed
+	// here. What remains is the fact that started all of this: data placed where
+	// no snapshot disk and no agent can ever reach it.
+	var outside []string
 	for stackName, node := range pinned {
 		if node != "" && !storage[node] {
 			outside = append(outside, stackName+" on "+node+" (not a storage node)")
 		}
-		at := newest[stackName]
-		if at > 0 && now.Sub(time.Unix(at, 0)) > backupCoverageWindow {
-			stale = append(stale, fmt.Sprintf("%s (last recorded archive %s)", stackName,
-				time.Unix(at, 0).UTC().Format("2006-01-02")))
-		}
 	}
 	sort.Strings(outside)
-	sort.Strings(stale)
-	if len(outside) > 0 || len(stale) > 0 {
-		var parts []string
-		if len(outside) > 0 {
-			parts = append(parts, "data outside the backup path — the snapshot disk and the hourly agent live on storage nodes, so these stacks have never been archived: "+strings.Join(outside, "; "))
-		}
-		if len(stale) > 0 {
-			parts = append(parts, "no archive in 48h: "+strings.Join(stale, "; "))
-		}
-		return Check{Name: name, Status: StatusFail, Detail: strings.Join(parts, ". ")}
+	if len(outside) > 0 {
+		return Check{Name: name, Status: StatusFail,
+			Detail: "data outside the backup path — the snapshot disk and the hourly agent live on storage nodes, so these stacks can never be archived where they are: " +
+				strings.Join(outside, "; ")}
 	}
 	return Check{Name: name, Status: StatusOK,
-		Detail: fmt.Sprintf("%d stack(s) hold a volume, all inside the backup path with an archive in the last 48h", len(pinned))}
+		Detail: fmt.Sprintf("%d stack(s) hold a volume, all on a storage node", len(pinned))}
 }
 
 // stackOfService turns "nextrum-landing_web" into "nextrum-landing".

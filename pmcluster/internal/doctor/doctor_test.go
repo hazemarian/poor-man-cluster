@@ -316,8 +316,8 @@ func TestBackupCoverageFlagsDataOutsideTheBackupPath(t *testing.T) {
 	}
 }
 
-// A stack on a storage node with a fresh archive is covered.
-func TestBackupCoverageIsGreenWhenArchived(t *testing.T) {
+// A stack on a storage node is inside the backup path; freshness is a separate
+func TestBackupCoverageIsGreenOnAStorageNode(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
 	if err != nil {
@@ -326,13 +326,6 @@ func TestBackupCoverageIsGreenWhenArchived(t *testing.T) {
 	defer func() { _ = st.Close() }()
 	if err := st.SetSetting(ctx, cluster.SettingStorageNodes(), "nxt-sw-1-m"); err != nil {
 		t.Fatalf("setting: %v", err)
-	}
-	id, cerr := st.CreateBackup(ctx, "shop", 0)
-	if cerr != nil {
-		t.Fatalf("CreateBackup: %v", cerr)
-	}
-	if ferr := st.FinishBackup(ctx, id, "succeeded", "archive.tar.gz", ""); ferr != nil {
-		t.Fatalf("FinishBackup: %v", ferr)
 	}
 	dc := backupCovDocker{
 		svcs:   []runtime.Service{{ID: "s1", Name: "shop_web"}},
@@ -345,8 +338,8 @@ func TestBackupCoverageIsGreenWhenArchived(t *testing.T) {
 	}
 }
 
-// A stack on a storage node with no backup row is NOT reported: the leader cannot
-// see another node's archive directory, and "no row" is not "no archive".
+// No row is not "no archive": the leader cannot see another node's archive
+// directory, and the row table is not a clock (abbas: fresh artifact, zero rows).
 func TestBackupCoverageDoesNotInferFromMissingRows(t *testing.T) {
 	ctx := context.Background()
 	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
