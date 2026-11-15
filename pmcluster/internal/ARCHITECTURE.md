@@ -5,6 +5,13 @@ port(s), a local adapter and its REST handler. Composition happens in exactly
 two roots: `internal/cli` (backend factory — the **only** local/remote switch)
 and `internal/server` (HTTP `Deps` + route mounting).
 
+Two node-local packages sit beside them and are not composition roots:
+`internal/noderuntime` holds the loops `serve` starts (assignment channel,
+snapshot mirror, volume repair, the runners, the docker watchdog), and
+`internal/nodeunits` holds the systemd units a node installs on itself and the
+node-local files those units read. Both are leaves: domain packages never import
+them, and neither may import `internal/cli`.
+
 ## Dependency rule
 
 Arrows point inward. Domain packages never import `remote`, `server` or `cli`.
@@ -144,7 +151,7 @@ node's runner half:
   exists for a single-node cluster).
 
 **The assignment channel** (`internal/runners/assignment.go`, served by
-`internal/cli/assignment.go`) is the leader's answer to "what should THIS node run":
+`internal/noderuntime/assignment.go`) is the leader's answer to "what should THIS node run":
 
 - `GET /api/github/runners/assignment` on the leader's **swarm data-path address,
   port 9092** — a listener of its own, never `0.0.0.0`, never a published host port.
@@ -228,7 +235,7 @@ follower manager mirrors so it can answer reads from its own store instead of
   migrations seed the row: a promoted leader then answers the version its adopted data
   actually has, rather than restarting at 1.
 
-**The follower half** (`internal/cli/snapshot_mirror.go`, `Store.ApplySnapshot`) polls
+**The follower half** (`internal/noderuntime/snapshot_mirror.go`, `Store.ApplySnapshot`) polls
 that route and applies it in ONE transaction — upsert every row, delete every row the
 snapshot does not carry, then record `sync_state`. What the code constrains:
 

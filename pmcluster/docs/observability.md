@@ -321,7 +321,7 @@ hours after that port had started answering `200`. The console then showed one
 node in a five-node cluster, which reads as a broken panel rather than as four
 daemons that opted out at boot.
 
-So the daemon re-probes **every minute** (`internal/cli/telemetry_supervisor.go`)
+So the daemon re-probes **every minute** (`internal/noderuntime/telemetry_supervisor.go`)
 and reconciles the exporter with the answer: start it when something answers,
 leave it alone while the same endpoint answers, shut the old one down and start a
 new one when the address changes (one node never exports under two addresses),

@@ -142,6 +142,14 @@ repo root (this dir)
 
 ### cmd/pmcluster + internal/cli — the CLI surface
 `cobra.Command` tree. Every command registers itself in its file's `init()`.
+The CLI is a SURFACE, not a home for behaviour: the loops `serve` starts live in
+`internal/noderuntime/` (assignment channel, snapshot mirror, volume repair, the
+runner reconcile, the docker and swarm watchers) and the systemd units a node
+installs on itself live in `internal/nodeunits/` (the daemon's unit, the health
+watchdog, the backup agent's six units and the policy file they read).
+`internal/cli/boundary_test.go` fails when a name is defined in more than one of
+those three packages, and when one of the runtime entry points reappears in the
+CLI — so a helper belongs where the guard says, not beside the caller.
 Key commands (all in `internal/cli/`):
 - `cluster up|update|reset|status|down` (`cluster.go`) — bootstrap / content-aware
   self-healing reconcile / Swarm rebuild-from-DB (`--restore` extracts a
@@ -767,9 +775,9 @@ freshness predicate, but the store is already open, so adoption stages the kit i
 `.adopt-*`, closes the handle (`store.Store.Swap`), renames `data.db` last and
 `.encryption_key` in, then reopens — and reloads `credentials.Cipher` when the key
 changed. It runs before `kit.Snapshot` and before the reconcile loop reads
-settings (`internal/cli/leader.go`, `internal/controlplane/adopt.go`). While it
+settings (`internal/noderuntime/leader.go`, `internal/controlplane/adopt.go`). While it
 runs, `adoptionGate` answers 503 + `Retry-After: 1` for every route but
-`/health` (`internal/cli/adoptgate.go`). Alongside the reconcile loop the leader
+`/health` (`internal/noderuntime/adoptgate.go`). Alongside the reconcile loop the leader
 runs `kit.Loop` (5-min change-detection snapshot; 500 KiB config ceiling; keeps
 2). Adoption is never part of a tick.
 
@@ -917,6 +925,8 @@ auto-ban → forward to daemon. The console UI is served by the same process.
 | Task | Where |
 |---|---|
 | Add a CLI command | new file in `internal/cli/`, register in `init()` via `rootCmd.AddCommand()`; add OpenAPI row if it has an API twin |
+| Add a per-node loop | `internal/noderuntime/`, started from `cli/serve.go` — a loop in `internal/cli` fails `boundary_test.go` |
+| Add a systemd unit | `internal/nodeunits/`, with the seams (`HostOS`, `Systemctl`, `WriteUnit`) already stubbed for tests |
 | Add a REST endpoint | the domain package's `http.go` (struct + `Mount`), wire in `server.New` (Deps) + `cli/serve.go` |
 | Add a console page | `internal/ui/controllers/<name>.go`, route in `internal/ui/ui.go` Mount (viewer GET / operator POST), template `views/templates/frag_<name>.html`, nav in `app.html`, pmapi method in `internal/ui/pmapi/` |
 | Add a DB table | new `migrations/00NN_*.sql` + `internal/store/<name>.go` repo + tests |
