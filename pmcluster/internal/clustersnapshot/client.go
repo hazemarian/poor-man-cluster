@@ -1,6 +1,7 @@
 package clustersnapshot
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -86,7 +87,13 @@ func (c *Client) Fetch(ctx context.Context, ifNoneMatch string) (Result, error) 
 	}
 
 	var wire Body
-	if err := json.Unmarshal(body, &wire); err != nil {
+	// UseNumber, not plain Unmarshal: the document's cells are copied straight back
+	// into the store, and a decoded float64 in an INTEGER column is a value SQLite
+	// would store as REAL (or refuse in a STRICT table). json.Number keeps the
+	// integer spelling, and store.mirrorValue converts it with the column's type.
+	dec := json.NewDecoder(bytes.NewReader(body))
+	dec.UseNumber()
+	if err := dec.Decode(&wire); err != nil {
 		return Result{}, fmt.Errorf("decode the snapshot from %s: %w", base, err)
 	}
 	if strings.TrimSpace(wire.Leader) == "" {
@@ -100,6 +107,7 @@ func (c *Client) Fetch(ctx context.Context, ifNoneMatch string) (Result, error) 
 		Snapshot: &store.Snapshot{
 			Version:     wire.Version,
 			GeneratedAt: generatedAt.Unix(),
+			Tables:      document(wire),
 			Settings:    wire.Tables.Settings,
 			Secrets:     wire.Tables.Secrets,
 			Users:       wire.Tables.Users,
@@ -109,6 +117,57 @@ func (c *Client) Fetch(ctx context.Context, ifNoneMatch string) (Result, error) 
 		// header: the next poll sends this back and must match.
 		ETag: ETag(wire.Leader, wire.Version),
 	}, nil
+}
+
+// document is the table set to apply: the full document when the leader sent one, and
+// otherwise the pre-document projection. A leader on an older binary sends only the
+// three arrays, and a follower that ignored them would delete nothing and apply
+// nothing — it would look synced and stay stale forever.
+func document(w Body) map[string]store.TableData {
+	if len(w.Document) > 0 {
+		return w.Document
+	}
+	return map[string]store.TableData{
+		"cluster_settings": settingsTable(w.Tables.Settings),
+		"secrets":          secretsTable(w.Tables.Secrets),
+		"users":            usersTable(w.Tables.Users),
+	}
+}
+
+func settingsTable(rows []store.SnapshotSetting) store.TableData {
+	t := store.TableData{Columns: []string{"key", "value"}, Types: []string{"TEXT", "TEXT"}, Rows: [][]any{}}
+	for _, r := range rows {
+		t.Rows = append(t.Rows, []any{r.Key, r.Value})
+	}
+	return t
+}
+
+func secretsTable(rows []store.SnapshotSecret) store.TableData {
+	t := store.TableData{
+		Columns: []string{"id", "scope", "stack", "name", "payload", "hash", "created_at", "swarm_rev"},
+		Types:   []string{"INTEGER", "TEXT", "TEXT", "TEXT", "BLOB", "TEXT", "INTEGER", "INTEGER"},
+		Rows:    [][]any{},
+	}
+	for _, r := range rows {
+		t.Rows = append(t.Rows, []any{r.ID, r.Scope, r.Stack, r.Name, r.Payload, r.Hash, r.CreatedAt, r.SwarmRev})
+	}
+	return t
+}
+
+func usersTable(rows []store.SnapshotUser) store.TableData {
+	t := store.TableData{
+		Columns: []string{"id", "name", "token_id", "token_hash", "role", "stack", "created_at"},
+		Types:   []string{"INTEGER", "TEXT", "TEXT", "TEXT", "TEXT", "TEXT", "INTEGER"},
+		Rows:    [][]any{},
+	}
+	for _, r := range rows {
+		var tokenID any
+		if r.TokenID != "" {
+			tokenID = r.TokenID
+		}
+		t.Rows = append(t.Rows, []any{r.ID, r.Name, tokenID, r.TokenHash, r.Role, r.Stack, r.CreatedAt})
+	}
+	return t
 }
 
 // apiErrorText pulls the short reason out of an error body, bounded so a proxy page

@@ -15,9 +15,10 @@
 //     never on the public /api router. The caller's identity comes from its node
 //     CERTIFICATE — there is no query parameter and no body field that can name a
 //     node, ask for another node's view, or widen the answer.
-//  2. It answers a PROJECTION, not the database: three tables a mirror carries,
-//     and nothing that describes another machine's containers, an archive it
-//     cannot see, or a log. The store type says what and why.
+//  2. It answers the mirrored DOCUMENT, not one machine's view of the cluster: every
+//     table a follower needs, minus an explicit exclusion set whose reasons are all
+//     "this row describes the node it lives on" (internal/store/mirror_tables.go).
+//     What it never carries is a container list, an archive index or a log.
 //  3. It is cheap when nothing changed. `version` is both the body's version and
 //     the ETag, so an `If-None-Match` naming the current one gets a 304 with no
 //     body — the point of a 60-second poll.
@@ -57,17 +58,28 @@ type Service struct {
 // two cannot drift: a struct rather than a map, so a field cannot be added to the
 // snapshot without appearing here, and the ETag is derived from the same two values
 // the body carries, so a header and a body can never disagree.
+//
+// Two shapes ride it at once, and that is deliberate. `document` is the whole mirrored
+// database (ADR 0005) and is what a current follower applies. `tables` is the
+// pre-document projection and is still populated for a follower running an older
+// binary — such a node ignores unknown keys, so if the three arrays were dropped it
+// would decode them as nil and DELETE every row it mirrors. The two must therefore
+// carry the same rows for those three tables, which is why they are derived from one
+// read. Delete the legacy half once the whole fleet is on a binary that understands
+// `document`.
 type Body struct {
 	Version     int64  `json:"version"`
 	GeneratedAt string `json:"generated_at"`
 	Leader      string `json:"leader"`
-	Tables      Tables `json:"tables"`
+	// Document is every mirrored table, by name, always present (empty ones included).
+	Document map[string]store.TableData `json:"document"`
+	// Tables is the legacy projection. Do not put `document` under a key a legacy
+	// follower decodes as its own struct: an unknown-key decode leaves empty slices,
+	// and empty slices mean "delete every row".
+	Tables Tables `json:"tables"`
 }
 
-// Tables keeps every table ALWAYS present, empty lists included. A follower has to
-// be able to read "this table is empty" and delete every row it mirrors; an absent
-// or null key would be indistinguishable from "the leader did not send that table",
-// and the difference between those two is every deleted row.
+// Tables is the pre-document projection: settings, secrets and users.
 type Tables struct {
 	Settings []store.SnapshotSetting `json:"settings"`
 	Secrets  []store.SnapshotSecret  `json:"secrets"`
@@ -138,6 +150,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Version:     snap.Version,
 		GeneratedAt: time.Unix(snap.GeneratedAt, 0).UTC().Format(time.RFC3339),
 		Leader:      s.Hostname,
+		Document:    snap.Tables,
 		Tables: Tables{
 			Settings: snap.Settings,
 			Secrets:  snap.Secrets,

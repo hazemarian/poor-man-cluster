@@ -47,9 +47,10 @@ func get(t *testing.T, s *Service, role, ifNoneMatch string) *httptest.ResponseR
 }
 
 type decoded struct {
-	Version     int64  `json:"version"`
-	GeneratedAt string `json:"generated_at"`
-	Leader      string `json:"leader"`
+	Version     int64                      `json:"version"`
+	GeneratedAt string                     `json:"generated_at"`
+	Leader      string                     `json:"leader"`
+	Document    map[string]store.TableData `json:"document"`
 	Tables      struct {
 		Settings []store.SnapshotSetting `json:"settings"`
 		Secrets  []store.SnapshotSecret  `json:"secrets"`
@@ -66,11 +67,15 @@ func decode(t *testing.T, rec *httptest.ResponseRecorder) decoded {
 	return d
 }
 
-// TestSnapshotCarriesTheMirrorableTablesAndNothingElse pins the CLOSED set. The
-// endpoint is the one place a node can read cluster state over the network, and the
-// failure mode this test exists for is the tempting one: "send everything", which
-// reproduces the config-blob exposure this migration removes.
-func TestSnapshotCarriesTheMirrorableTablesAndNothingElse(t *testing.T) {
+// TestSnapshotCarriesTheMirroredDocumentAndTheLegacyProjection pins the CLOSED set on
+// both halves of the body. The endpoint is the one place a node can read cluster state
+// over the network, and two failures are guarded here:
+//
+//   - a table that is neither mirrored nor excluded would travel silently, so the
+//     document must be EXACTLY store.MirroredTables();
+//   - the legacy three arrays still ride along for a follower on an older binary, and
+//     they must describe the same rows as the document (one read, two shapes).
+func TestSnapshotCarriesTheMirroredDocumentAndTheLegacyProjection(t *testing.T) {
 	st := newStore(t)
 	ctx := context.Background()
 	if err := st.SetSetting(ctx, "domain", "example.test"); err != nil {
@@ -88,38 +93,35 @@ func TestSnapshotCarriesTheMirrorableTablesAndNothingElse(t *testing.T) {
 		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
 	}
 
-	// Top-level shape: exactly these four keys.
+	// Top-level shape: exactly these five keys. `document` is the whole mirrored
+	// database; `tables` is the pre-document projection kept for older followers.
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(rec.Body.Bytes(), &top); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	for _, key := range []string{"version", "generated_at", "leader", "tables"} {
+	for _, key := range []string{"version", "generated_at", "leader", "document", "tables"} {
 		if _, ok := top[key]; !ok {
 			t.Errorf("body is missing %q: %s", key, rec.Body.String())
 		}
 	}
-	if len(top) != 4 {
-		t.Errorf("body carries %d top-level keys, want 4: %s", len(top), rec.Body.String())
-	}
-
-	// Table set: exactly these three.
-	var tbl map[string]json.RawMessage
-	if err := json.Unmarshal(top["tables"], &tbl); err != nil {
-		t.Fatalf("decode tables: %v", err)
-	}
-	want := map[string]bool{"settings": true, "secrets": true, "users": true}
-	for name := range tbl {
-		if !want[name] {
-			t.Errorf("snapshot carries table %q, which is not in the mirrored set", name)
-		}
-	}
-	for name := range want {
-		if _, ok := tbl[name]; !ok {
-			t.Errorf("snapshot is missing table %q", name)
-		}
+	if len(top) != 5 {
+		t.Errorf("body carries %d top-level keys, want 5: %s", len(top), rec.Body.String())
 	}
 
 	d := decode(t, rec)
+	// Table set: exactly the mirrored tables, none missing, none extra. An excluded
+	// table appearing here is the regression this test exists for.
+	for _, name := range store.MirroredTables() {
+		if _, ok := d.Document[name]; !ok {
+			t.Errorf("the document is missing mirrored table %q", name)
+		}
+	}
+	for name := range d.Document {
+		if !store.IsMirrored(name) {
+			t.Errorf("the document carries table %q, which is not in the mirrored set (and not in the excluded set either — classify it)", name)
+		}
+	}
+
 	if d.Version < 1 {
 		t.Errorf("version = %d, want at least 1", d.Version)
 	}
@@ -143,6 +145,54 @@ func TestSnapshotCarriesTheMirrorableTablesAndNothingElse(t *testing.T) {
 	}
 	if len(d.Tables.Users) != 1 || d.Tables.Users[0].Name != "edge" || d.Tables.Users[0].TokenHash != "argon2-hash" {
 		t.Errorf("users = %+v, want the one row written with its hash", d.Tables.Users)
+	}
+	// The two shapes must agree on the three tables they both carry.
+	if got := d.Document["cluster_settings"].Rows; len(got) != 1 {
+		t.Errorf("document carries %d setting row(s), want 1 — the legacy projection and the document must describe the same rows", len(got))
+	}
+}
+
+// TestDocumentCarriesATableTheOldProjectionNeverDid is the point of the whole change: a
+// table outside the original three (here a stack revision, the largest thing the mirror
+// carries) must cross the wire, because a promoted leader has nothing else to read it
+// from. Before the document this table was absent from the snapshot entirely.
+func TestDocumentCarriesATableTheOldProjectionNeverDid(t *testing.T) {
+	st := newStore(t)
+	ctx := context.Background()
+	rev := &store.StackRevision{
+		StackName:    "web",
+		Revision:     3,
+		SourceYAML:   "source-yaml",
+		RenderedYAML: "rendered-yaml",
+		RenderedHash: "hash",
+	}
+	if err := st.RecordDeploy(ctx, rev, "https://example.test/repo"); err != nil {
+		t.Fatalf("RecordDeploy: %v", err)
+	}
+	if err := st.CreateWebhookSource(ctx, "ci", "", []byte("hmac-ciphertext")); err != nil {
+		t.Fatalf("CreateWebhookSource: %v", err)
+	}
+
+	d := decode(t, get(t, newService(t, st), "manager", ""))
+	for _, name := range []string{"stacks", "stack_revisions", "webhook_sources"} {
+		if got := len(d.Document[name].Rows); got != 1 {
+			t.Errorf("document table %q carries %d row(s), want 1", name, got)
+		}
+	}
+	// The rendered manifest behind a stack pointer is what a promoted leader reconciles
+	// against; without it the stack is dead until someone re-deploys.
+	revs := d.Document["stack_revisions"]
+	rendered := -1
+	for i, col := range revs.Columns {
+		if col == "rendered_yaml" {
+			rendered = i
+		}
+	}
+	if rendered < 0 {
+		t.Fatalf("stack_revisions arrived without a rendered_yaml column: %v", revs.Columns)
+	}
+	if got, _ := revs.Rows[0][rendered].(string); got != "rendered-yaml" {
+		t.Errorf("rendered_yaml = %q, want the stored manifest", got)
 	}
 }
 

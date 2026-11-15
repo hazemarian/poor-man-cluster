@@ -224,37 +224,46 @@ follower manager mirrors so it can answer reads from its own store instead of
 - **The ETag is `"<leader>:<version>"`.** A version alone is meaningless across a
   leadership change, where a different store can answer the same number for different
   content. A client must remember the PAIR it applied.
-- **A projection, to managers only.** `settings`, `secrets` (ciphertext, never plaintext)
-  and `users` — the API-key table — always present as arrays, so an empty table is `[]`
-  and never `null`: a follower has to be able to tell "no rows" from "not sent", and the
-  difference is every deleted row. `last_used_at`, logs, backup history, the CI board
-  cache, metrics and per-node observations are deliberately absent. A worker certificate
-  is refused: it has no store to mirror into and is told what to do through the
-  assignment.
-- **`cluster_version` rides the control-plane kit** with `store.CopyReplace`, because the
-  migrations seed the row: a promoted leader then answers the version its adopted data
-  actually has, rather than restarting at 1.
+- **The whole document, to managers only.** Every table the cluster's control plane lives
+  in — settings, secrets (ciphertext, never plaintext), users, stacks and their revisions,
+  configs and their versions, registries, the GitHub App — always present as arrays, so an
+  empty table is `[]` and never `null`: a follower has to be able to tell "no rows" from "not
+  sent", and the difference is every deleted row. What is absent is listed as data with a
+  reason per table in `internal/store/mirror_tables.go`: `backups`, `node_stats`,
+  `github_runners`, `sync_state` and the two structural tables, all for the same reason — the
+  row describes the node it lives on. A worker certificate is refused: it has no store to
+  mirror into and is told what to do through the assignment.
+- **Adoption copies nothing** (ADR 0005), so the mirror must be complete: a manager promoted
+  to leader has only the store it has been mirroring. `internal/store/mirror_tables.go` holds
+  the classification as data and `TestMirrorTables_EveryTableIsClassified` fails when a
+  migration adds a table that neither list mentions.
 
 **The follower half** (`internal/noderuntime/snapshot_mirror.go`, `Store.ApplySnapshot`) polls
-that route and applies it in ONE transaction — upsert every row, delete every row the
-snapshot does not carry, then record `sync_state`. What the code constrains:
+that route and applies it in ONE transaction — clear and re-insert every table it was sent,
+then record `sync_state`. What the code constrains:
 
 - **It starts before the leadership wait and stops before the leader's store opens.** A
   follower manager blocks in that wait forever (the runner assignment loop has the same
   shape for the same reason), and at promotion this node becomes the writer: the loop is
   closed and joined, not merely cancelled, or two paths apply different answers to the
-  same rows. It also starts *after* the startup control-plane restore, which is only safe
-  because nothing has the store open at that moment.
+  same rows.
 - **The leader never fetches from itself** — it reads its own store, and the tick checks
   leadership every time rather than once at start.
 - **A failed poll changes nothing.** The last applied snapshot stays and the log says the
   poll failed; a mirror that empties on a transport error turns a failover into a blank
   console.
-- **The delete half is the point.** A row missing from the snapshot is deleted here; an
-  upsert-only mirror would keep a setting the leader removed, forever. `users` is replaced
-  rather than upserted (two unique keys, no local authority), legacy `token_id` is written
-  as NULL (it is UNIQUE when set), and `last_used_at` arrives as 0 because a follower has
-  never seen that token used.
+- **The delete half is the point.** A row missing from the snapshot is deleted here, because
+  every table in it is cleared before the leader's rows go back in; an upsert-only mirror
+  would keep a stack the operator deleted, forever. Rows keep the leader's ids — a config
+  version, a stack revision and a users row are all named by id somewhere else — and legacy
+  `token_id` is written as NULL (it is UNIQUE when set).
+- **A table the document does not name is left alone.** That is the rolling-upgrade rule: a
+  leader on an older binary sends three tables, and a follower keeps everything else rather
+  than deleting what nobody sent.
+- **Bytes survive JSON as bytes.** Each table crosses with its column names and declared
+  types, so a BLOB (secret ciphertext, a GitHub private key) is base64 on the wire and
+  `[]byte` in the store, and a number arrives as `json.Number` so an INTEGER column is never
+  handed a float.
 - **Two clocks, never mixed.** `applied_at` and `mirrored_at` are this node's; the
   leader's `generated_at` is provenance. Age is computed from the local stamps — the
   cache-report bug was a report stamped by one clock and aged by another, which read as

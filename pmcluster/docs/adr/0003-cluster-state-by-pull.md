@@ -36,9 +36,11 @@ The rules the code must follow:
    swarm-mTLS listener, behind `swarmtls.Verifier`, and never on the public `/api`
    router. The caller's identity comes from its node certificate — never a query
    parameter, never a body field.
-2. **Answer a projection, not the document.** What THIS node needs, keyed off that
-   certificate. A worker has no store to mirror into and is refused; a manager gets the
-   three mirrored tables and nothing else.
+2. **Answer the document, minus what describes the reader.** What a mirror needs is the
+   cluster's control plane: every table, minus an explicit exclusion set whose members are
+   all node-local (this rule started as "answer a projection, not the document", and ADR
+   0005 reverses it — see the amendment at the end). A worker has no store to mirror into
+   and is refused.
 3. **The version is a content identity, not a clock.** One row, bumped inside the same
    transaction as the write it describes, stamped by the store. It is the ETag together
    with the leader's name, so a follower compares *equality* against the pair it applied.
@@ -128,6 +130,33 @@ content changes; freshness needs a different column.
 
 Still unbuilt: settings still travel in Docker configs (slice 4), and there is no join-time
 key route (slice 5) — so a follower can mirror secret CIPHERTEXT but cannot yet decrypt it.
+
+## Amendment — the mirror is the whole document (ADR 0005)
+
+The projection was a consequence of the plan, not of the problem: slice 4 was to retire the
+config path *while adoption still copied a file*, so a mirror only had to answer reads on a
+follower.
+
+The operator's decision changed that premise: **adoption copies nothing**, because every
+manager already mirrors the state. A manager promoted to leader therefore has exactly one
+source — the store it has been mirroring — and a store holding three tables would promote a
+leader that cannot read its stacks, its configs, its registries or its GitHub App. So:
+
+- The snapshot carries every table (`store.MirroredTables`), always present as an array, and
+  the exclusion set is a list WITH reasons (`store.ExcludedTables`): `backups`, `node_stats`,
+  `github_runners`, `sync_state`, and the two structural tables. The test is one question —
+  does every row describe the machine it lives on? — and
+  `TestMirrorTables_EveryTableIsClassified` fails when a migration adds a table that neither
+  list mentions.
+- The apply clears and re-inserts each table it was sent, ids and all (ids are the identity a
+  rollback and a stack pointer name), and leaves a table it was NOT sent alone, so a follower
+  stays correct while a rolling upgrade has it talking to a leader on the old binary.
+- The three old arrays still ride the body as `tables` beside the new `document`. They are
+  not nostalgia: an older follower ignores unknown keys, so dropping them would leave it with
+  three nil slices, and nil means "delete every row".
+
+Everything else in this record still holds — the certificate identity, the version/ETag pair,
+the 304, the full-snapshot rule, the local clocks.
 
 ## Consequences
 

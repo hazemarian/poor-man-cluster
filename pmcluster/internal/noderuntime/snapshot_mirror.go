@@ -118,13 +118,22 @@ func mirrorTick(ctx context.Context, d mirrorDeps, st *store.Store) error {
 	if err := st.ApplySnapshot(ctx, res.Snapshot, res.Leader, appliedAt); err != nil {
 		return err
 	}
+	// The document is every mirrored table now, so the line reports what actually
+	// arrived rather than the three tables it used to carry: a table silently missing
+	// from an apply is the failure this log is the only witness to.
+	rowsByTable := make(map[string]int, len(res.Snapshot.Tables))
+	total := 0
+	for name, table := range res.Snapshot.Tables {
+		rowsByTable[name] = len(table.Rows)
+		total += len(table.Rows)
+	}
 	d.Log.Info().
 		Str("leader", res.Leader).
 		Int64("version", res.Snapshot.Version).
 		Int64("generated_at", res.Snapshot.GeneratedAt).
-		Int("settings", len(res.Snapshot.Settings)).
-		Int("secrets", len(res.Snapshot.Secrets)).
-		Int("users", len(res.Snapshot.Users)).
+		Int("tables", len(res.Snapshot.Tables)).
+		Int("rows", total).
+		Interface("rows_by_table", rowsByTable).
 		Msg("cluster mirror: applied the leader's snapshot")
 	return nil
 }

@@ -258,11 +258,27 @@ func TestSnapshotReadsTheVersionAndTheRowsTogether(t *testing.T) {
 	if len(snap.Settings) != 3 {
 		t.Fatalf("snapshot carries %d settings, want 3", len(snap.Settings))
 	}
-	// Ordered by key, so the same version always renders the same bytes.
-	wantOrder := []string{"alpha", "mike", "zeta"}
-	for i, key := range wantOrder {
-		if snap.Settings[i].Key != key {
-			t.Errorf("setting[%d] = %q, want %q (snapshot order must be deterministic)", i, snap.Settings[i].Key, key)
+	// The order is the document's order (rowid, the insertion order), and it is what
+	// makes two reads of one version render the same bytes. It is asserted by comparing
+	// against a second read rather than against an alphabetical list: the mirror carries
+	// every table now, so "ordered by key" is one table's old projection rule, not a
+	// property of the document.
+	seen := map[string]bool{}
+	for _, row := range snap.Settings {
+		seen[row.Key] = true
+	}
+	for _, key := range []string{"alpha", "mike", "zeta"} {
+		if !seen[key] {
+			t.Errorf("snapshot is missing setting %q", key)
+		}
+	}
+	again, err := st.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("Snapshot (second read): %v", err)
+	}
+	for i := range snap.Settings {
+		if snap.Settings[i] != again.Settings[i] {
+			t.Fatalf("two reads of version %d disagree at setting[%d]: %+v vs %+v", snap.Version, i, snap.Settings[i], again.Settings[i])
 		}
 	}
 	if snap.Secrets == nil || snap.Users == nil {

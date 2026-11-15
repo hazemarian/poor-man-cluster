@@ -49,31 +49,28 @@ func (s *Store) SyncState(ctx context.Context) (*SyncState, error) {
 }
 
 // ApplySnapshot replaces this node's mirrored tables with snap, in ONE transaction:
-// upsert every row, delete every row the snapshot does not carry, then record the
-// version. leader is the hostname the response named (the ETag this node sends back
-// must name the pair it applied, so an anonymous apply is refused), and appliedAt is
-// this node's clock (unix seconds), stamped onto every row it writes and onto
-// sync_state.
+// the document's tables are cleared and re-inserted, then the version is recorded.
+// leader is the hostname the response named (the ETag this node sends back must name the
+// pair it applied, so an anonymous apply is refused), and appliedAt is this node's clock
+// (unix seconds), stamped onto every row that carries mirrored_at and onto sync_state.
 //
-// A full replacement, not a delta: a row absent from the snapshot is deleted here,
-// which a delta could not express without tombstones. That is also why the endpoint
-// always sends every table as an array — an empty table means "delete them all", and
-// the call must be able to tell that apart from "the leader did not send it".
+// A full replacement, not a delta: a row absent from the snapshot is deleted here, which
+// a delta could not express without tombstones. That is also why the endpoint always
+// sends every table as an array — an empty table means "delete them all", and the call
+// must be able to tell that apart from "the leader did not send it".
 //
-// The upsert/delete split is per table because the natural keys differ:
+// Two shapes are accepted:
 //
-//   - cluster_settings: key is the primary key, so ON CONFLICT(key) is a real upsert.
-//   - secrets: name is UNIQUE, same shape.
-//   - users: a row has TWO unique keys (id and name, the latter also the display
-//     identity), and no local authority — every user row on a follower came from the
-//     leader. Upserting there invites a conflict between the two keys (a name that
-//     arrives under a new id fails on the UNIQUE index and stalls the mirror
-//     forever). So the mirrored users table is REPLACED: delete, then insert the
-//     leader's rows verbatim, ids and all. Same end state, no conflict surface.
+//   - snap.Tables — the whole document (ADR 0005). Every table in it is cleared and
+//     re-inserted with the leader's rows verbatim, ids and all, because a rollback names
+//     a config version by id and a stack names its revision. Tables the document does not
+//     name are left ALONE, which is what keeps a follower current during a rolling
+//     upgrade against a leader that still sends three tables.
+//   - the pre-document projection (Settings, Secrets, Users) — applied per table the way
+//     slice 2 did it, for a caller or a leader that predates the document.
 //
-// last_used_at is deliberately not part of the snapshot, so every mirrored user row
-// carries 0: a follower has never seen that token used, and saying otherwise would
-// be a claim about traffic it did not serve.
+// sync_state stays local: it says which leader's version THIS node applied, and a node
+// that adopted another node's row would be claiming freshness it never observed.
 func (s *Store) ApplySnapshot(ctx context.Context, snap *Snapshot, leader string, appliedAt int64) error {
 	if snap == nil {
 		return errors.New("apply snapshot: nil snapshot")
@@ -90,14 +87,20 @@ func (s *Store) ApplySnapshot(ctx context.Context, snap *Snapshot, leader string
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := applySettings(ctx, tx, snap.Settings, appliedAt); err != nil {
-		return err
-	}
-	if err := applySecrets(ctx, tx, snap.Secrets, appliedAt); err != nil {
-		return err
-	}
-	if err := applyUsers(ctx, tx, snap.Users, appliedAt); err != nil {
-		return err
+	if len(snap.Tables) > 0 {
+		if err := applyMirrorTables(ctx, tx, snap.Tables, appliedAt); err != nil {
+			return err
+		}
+	} else {
+		if err := applySettings(ctx, tx, snap.Settings, appliedAt); err != nil {
+			return err
+		}
+		if err := applySecrets(ctx, tx, snap.Secrets, appliedAt); err != nil {
+			return err
+		}
+		if err := applyUsers(ctx, tx, snap.Users, appliedAt); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO sync_state (id, leader, version, generated_at, applied_at, checked_at)
