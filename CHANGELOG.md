@@ -38,6 +38,223 @@ was inside the temp tree the harness had chosen.
   one descheduling event on a busy runner. The fake gate now counts bursts, so the assertion
   measures the page instead of the machine.
 
+*v0.2.328 – v0.2.344 were tagged without a written entry. These are back-filled from the
+commits each tag carries, so they record what changed and why it had to — not what the
+release was called.*
+
+## v0.2.344 — the record is written by the run, and a volume only lives on a storage node
+
+Four changes from one incident: `nextrum-landing` was pinned to `nxt-sw-2-m`, outside the
+storage set, so no snapshot disk and no agent ever covered it. Its only two archives hold
+two empty directories and their manifests say so — `"files": 0, "bytes": 0, "verified":
+true` — recorded as a success. Rows for the stack: none, ever. Then the node left the swarm
+and the database with it.
+
+- **The agent posts each archived stack to the leader as it finishes** — `POST
+  /internal/api/backups/record` on the node-facing mTLS listener, next to the cluster
+  snapshot and node report: no token, no published port, idempotent on the filename. The
+  row used to be written by discovery, a scan that ran only when somebody opened the
+  backups page and which recorded object-store artifacts without their stack at all
+  (1639 of 1770 rows).
+- **Empty is not a failure.** A stack whose subtree holds no files produces no artifact and
+  is reported (`Empty` plus a run warning) instead of turning the hourly run red. An app
+  that has written nothing yet is not broken.
+- **A volume only lives on a storage node.** Translation refuses to place a service holding
+  a volume outside `storage_nodes`: an explicit DSL placement gets an error naming them, a
+  platform-made pin is moved to a live storage node and made sticky. Platform stacks are
+  exempt — their volumes are infrastructure the platform places deliberately.
+- **Two comments were lying.** `Freeze` is a no-op by design (fsfreeze hung a node for 19
+  minutes at a 4.4% chance per run) yet still logged a "SLOW WINDOW" warning that can never
+  fire, and `Snapshot`'s docstring said read-only while the code mounts read-write so the
+  journal can replay. The backup is crash-consistent, not quiesced.
+
+## v0.2.343 — discovered artifacts keep their stack
+
+The backups table was not a record of what had been backed up. `discoverStore` — the pass
+that indexes the in-cluster object store, i.e. every artifact taken by a node other than
+the leader — wrote rows **without the stack**, where `discoverLocal` passed it: measured
+2026-11-15, 1639 of 1770 rows had an empty `stack_name`. The CLI hid it by deriving the
+stack from the archive filename when printing, so the table looked complete while the
+console's per-stack backup view, restore-by-stack and the coverage check all saw nothing.
+
+- `discoverStore` parses the artifact name and records the stack, as local discovery does.
+- `AttributeUnnamedBackups` names the rows written before the fix, from the same parser —
+  the artifacts always carried `-stack-<app>`, only the row lost it. Control-plane archives
+  belong to no stack and are left alone.
+- An unreachable in-cluster store now logs instead of returning silently; that branch is how
+  a cluster could look fully indexed while nothing from the object store had been recorded.
+
+## v0.2.342 — the unused coverage window is gone
+
+`chore(doctor)`. The window parameter of the coverage check became dead once the check
+stopped inferring staleness from the backups table (v0.2.340, v0.2.341).
+
+## v0.2.341 — coverage asserts only where the data lives
+
+Freshness from the backups table is not trustworthy: `abbas` had a fresh hourly artifact
+and zero rows, `test-erp` had a 07:00 artifact and a row stuck at 5 Nov. Reporting either
+way made the check cry wolf on eleven stacks. What is answerable from the leader — and what
+started this — is structural: a volume-holding stack pinned outside the storage set sits
+where no snapshot disk and no agent can reach it.
+
+## v0.2.340 — coverage asserts structure, not missing rows
+
+The first version reported nine stacks as never archived because their artifacts have
+sidecars on the storage node and no row here. Staleness is now reported only where a
+history exists, and "never archived" is never inferred from a missing row: what the check
+asserts is that a volume-holding stack whose pin is outside the storage set has no snapshot
+disk and no agent.
+
+## v0.2.339 — `doctor`: backup coverage
+
+The agent already refuses to invent an artifact for an empty subtree. What nobody could see
+from the control plane was the case that actually bit: a stack whose data was never in the
+snapshot path at all. `doctor` now fails a volume-holding stack when its data sits on a node
+that is not a storage node, or when no archive is recorded for it inside 48h — which is what
+a stopped agent looks like from here. Platform stacks are exempt.
+
+Deliberately a report and not a relocation: a pin naming a live node that is no longer a
+storage node cannot be fixed by moving the stack, because its data stays where it is — an
+automatic move would trade a missing backup for a silently empty database.
+
+## v0.2.338 — the CLI resolves stale pins too
+
+The daemon was wired to the live node list and the CLI was not, so a hand deploy of a stack
+pinned to a departed node re-applied the same impossible constraint — the exact case a hand
+deploy is usually run to fix. It opens a client only when a pin is being resolved.
+
+## v0.2.337 — a pin to a node that left the swarm is moved, not waited on
+
+`nextrum-landing` sat Pending for 36 hours pinned to `nxt-sw-2-m`, removed from the swarm on
+12 Nov. Nothing any check could see was wrong: the constraint is spelled correctly, the live
+spec matches the render, reconcile reports "no drift", the last apply is green. Swarm's own
+words — "no suitable node (scheduling constraints not satisfied on 4 nodes)" — were the only
+clue, and nobody is told them.
+
+- `stacks.PinResolver` gains `LiveNodes` and rewrites a platform-made pin that names a node
+  no longer in the swarm, choosing a live storage node round-robined by stack name and
+  writing it back with `SetStackPin` — a move that does not stick repeats every pass.
+- An explicit `placement:` in the DSL is the operator's statement about WHERE and is
+  reported, not relocated.
+- An unreadable node list skips the check: the resolver must never invent nodes.
+- `doctor` gains "placement pins", the line that would have caught this on 12 Nov.
+- Also: the console renders the docker-restart switch, asserted through the controller
+  rather than only against the key list and the section map — which is what was missing.
+
+## v0.2.336 — the docker-restart switch moves into Settings
+
+Settings → Advanced carries "Restart docker automatically when it stops answering". The
+daemon had allowlisted `node_docker_restart` and validated it as a flag for a release while
+nothing in the console carried the key, so arming the only mechanism that recovers a node
+whose docker died needed the CLI and knowledge of the key's name.
+
+- the form lists the key, treats it as a flag (a cleared checkbox sends nothing, so it is
+  written as the words the daemon reads) and files it under Advanced;
+- the hint states the price: three failed probes in a row, at most one restart per ten
+  minutes, and every container on that node stops until docker is back;
+- en + ar strings; `changedClusterSections` reads a key the form did not carry at its
+  default, or a newly defaulted flag reports Advanced as changed on every save.
+
+## v0.2.335 — the leader follows its own docker-restart setting
+
+The node policy that arms the docker watchdog is written once at daemon startup, and the
+leader has no runner agent pushing an updated assignment at it — so the one node that OWNS
+`node_docker_restart` was the one node that never applied it. Measured:
+`settings set node_docker_restart=true` reached a follower (4-m) in 50s while the leader
+still held `false` at 12:22, its policy file unchanged since boot at 11:44.
+
+A minute-tick loop now re-reads the decision and rewrites the policy only when it differs,
+on every node that holds it. A store without the row is left alone — the rule that once
+disarmed a node's watchdog during the very dockerd outage it existed for.
+
+## v0.2.334 — a follower repairs its bind paths too
+
+The repair loop read the managed root from an atomic published only after the local store
+opens, and only the leader opens a store — so on every other node the root was `""`,
+`underVolumeRoot()` matched nothing, and the bind half of the repair was silently off on
+exactly the nodes that cannot read `volume_root`. It falls back to
+`PMCLUSTER_VOLUME_ROOT`, then the managed default, and the leader still overrides once its
+store is up.
+
+## v0.2.333 — app data is repaired, reported, and never silently emptied
+
+Three holes around one asset: the directory a stack's data lives in.
+
+- **Repair**, node-local, every 30s: the loop created missing directories but never asked
+  who owned them. It now resolves the user the image runs as — numerically when the image
+  says so, otherwise from the image's own `/etc/passwd` read out of a stopped container, so
+  a distroless image works — and hands the directory and its contents to that user when
+  they belong to someone else. Resolutions are cached per daemon.
+- **Report**: `doctor` fails when a directory under the volume root is owned by root while
+  the service placed there runs as a non-root user — the state that made 4-m unusable for
+  two days.
+- **Refuse**: the loop no longer recreates a data directory that has disappeared on a node
+  that has already run the service. Creating it starts the app on an empty database and
+  serves it as though nothing happened.
+
+No new DSL surface: ownership is derived from the image the stack already names.
+
+## v0.2.332 — adoption keeps file ownership, so apps stay able to write
+
+Node adoption copies `/var/stack/data` onto the snapshot-capable volume as root. `copyTree`
+preserved modes, symlinks and mtimes but not uid/gid, so every app-data directory came out
+root-owned. An app running as a non-root user then cannot create its own SQLite lock, exits
+1, and swarm restarts it every five seconds — and each restart rebuilds the task's network
+sandbox, which emits a few hundred veth queue events through udev. Sustained, that
+saturates the node: on 4-m it ran for two days at load ~15 on four vCPUs with the app as the
+only visible symptom at 0/1.
+
+`copyTree` restores uid/gid (`os.Lchown`) and mtime on every dir, file and symlink, and
+fails loudly on an ownership error rather than silently carrying a copy as root.
+
+## v0.2.331 — swarm node-refresh events are noise too
+
+Filtering exec/health left the pass rate at 59 per three minutes: the remaining driver is
+node update, 11 events in 8 seconds on a four-node cluster. The pass lists and inspects
+nodes itself, so a refresh tells it nothing; membership changes still wake it, and the 60s
+safety tick covers a node going Down.
+
+## v0.2.330 — healthcheck execs no longer wake the reconcile loop
+
+The "duplicated logs" were not duplication. journald on the leader showed the daemon writing
+`sync — no drift, rendered hash unchanged` 100 times in twenty seconds — 18 identical lines
+at one timestamp, every three seconds. The loop subscribes to the Docker event stream with
+no filter, and a healthcheck is three events per probe for every container that has one, so
+each event armed the 2s debounce and the loop ran a full pass — re-rendering all 18 stacks —
+every 3.1s (measured: 57 passes in three minutes). The same stream is what made the OTel
+collector rebuild a filelog receiver about once a second.
+
+- `docker.Events` drops `exec_*`/`health_status` events before they reach the loop; real
+  lifecycle events still wake it, pinned by a table test.
+- the per-stack "no drift" line is Debug.
+- Parseable v2.9.5 → v3.2.6, the hardening release that keeps the `P_*` contract this stack
+  uses.
+
+## v0.2.329 — Parseable v2.9.5
+
+The same log row is returned 22–42× from Parseable: total vs `distinct(body, p_timestamp)`
+is 26610 vs 625 over 15m, 63231 vs 2847 over 2h, and a record POSTed straight into
+Parseable — no collector involved — is stored once, served 11 times, then disappears. That
+is a read-path overlap in the backend, not double collection.
+
+## v0.2.328 — a transform statement that assigns a missing attribute drops the datapoint
+
+The collector bump to 0.165.0 fixed the receiver churn (3,240 starts/hour → 0) and made
+every daemon metric vanish: Parseable held zero `system.*` and zero `pmcluster.*` rows while
+`container.*` flowed normally, and nothing logged an error.
+
+Isolated with a throwaway collector in Parseable's network namespace, posting one OTLP metric
+whose resource carried `service.name` but no `stack.name`:
+
+    with transform/metrics : 200 accepted, 0 export failures, row NEVER lands
+    without it             : 200 accepted, row lands immediately
+
+So the transform discarded the datapoint. One statement per attribute, each guarded by its
+own condition, fixes it; container metrics were untouched because their resource carries
+both. The failure mode is silent by design of the component, which is why it looked like a
+network or backend problem for an hour. `otlphttp/parseable-*` also becomes
+`otlp_http/parseable-*`, since 0.165.0 deprecates the alias with a startup warning.
+
 ## v0.2.327 — collector 0.165.0 (and what the churn actually was)
 
 The filelog receivers are rebuilt ~0.9 times a second, and each rebuild re-emits the tail it
