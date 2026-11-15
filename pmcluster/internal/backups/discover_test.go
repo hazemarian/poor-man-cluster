@@ -138,3 +138,61 @@ func writeArchive(t *testing.T, dir, name string) {
 		t.Fatalf("write %s: %v", name, err)
 	}
 }
+
+// TestDiscoverBackfillsUnnamedRows is the repair for the 1639 nameless rows: an
+// artifact discovered from the in-cluster store used to be recorded without its
+// stack, so per-stack views and restore-by-stack could not see it even though the
+// archive was restorable.
+func TestDiscoverBackfillsUnnamedRows(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	dir := t.TempDir()
+
+	// A row written the old way: filename and path, no stack.
+	key := "backup-node1-2026-09-21T03-00-00-stack-shop.tar.gz"
+	if err := st.RecordDiscoveredBackupStatus(ctx, key, key, 1790000000, StatusSucceeded, ""); err != nil {
+		t.Fatalf("seed row: %v", err)
+	}
+	svc := &Local{Store: st, ArchiveDir: dir}
+	if _, err := svc.List(ctx, 50); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	backups, err := st.ListBackups(ctx, 50)
+	if err != nil {
+		t.Fatalf("ListBackups: %v", err)
+	}
+	var found bool
+	for _, b := range backups {
+		if b.ArchivePaths != key {
+			continue
+		}
+		found = true
+		if !b.StackName.Valid || b.StackName.String != "shop" {
+			t.Fatalf("row still unnamed: %+v", b.StackName)
+		}
+	}
+	if !found {
+		t.Fatal("seeded row disappeared")
+	}
+}
+
+// A control-plane archive names no stack and must stay that way: it is restored
+// through a different path and must not appear under an application.
+func TestDiscoverBackfillLeavesControlPlaneRowsAlone(t *testing.T) {
+	ctx := context.Background()
+	st := newTestStore(t)
+	key := "pmcluster-ctlplane-node1-2026-09-21T03-00-00.tar.gz"
+	if err := st.RecordDiscoveredBackupStatus(ctx, key, key, 1790000000, StatusSucceeded, ""); err != nil {
+		t.Fatalf("seed row: %v", err)
+	}
+	svc := &Local{Store: st, ArchiveDir: t.TempDir()}
+	if _, err := svc.List(ctx, 50); err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	backups, _ := st.ListBackups(ctx, 50)
+	for _, b := range backups {
+		if b.ArchivePaths == key && b.StackName.Valid {
+			t.Fatalf("control-plane row was attributed to %q", b.StackName.String)
+		}
+	}
+}

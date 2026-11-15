@@ -221,3 +221,49 @@ func (s *Store) ListBackupsForStack(ctx context.Context, stackName string) ([]*B
 	}
 	return out, rows.Err()
 }
+
+// AttributeUnnamedBackups names rows recorded before discovery attributed
+// artifacts to their stack, and returns how many it named.
+//
+// The artifacts themselves name the stack (backup-<node>-<ts>-stack-<app>.tar.gz);
+// only the row lost it. Without the backfill the console's per-stack view and
+// restore-by-stack stay blind to history that is perfectly restorable — measured
+// on 2026-11-15: 1639 of 1770 rows carried no stack at all.
+func (s *Store) AttributeUnnamedBackups(ctx context.Context, name func(filename string) string) (int, error) {
+	rows, err := s.conn().QueryContext(ctx,
+		`SELECT id, filename FROM backups
+		  WHERE stack_name IS NULL OR stack_name = ''`)
+	if err != nil {
+		return 0, fmt.Errorf("list unnamed backups: %w", err)
+	}
+	type ref struct {
+		id  int64
+		key string
+	}
+	var todo []ref
+	for rows.Next() {
+		var r ref
+		if serr := rows.Scan(&r.id, &r.key); serr != nil {
+			_ = rows.Close()
+			return 0, fmt.Errorf("scan unnamed backup: %w", serr)
+		}
+		todo = append(todo, r)
+	}
+	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	named := 0
+	for _, r := range todo {
+		stack := name(r.key)
+		if stack == "" {
+			continue
+		}
+		if _, uerr := s.conn().ExecContext(ctx,
+			`UPDATE backups SET stack_name = ? WHERE id = ?`, stack, r.id); uerr != nil {
+			return named, fmt.Errorf("name backup %d: %w", r.id, uerr)
+		}
+		named++
+	}
+	return named, nil
+}
