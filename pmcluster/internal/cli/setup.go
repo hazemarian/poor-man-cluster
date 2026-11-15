@@ -305,13 +305,13 @@ func runSetup(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
+	if err := requireInitialised(cfg, "run `pmcluster init` first"); err != nil {
+		return err
 	}
 
-	st, err := store.Open(cfg.DBPath())
+	st, err := openExistingStore(cfg.DBPath())
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
 	defer func() { _ = st.Close() }()
 

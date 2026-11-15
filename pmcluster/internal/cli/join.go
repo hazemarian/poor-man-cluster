@@ -20,7 +20,6 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // nodeNameRe mirrors the manifest placement-pin validation: a Docker node
@@ -604,7 +603,9 @@ func prepareJoinState(ctx context.Context, out io.Writer, cfg *config.Config) er
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("stat db path: %w", err)
 		}
-		st, err := store.Open(cfg.DBPath())
+		// The other bootstrap exception: a joining node has no local database until
+		// this line, and it never mirrors a manager's (a worker has none).
+		st, err := openOrCreateStore(cfg)
 		if err != nil {
 			return fmt.Errorf("open store (migrations): %w", err)
 		}

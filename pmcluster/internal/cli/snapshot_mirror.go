@@ -22,8 +22,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"fmt"
-	"os"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -155,28 +153,6 @@ func snapshotMirrorFor(cfg *config.Config, dc runtime.Client, hostname string, l
 		},
 		Log: componentLog,
 	}
-}
-
-// openExistingStore opens the control-plane database ONLY if it already exists. The
-// mirror loop and the CLI's mirror-labelled reads both use it, so neither can seed the
-// database the other refuses to create.
-//
-// store.Open creates a database (and its directory) when the file is missing, and on a
-// follower that would be a lie: an empty data.db is exactly what serve.go's "data
-// directory not initialised — run pmcluster init" guard exists to catch, and creating it
-// here would make the guard pass on a node that was never initialised. A follower
-// mid-join simply retries next interval.
-//
-// A failure is never fatal for the same reason: the loop retries every interval, which is
-// also the answer to the one race this can lose — the migration runner is not
-// concurrency-safe across processes (0001 is a plain CREATE TABLE), so an opener that
-// starts while another process is mid-migration fails once and then finds the work
-// already done.
-func openExistingStore(dbPath string) (*store.Store, error) {
-	if _, err := os.Stat(dbPath); err != nil {
-		return nil, fmt.Errorf("no control-plane database at %s yet: %w", dbPath, err)
-	}
-	return store.Open(dbPath)
 }
 
 // startSnapshotMirror runs the poll loop until stop is called (or ctx ends), and

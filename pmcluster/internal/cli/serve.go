@@ -237,7 +237,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// never delay serving; best effort because a node that cannot provision must
 		// still run.
 		go func() {
-			st, err := store.Open(cfg.DBPath())
+			st, err := openExistingStore(cfg.DBPath())
 			if err != nil {
 				return // no store on this node: not a manager, cannot hold storage either
 			}
@@ -428,12 +428,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		log.Warn().Err(err).Msg("ensure local storage roots")
 	}
 
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` (or `pmcluster join` on a joining node)", cfg.DataDir)
+	if err := requireInitialised(cfg, "run `pmcluster init` (or `pmcluster join` on a joining node)"); err != nil {
+		return err
 	}
-	st, err := store.Open(cfg.DBPath())
+	st, err := openExistingStore(cfg.DBPath())
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
 	defer func() { _ = st.Close() }()
 	// Now the per-node loops can see the settings they were started without.
@@ -868,7 +868,7 @@ func ensureLocalStorageRoots(ctx context.Context, cfg *config.Config, log zerolo
 	// otherwise create an empty data.db and defeat the "run pmcluster init"
 	// guard below.
 	if _, statErr := os.Stat(cfg.DBPath()); statErr == nil {
-		if st, err := store.Open(cfg.DBPath()); err == nil {
+		if st, err := openExistingStore(cfg.DBPath()); err == nil {
 			root = localVolumeRoot(ctx, st)
 			_ = st.Close()
 		}
@@ -983,7 +983,7 @@ func applyNodePolicyOnce(ctx context.Context, cfg *config.Config, log zerolog.Lo
 	if _, statErr := os.Stat(cfg.DBPath()); statErr != nil {
 		return false
 	}
-	st, err := store.Open(cfg.DBPath())
+	st, err := openExistingStore(cfg.DBPath())
 	if err != nil {
 		return false
 	}

@@ -161,8 +161,8 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
+	if err := requireInitialised(cfg, "run `pmcluster init` first"); err != nil {
+		return err
 	}
 
 	log, logCloser, err := logger.New(logger.Options{
@@ -177,9 +177,9 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 	log.Info().Msg("cluster update: starting")
 	defer log.Info().Msg("cluster update: finished")
 
-	st, err := store.Open(cfg.DBPath())
+	st, err := openExistingStore(cfg.DBPath())
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
 	defer func() { _ = st.Close() }()
 
@@ -316,8 +316,8 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "✔ restored store backup %s into %s\n", restore, cfg.DataDir)
 	}
 
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first (or pass --restore <archive>)", cfg.DataDir)
+	if err := requireInitialised(cfg, "run `pmcluster init` first (or pass --restore <archive>)"); err != nil {
+		return err
 	}
 
 	log, logCloser, err := logger.New(logger.Options{
@@ -332,9 +332,9 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 	log.Info().Msg("cluster reset: starting")
 	defer log.Info().Msg("cluster reset: finished")
 
-	st, err := store.Open(cfg.DBPath())
+	st, err := openExistingStore(cfg.DBPath())
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
 	defer func() { _ = st.Close() }()
 
@@ -425,8 +425,8 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
+	if err := requireInitialised(cfg, "run `pmcluster init` first"); err != nil {
+		return err
 	}
 
 	in := cluster.UpInput{}
@@ -498,9 +498,9 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 	log.Info().Msg("cluster up: starting")
 	defer log.Info().Msg("cluster up: finished")
 
-	st, err := store.Open(cfg.DBPath())
+	st, err := openExistingStore(cfg.DBPath())
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
 	defer func() { _ = st.Close() }()
 

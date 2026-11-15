@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"text/tabwriter"
 	"time"
 
@@ -12,7 +11,6 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -199,19 +197,3 @@ func runCredsRotate(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// openStore loads config, refuses if the data dir isn't initialised, and
-// opens the store. Returns config too — callers need EncryptionKeyPath().
-func openStore() (*store.Store, *config.Config, error) {
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("load config: %w", err)
-	}
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return nil, nil, fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
-	}
-	st, err := store.Open(cfg.DBPath())
-	if err != nil {
-		return nil, nil, fmt.Errorf("open store: %w", err)
-	}
-	return st, cfg, nil
-}
