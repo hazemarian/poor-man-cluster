@@ -152,6 +152,16 @@ func (e PlatformExporter) Run(ctx context.Context) (PlatformExportResult, error)
 	if err := PutS3Object(ctx, cfg, res.Name, res.Path); err != nil {
 		return out, fmt.Errorf("upload %s offsite: %w", res.Name, err)
 	}
+	// A 2xx is not persistence. The store once answered 200 for every hourly artifact and a
+	// third of them were gone two days later, so the one artifact whose absence you would
+	// discover during a disaster checks that it is really there before saying it shipped.
+	ok, err := S3ObjectExists(ctx, cfg, res.Name)
+	if err != nil {
+		return out, fmt.Errorf("confirm %s in the offsite bucket: %w", res.Name, err)
+	}
+	if !ok {
+		return out, fmt.Errorf("the offsite bucket accepted %s but does not have it: the restore point did not survive the upload", res.Name)
+	}
 	out.OffsiteKey = res.Name
 	return out, nil
 }
