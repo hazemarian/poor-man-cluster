@@ -123,6 +123,15 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	telemetryCtl := noderuntime.NewTelemetrySupervisor(log, hostname, func() {
 	})
 	go telemetryCtl.Loop(cmd.Context(), cfg.OTLPEndpoint, func(ctx context.Context) bool {
+		// dc is nil when the client could not be built (a malformed DOCKER_HOST is
+		// enough) — the daemon deliberately keeps serving without it: /api/cluster/info
+		// is disabled and everything else carries on. This closure ran anyway and
+		// dereferenced the nil interface, so a daemon that had degraded correctly
+		// PANICKED on the supervisor's first probe. The two neighbouring closures
+		// already guard; this one is the one that was missed.
+		if dc == nil {
+			return false
+		}
 		leader, _, err := noderuntime.IsSwarmLeader(ctx, dc, hostname)
 		return err == nil && leader
 	}, func(ctx context.Context) string {

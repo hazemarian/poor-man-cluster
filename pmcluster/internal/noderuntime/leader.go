@@ -106,6 +106,13 @@ func IsSwarmWorker(ctx context.Context, dc runtime.Client) bool {
 // current Swarm leader, per the Raft-elected leader flag on the node list.
 // found is false when the hostname is not present in the node list.
 func IsSwarmLeader(ctx context.Context, dc runtime.Client, host string) (leader, found bool, err error) {
+	// A nil client is a caller error, not a leaderless node, and it must not be a
+	// nil-pointer panic: this is called from a background probe, where a panic takes
+	// the whole daemon with it and the only visible symptom is /health never
+	// answering. Answer the question with an error the caller can log instead.
+	if dc == nil {
+		return false, false, errors.New("no docker client")
+	}
 	nodes, err := dc.NodeList(ctx)
 	if err != nil {
 		return false, false, err

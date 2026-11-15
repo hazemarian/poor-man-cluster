@@ -989,6 +989,14 @@ func TestRenderOTelCollectorConfig_PerContainerFilelog(t *testing.T) {
 		// them the observer's churn multiplies every line by the number of instances
 		// alive when it was written (measured: one line stored 72 times).
 		"storage: file_storage",
+		// The extension REFUSES to start when its directory is missing, and the
+		// stack's named volume is not the only way this config is run: the filelog
+		// e2e starts the collector with the rendered config and no volume, and the
+		// container died with "directory must exist: stat
+		// /var/lib/otelcol/file_storage". The test then spent 190 s polling a table
+		// that was never created, reporting "no filelog attribution" — a config that
+		// needs somewhere else to have made the directory is the bug.
+		"create_directory: true",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("rendered config missing %q", want)

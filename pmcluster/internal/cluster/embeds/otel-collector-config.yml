@@ -31,8 +31,17 @@ extensions:
   # same file, and every line they all see is ingested once per instance. Measured on the
   # live leader before this existed: one daemon line stored 72 times, and 3,240 receiver
   # starts an hour. The extension is what makes a recreation resume instead of re-tail.
+  # The offsets live in the named volume the stack mounts here. create_directory
+  # because the extension REFUSES to start when the directory is missing
+  # ("directory must exist: stat /var/lib/otelcol/file_storage"), and a config that
+  # only works when something else created the path fails the moment it is run any
+  # other way — which is exactly what happened to the filelog e2e, which starts the
+  # collector without the stack's volume and got 190 s of
+  # "table 'datafusion.public.pmcluster-logs' not found" with the real reason buried
+  # in the container log.
   file_storage:
     directory: /var/lib/otelcol/file_storage
+    create_directory: true
     timeout: 1s
 
   # Discovers every running container and its Swarm labels. The receiver_creator

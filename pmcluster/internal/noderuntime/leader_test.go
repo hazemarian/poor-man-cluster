@@ -167,6 +167,27 @@ func TestWatchSwarmLeadership_LeaderToNotLeaderReEmits(t *testing.T) {
 	}
 }
 
+// TestIsSwarmLeader_NilClientIsAnErrorNotAPanic is the regression for a daemon
+// that died in CI: the telemetry supervisor's leader probe ran with a nil docker
+// client (a malformed DOCKER_HOST was enough) and IsSwarmLeader dereferenced it, so
+// a daemon that had deliberately degraded to "serve without docker" panicked on the
+// first tick and /health never answered. A background panic is not a diagnosable
+// failure — it is a missing health endpoint and a 15s waitHealthy timeout.
+func TestIsSwarmLeader_NilClientIsAnErrorNotAPanic(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("IsSwarmLeader panicked on a nil client: %v", r)
+		}
+	}()
+	leader, found, err := IsSwarmLeader(context.Background(), nil, "node-1")
+	if err == nil {
+		t.Fatal("a nil docker client must be reported as an error, not as a leaderless node")
+	}
+	if leader || found {
+		t.Fatalf("nil client answered leader=%v found=%v, want false/false", leader, found)
+	}
+}
+
 func TestIsSwarmLeader_NodeNotFound(t *testing.T) {
 	f := &leaderFake{nodes: []runtime.Node{
 		{ID: "n1", Hostname: "mgr1", IsLeader: true},
