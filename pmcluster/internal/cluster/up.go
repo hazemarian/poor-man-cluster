@@ -110,7 +110,12 @@ var ensureStorageDirs = func(volumeRoot string) error {
 // logical volume made `cluster update` refuse on a node whose data volume was
 // perfectly healthy.
 func verifyVolumeRootMounted(volumeRoot string) error {
-	if _, err := os.Stat(storage.DefaultImagePath); err != nil {
+	// The image path follows the configured root (storage.ImagePathFor): a cluster that keeps
+	// its volumes under a custom tree provisions a sibling image, and checking the stock path
+	// would find nothing there — reporting "never provisioned" for a node whose volume is
+	// provisioned but unmounted, which is the exact case this guard exists to catch.
+	imagePath := storage.ImagePathFor(volumeRoot)
+	if _, err := os.Stat(imagePath); err != nil {
 		return nil // never provisioned: nothing to be inconsistent with
 	}
 	st, derr := storage.Detect(context.Background(), storage.Spec{VolumeRoot: volumeRoot})
@@ -118,7 +123,7 @@ func verifyVolumeRootMounted(volumeRoot string) error {
 		return fmt.Errorf("inspect app-data volume: %w", derr)
 	}
 	if !st.Provisioned() {
-		return fmt.Errorf("%s is not mounted even though %s exists — deploying now would run every stack on an empty directory; run `pmcluster storage status` and fix the mount first", volumeRoot, storage.DefaultImagePath)
+		return fmt.Errorf("%s is not mounted even though %s exists — deploying now would run every stack on an empty directory; run `pmcluster storage status` and fix the mount first", volumeRoot, imagePath)
 	}
 	return nil
 }

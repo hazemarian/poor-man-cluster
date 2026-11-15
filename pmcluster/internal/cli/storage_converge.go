@@ -37,10 +37,24 @@ var (
 // its default. One definition, used by the command and by the convergence, so a
 // UI-driven promotion provisions exactly what a CLI run would have provisioned.
 func defaultStorageSpec() storage.Spec {
+	return storageSpecForVolumeRoot(storage.DefaultVolumeRoot)
+}
+
+// storageSpecForVolumeRoot builds the spec for a CONFIGURED volume root.
+//
+// The convergence used the stock root regardless of the setting, so a cluster that runs its
+// volumes under a temp or operator-chosen tree still provisioned /var/lib/pmcluster — root
+// owned, and unreachable for a non-root host. The failure is not cosmetic: a storage node
+// that cannot provision "CANNOT host stateful stacks yet", and the deploy that follows exits 1
+// (measured in swarm-e2e the moment the leader started being designated automatically).
+func storageSpecForVolumeRoot(volumeRoot string) storage.Spec {
+	if volumeRoot == "" {
+		volumeRoot = storage.DefaultVolumeRoot
+	}
 	return storage.Spec{
 		Mode:       storage.ModeLoop,
-		VolumeRoot: storage.DefaultVolumeRoot,
-		ImagePath:  storage.DefaultImagePath,
+		VolumeRoot: volumeRoot,
+		ImagePath:  storage.ImagePathFor(volumeRoot),
 		VG:         storage.DefaultVG,
 		LV:         storage.DefaultLV,
 		UnitDir:    storage.DefaultUnitDir,
@@ -56,7 +70,7 @@ func convergeStorage(ctx context.Context, st *store.Store, hostname string, logf
 		return
 	}
 
-	spec := defaultStorageSpec()
+	spec := storageSpecForVolumeRoot(st.SettingDefault(ctx, cluster.SettingVolumeRoot(), ""))
 	observed, err := storageDetectFn(ctx, spec)
 	if err != nil {
 		logf("storage: this node is a storage node but %s could not be inspected: %v", spec.VolumeRoot, err)

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -29,6 +30,21 @@ import (
 // appears in unit files, in `findmnt` output an operator reads under pressure,
 // and in the backup agent's --vg flag, and a name that changes per node makes
 // all three harder to compare across a fleet.
+// ImagePathFor returns the loop-mode backing file for a configured volume root.
+//
+// The stock root keeps the stock image (a different tree by design: /var/lib holds the image,
+// /var/stack holds what it mounts). Any OTHER root gets a sibling image, because the stock
+// path is root-owned and unreachable from a non-root or temp-rooted host — and a storage node
+// whose provisioning fails cannot host stateful stacks, so every deploy after it fails too.
+// This is the same derivation NodeStatHostDirFor uses, for the same reason.
+func ImagePathFor(volumeRoot string) string {
+	root := strings.TrimSpace(volumeRoot)
+	if root == "" || filepath.Clean(root) == filepath.Clean(DefaultVolumeRoot) {
+		return DefaultImagePath
+	}
+	return filepath.Join(filepath.Dir(filepath.Clean(root)), "app-data.img")
+}
+
 const (
 	DefaultVolumeRoot = "/var/stack/data"
 	DefaultBackupRoot = "/var/stack/backup"

@@ -494,3 +494,21 @@ func TestGrowDoesNotAcquireTheLockTwice(t *testing.T) {
 		t.Fatal("Grow deadlocked on its own lock")
 	}
 }
+
+// TestImagePathFor pins the derivation: the stock volume root keeps the stock image, and any
+// other root gets a sibling — because /var/lib/pmcluster is root-owned and a temp-rooted or
+// non-root host cannot create it. A storage node that cannot provision "CANNOT host stateful
+// stacks yet", and the next deploy exits 1 (measured in swarm-e2e).
+func TestImagePathFor(t *testing.T) {
+	for _, tc := range []struct{ root, want string }{
+		{DefaultVolumeRoot, DefaultImagePath},
+		{"", DefaultImagePath},
+		{"/var/stack/data/", DefaultImagePath},
+		{"/tmp/TestX/001/stack", "/tmp/TestX/001/app-data.img"},
+		{"/srv/data", "/srv/app-data.img"},
+	} {
+		if got := ImagePathFor(tc.root); got != tc.want {
+			t.Errorf("ImagePathFor(%q) = %q, want %q", tc.root, got, tc.want)
+		}
+	}
+}
