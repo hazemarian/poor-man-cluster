@@ -2,6 +2,7 @@ package stacks
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
@@ -261,4 +262,98 @@ func TestSetStorageNodes_LiveRefresh(t *testing.T) {
 
 	// Nil receiver is safe.
 	(*PinResolver)(nil).SetStorageNodes([]string{"x"})
+}
+
+// TestResolvePlacementMovesAPinOffADeadNode is nextrum-landing's shape: the pin
+// is spelled correctly, the node it names left the swarm days ago, and the
+// rendered hash never changes again — so the service waits forever while every
+// check reports "no drift".
+func TestResolvePlacementMovesAPinOffADeadNode(t *testing.T) {
+	var pinned, relocated string
+	r := &PinResolver{
+		StorageNodes: []string{"nxt-sw-1-m", "nxt-sw-4-m"},
+		StackPin:     func(context.Context, string) (string, error) { return "nxt-sw-2-m", nil },
+		SetStackPin: func(_ context.Context, _, node string) error {
+			pinned = node
+			return nil
+		},
+		LiveNodes: func(context.Context) (map[string]bool, error) {
+			// nxt-sw-2-m is absent: it was removed from the swarm.
+			return map[string]bool{"nxt-sw-1-m": true, "nxt-sw-4-m": true}, nil
+		},
+		OnRelocate: func(_ context.Context, _, from, to string) { relocated = from + "->" + to },
+	}
+	ir := testIR("shop", st("web", []string{"data"}, ""))
+	if err := r.ResolvePlacement(context.Background(), "shop", ir); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	got := ir.Services[0].Placement
+	if got != "nxt-sw-1-m" && got != "nxt-sw-4-m" {
+		t.Fatalf("placement = %q, want a live storage node", got)
+	}
+	if pinned != got {
+		t.Errorf("sticky pin = %q, want %q — otherwise the next pass re-resolves and the move does not stick", pinned, got)
+	}
+	if relocated != "nxt-sw-2-m->"+got {
+		t.Errorf("relocation not reported: %q", relocated)
+	}
+}
+
+// A live pin is left exactly where the operator put it.
+func TestResolvePlacementKeepsALivePin(t *testing.T) {
+	calls := 0
+	r := &PinResolver{
+		StorageNodes: []string{"nxt-sw-1-m", "nxt-sw-4-m"},
+		StackPin:     func(context.Context, string) (string, error) { return "nxt-sw-4-m", nil },
+		SetStackPin:  func(context.Context, string, string) error { calls++; return nil },
+		LiveNodes:    func(context.Context) (map[string]bool, error) { return map[string]bool{"nxt-sw-4-m": true}, nil },
+	}
+	ir := testIR("shop", st("web", []string{"data"}, ""))
+	if err := r.ResolvePlacement(context.Background(), "shop", ir); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if ir.Services[0].Placement != "nxt-sw-4-m" || calls != 0 {
+		t.Fatalf("placement = %q, re-pins = %d; want the pin left alone", ir.Services[0].Placement, calls)
+	}
+}
+
+// An explicit placement in the DSL is the operator's promise about WHERE. When
+// the node is gone the platform says so (doctor) instead of quietly relocating
+// the workload to somewhere it was excluded from.
+func TestResolvePlacementNeverRewritesAnExplicitPlacement(t *testing.T) {
+	r := &PinResolver{
+		StorageNodes: []string{"nxt-sw-1-m"},
+		StackPin:     func(context.Context, string) (string, error) { return "", nil },
+		SetStackPin:  func(context.Context, string, string) error { return nil },
+		LiveNodes:    func(context.Context) (map[string]bool, error) { return map[string]bool{"nxt-sw-1-m": true}, nil },
+	}
+	ir := testIR("shop", st("web", []string{"data"}, "nxt-sw-2-m"))
+	if err := r.ResolvePlacement(context.Background(), "shop", ir); err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if ir.Services[0].Placement != "nxt-sw-2-m" {
+		t.Fatalf("explicit placement rewritten to %q", ir.Services[0].Placement)
+	}
+}
+
+// An unknown node list skips the check: the resolver must never invent nodes.
+func TestResolvePlacementSkipsTheCheckWithoutALiveNodeList(t *testing.T) {
+	for _, live := range []func(context.Context) (map[string]bool, error){
+		nil,
+		func(context.Context) (map[string]bool, error) { return nil, errors.New("not a swarm manager") },
+	} {
+		r := &PinResolver{
+			StorageNodes: []string{"nxt-sw-1-m"},
+			StackPin:     func(context.Context, string) (string, error) { return "nxt-sw-2-m", nil },
+			SetStackPin:  func(context.Context, string, string) error { return nil },
+			LiveNodes:    live,
+		}
+		ir := testIR("shop", st("web", []string{"data"}, ""))
+		if err := r.ResolvePlacement(context.Background(), "shop", ir); err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if ir.Services[0].Placement != "nxt-sw-2-m" {
+			t.Fatalf("pin moved without a live node list: %q", ir.Services[0].Placement)
+		}
+	}
 }

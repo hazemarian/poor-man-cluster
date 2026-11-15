@@ -470,7 +470,27 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}, SetStackPin: func(ctx context.Context, stackName, node string) error {
 		return st.SetSetting(ctx, stacks.StackPinKey(stackName), node)
-	}}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3, AppLogLevel: cluster.LoadAppLogLevel(cmd.Context(), st),
+	},
+		// A pin outlives the node it names: the constraint stays spelled
+		// correctly, the rendered hash stops changing, and the service waits
+		// forever on a host that left the swarm. The resolver asks what is live so
+		// it can move a platform-made pin off a node that is gone.
+		LiveNodes: func(ctx context.Context) (map[string]bool, error) {
+			nodes, err := dc.NodeList(ctx)
+			if err != nil {
+				return nil, err
+			}
+			live := make(map[string]bool, len(nodes))
+			for _, n := range nodes {
+				live[n.Hostname] = true
+			}
+			return live, nil
+		},
+		OnRelocate: func(ctx context.Context, stackName, from, to string) {
+			log.Warn().Str("stack", stackName).Str("from", from).Str("to", to).
+				Msg("placement — pinned to a node that is not in the swarm; moved to a live storage node (the data did not follow: restore it from the stack's archive)")
+		},
+	}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3, AppLogLevel: cluster.LoadAppLogLevel(cmd.Context(), st),
 		// Pulls authenticate with the stored read-only PAT, applied once per
 		// deploy — before `--with-registry-auth` freezes it into each spec.
 		// The App covers clone/build/broker; it is not a pull credential.

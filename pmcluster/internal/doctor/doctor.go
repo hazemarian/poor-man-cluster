@@ -110,6 +110,7 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 	add(checkCollectorPlacement(ctx, in))
 	add(checkCollectorExposure(ctx, in))
 	add(checkNodeLabels(ctx, in))
+	add(checkPlacementPins(ctx, in))
 	add(checkSkew(ctx, in))
 	add(checkKit(ctx, in))
 	add(checkSecrets(ctx, in))
@@ -711,4 +712,78 @@ func first(s []string) string {
 		return ""
 	}
 	return s[0]
+}
+
+// checkPlacementPins answers "is any service pinned to a node that is not in the
+// swarm?".
+//
+// A pin outlives the node it names. The constraint stays spelled correctly, the
+// live spec matches the render, reconcile reports "no drift", last apply is
+// green — and the service sits Pending indefinitely. Measured on
+// nextrum-landing (2026-11-15): pinned to nxt-sw-2-m, which had left the swarm
+// on 12 Nov, Pending for 36 hours with nothing anywhere saying so.
+//
+// The platform can only fix the pins it made itself (stacks/placement.go
+// rewrites those at translation). A pin written in the DSL is the operator's
+// decision about where a workload may run, so it is reported, never relaxed.
+func checkPlacementPins(ctx context.Context, in Input) Check {
+	const name = "placement pins"
+	if in.Docker == nil {
+		return Check{Name: name, Status: StatusSkip, Detail: "no runtime handle in this report"}
+	}
+	nodes, err := in.Docker.NodeList(ctx)
+	if err != nil {
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "could not read the node list (" + err.Error() + "), so pins were not checked"}
+	}
+	live := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		live[n.Hostname] = true
+	}
+	svcs, err := in.Docker.ServiceList(ctx)
+	if err != nil {
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "could not list services (" + err.Error() + "), so pins were not checked"}
+	}
+	var stale []string
+	checked := 0
+	for _, svc := range svcs {
+		ins, ierr := in.Docker.ServiceInspect(ctx, svc.ID)
+		if ierr != nil {
+			continue
+		}
+		for _, c := range ins.Constraints {
+			host, ok := hostnameConstraint(c)
+			if !ok {
+				continue
+			}
+			checked++
+			if !live[host] {
+				stale = append(stale, svc.Name+" -> "+host)
+			}
+		}
+	}
+	switch {
+	case len(stale) > 0:
+		return Check{Name: name, Status: StatusFail,
+			Detail: "pinned to a node that is not in the swarm — the task can never be scheduled: " +
+				strings.Join(stale, "; ") + ". A platform-made pin is moved automatically on the next translation; a pin written in the DSL is yours to change"}
+	case checked == 0:
+		return Check{Name: name, Status: StatusOK, Detail: "no service is pinned to a specific node"}
+	}
+	return Check{Name: name, Status: StatusOK,
+		Detail: fmt.Sprintf("every hostname pin (%d) names a node that is in the swarm", checked)}
+}
+
+// hostnameConstraint pulls the host out of `node.hostname == x`. Label and role
+// constraints are deliberately not pins to a node that can disappear.
+func hostnameConstraint(c string) (string, bool) {
+	parts := strings.SplitN(c, "==", 2)
+	if len(parts) != 2 {
+		return "", false
+	}
+	if strings.TrimSpace(parts[0]) != "node.hostname" {
+		return "", false
+	}
+	return strings.TrimSpace(parts[1]), true
 }

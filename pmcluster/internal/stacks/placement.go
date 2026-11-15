@@ -45,6 +45,21 @@ type PinResolver struct {
 	// deploy re-runs the round-robin (the behaviour that let a change to
 	// storage_nodes relocate stacks onto nodes holding none of their data).
 	SetStackPin func(ctx context.Context, stackName, node string) error
+
+	// LiveNodes answers "which hostnames are in the swarm right now". Nil means
+	// unknown, and no pin is questioned — the check must never invent nodes.
+	//
+	// This exists because a pin outlives the node it names. A stack pinned to a
+	// host that left the swarm is not misconfigured in any way the rendered hash
+	// can see: the constraint is spelled correctly, the spec matches, reconcile
+	// reports "no drift", and the service sits Pending forever. Measured on
+	// nextrum-landing (2026-11-15): pinned to nxt-sw-2-m, which had been gone for
+	// three days, Pending the whole time while every check stayed green.
+	LiveNodes func(ctx context.Context) (map[string]bool, error)
+
+	// OnRelocate is told about a pin rewritten away from a node that is gone, so
+	// the operator learns it from the log rather than from a Pending task.
+	OnRelocate func(ctx context.Context, stackName, from, to string)
 }
 
 // SetStorageNodes live-replaces the storage-node list. Called by the daemon's
@@ -82,14 +97,56 @@ func (r *PinResolver) ResolvePlacement(ctx context.Context, appName string, ir *
 	if err != nil {
 		return fmt.Errorf("resolve pin for %s: %w", appName, err)
 	}
+	// Which nodes still exist. A failure here is not fatal: an unknown node list
+	// means the check is skipped, never that a pin is rewritten to a guess.
+	var live map[string]bool
+	if r.LiveNodes != nil {
+		if m, lerr := r.LiveNodes(ctx); lerr == nil {
+			live = m
+		}
+	}
 	for i := range ir.Services {
 		s := &ir.Services[i]
 		if s.Placement != "" || len(s.Volumes) == 0 {
 			continue // explicit placement, or nothing to pin
 		}
-		ir.Services[i].Placement = r.resolve(appName, pin)
+		node := r.resolve(appName, pin)
+		if node != "" && live != nil && !live[node] {
+			// The pin names a node that is not in the swarm. Rewrite it only when
+			// the platform made it — an explicit placement in the DSL is the
+			// operator's promise about WHERE, and silently relocating it would put
+			// the workload exactly where it was excluded.
+			if to := r.liveNode(appName, live); to != "" {
+				if r.SetStackPin != nil {
+					if serr := r.SetStackPin(ctx, appName, to); serr != nil {
+						return fmt.Errorf("re-pin %s from %s to %s: %w", appName, node, to, serr)
+					}
+				}
+				if r.OnRelocate != nil {
+					r.OnRelocate(ctx, appName, node, to)
+				}
+				node = to
+			}
+		}
+		ir.Services[i].Placement = node
 	}
 	return nil
+}
+
+// liveNode picks a replacement for a pin that names a node no longer in the
+// swarm: a live storage node (round-robined by stack name, so the choice is
+// stable across passes), or any live node when no storage node is configured.
+func (r *PinResolver) liveNode(appName string, live map[string]bool) string {
+	var candidates []string
+	for _, n := range r.storageNodes() {
+		if live[n] {
+			candidates = append(candidates, n)
+		}
+	}
+	if len(candidates) > 0 {
+		return roundRobinNode(appName, candidates)
+	}
+	return ""
 }
 
 // resolve returns the winning node for a stateful service with no explicit
