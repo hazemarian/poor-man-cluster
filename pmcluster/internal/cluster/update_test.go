@@ -831,12 +831,17 @@ func TestUpdate_TLSNotACMEWithoutCertPathsErrorsIfNoACMEEmail(t *testing.T) {
 	}
 }
 
-// TestRemoveEmptyPlatformStack is the wafaa case, in miniature: a retired platform
-// service left a stack rendering an empty document. Skipping the empty render is right
-// when nothing is live and wrong when something is — the service then survives the very
-// update that removed it from the template (`control-plane-backup` stayed 1/1).
-func TestRemoveEmptyPlatformStack(t *testing.T) {
+// TestPruneEmptyPlatformStack is the wafaa case, in miniature: a retired platform service left
+// a stack rendering an empty document. Skipping the empty render is right when nothing is live
+// and wrong when something is — the service then survives the very update that removed it from
+// the template (`control-plane-backup` stayed 1/1).
+//
+// It PRUNES and does not remove the stack: `docker stack rm` takes the stack's network with it
+// asynchronously, and a render that becomes non-empty again a moment later then fails to deploy
+// with "network backup_net not found" (measured on the shared swarm).
+func TestPruneEmptyPlatformStack(t *testing.T) {
 	ctx := context.Background()
+	emptyCompose := []byte("services: {}\n")
 	newDeps := func(liveServices ...string) (*fakeDocker, *recordingDeployer) {
 		f := newFakeDocker()
 		for _, name := range liveServices {
@@ -845,18 +850,21 @@ func TestRemoveEmptyPlatformStack(t *testing.T) {
 		return f, &recordingDeployer{}
 	}
 
-	t.Run("removes the stack when services are still live", func(t *testing.T) {
+	t.Run("prunes when services are still live", func(t *testing.T) {
 		f, dep := newDeps("backup_control-plane-backup")
 		var out bytes.Buffer
-		removed, err := removeEmptyPlatformStack(ctx, &out, f, dep, StackBackup)
+		pruned, err := pruneEmptyPlatformStack(ctx, &out, f, dep, StackBackup, emptyCompose)
 		if err != nil {
-			t.Fatalf("removeEmptyPlatformStack: %v", err)
+			t.Fatalf("pruneEmptyPlatformStack: %v", err)
 		}
-		if !removed {
-			t.Fatal("a stack rendering nothing over a live service must be removed")
+		if !pruned {
+			t.Fatal("a stack rendering nothing over a live service must be pruned")
 		}
-		if len(dep.removedStacks) != 1 || dep.removedStacks[0] != "backup" {
-			t.Fatalf("removedStacks = %v, want [backup]", dep.removedStacks)
+		if len(dep.prunedStacks) != 1 || dep.prunedStacks[0] != "backup" {
+			t.Fatalf("prunedStacks = %v, want [backup]", dep.prunedStacks)
+		}
+		if len(dep.removedStacks) != 0 {
+			t.Errorf("removedStacks = %v: removing the stack takes its network with it", dep.removedStacks)
 		}
 		if !strings.Contains(out.String(), "renders no services") {
 			t.Errorf("the operator was not told what happened: %q", out.String())
@@ -865,21 +873,21 @@ func TestRemoveEmptyPlatformStack(t *testing.T) {
 
 	t.Run("a genuinely empty stack is a no-op", func(t *testing.T) {
 		f, dep := newDeps()
-		removed, err := removeEmptyPlatformStack(ctx, io.Discard, f, dep, StackBackup)
+		pruned, err := pruneEmptyPlatformStack(ctx, io.Discard, f, dep, StackBackup, emptyCompose)
 		if err != nil {
-			t.Fatalf("removeEmptyPlatformStack: %v", err)
+			t.Fatalf("pruneEmptyPlatformStack: %v", err)
 		}
-		if removed || len(dep.removedStacks) != 0 {
-			t.Fatalf("removed %v for a stack that was never live", dep.removedStacks)
+		if pruned || len(dep.prunedStacks) != 0 {
+			t.Fatalf("pruned %v for a stack that was never live", dep.prunedStacks)
 		}
 	})
 
-	t.Run("a docker error removes nothing", func(t *testing.T) {
+	t.Run("a docker error prunes nothing", func(t *testing.T) {
 		f, dep := newDeps("backup_control-plane-backup")
 		f.serviceListErr = errors.New("docker is unhappy")
-		removed, err := removeEmptyPlatformStack(ctx, io.Discard, f, dep, StackBackup)
-		if err != nil || removed || len(dep.removedStacks) != 0 {
-			t.Fatalf("a flaky ServiceList must leave the stack alone, got removed=%v err=%v", removed, err)
+		pruned, err := pruneEmptyPlatformStack(ctx, io.Discard, f, dep, StackBackup, emptyCompose)
+		if err != nil || pruned || len(dep.prunedStacks) != 0 {
+			t.Fatalf("a flaky ServiceList must leave the stack alone, got pruned=%v err=%v", pruned, err)
 		}
 	})
 }

@@ -660,11 +660,11 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 				// `control-plane-backup` was deleted from the template and the service
 				// stayed 1/1 across the update that removed it. The render is the
 				// statement of what should exist, so an empty one removes the stack.
-				removed, err := removeEmptyPlatformStack(ctx, out, deps.Docker, deps.Deployer, s)
+				pruned, err := pruneEmptyPlatformStack(ctx, out, deps.Docker, deps.Deployer, s, fresh)
 				if err != nil {
 					return err
 				}
-				if removed {
+				if pruned {
 					res.StacksDeployed = append(res.StacksDeployed, string(s))
 				}
 				continue
@@ -1304,22 +1304,27 @@ func checkBackupOffsite(ctx context.Context, deps UpdateDeps) error {
 // composeServices returns the service keys of a rendered compose document. It is
 // deliberately forgiving: the only question it answers is "is there anything to
 // deploy", and a parse problem is LoadComposeFile's job to report.
-// removeEmptyPlatformStack reconciles "this platform stack renders no services" against
-// what swarm actually runs: nothing live is a no-op, anything live is a stack that just
-// lost its last service and must go.
+// pruneEmptyPlatformStack reconciles "this platform stack renders no services" against what
+// swarm actually runs: nothing live is a no-op, anything live is a stack that just lost its
+// last service and must stop running it.
 //
-// The case it exists for, measured on wafaa: `control-plane-backup` was deleted from the
-// backup template, the stack now renders an empty document, and the reconcile's
-// empty-render rule skipped it — so the retired service stayed 1/1 across the very update
-// that removed it. A platform stack that empties is a removal, not a no-op.
-func removeEmptyPlatformStack(ctx context.Context, out io.Writer, dc runtime.Client, dep runtime.StackDeployer, s stackName) (bool, error) {
+// The case it exists for, measured on wafaa: `control-plane-backup` was deleted from the backup
+// template, the stack now renders an empty document, and the reconcile's empty-render rule
+// skipped it — so the retired service stayed 1/1 across the very update that removed it.
+//
+// It PRUNES rather than removing the stack, and that distinction was learned the hard way:
+// `docker stack rm` tears the stack's network down asynchronously, so when the render legitimately
+// becomes non-empty again a moment later (a fresh `cluster up` sets its store, the backup stack
+// gets a service) the deploy fails with `network backup_net not found`. Pruning removes exactly
+// the services the render dropped and leaves the network where a later deploy expects it.
+func pruneEmptyPlatformStack(ctx context.Context, out io.Writer, dc runtime.Client, dep runtime.StackDeployer, s stackName, fresh []byte) (bool, error) {
 	live := liveStackServices(ctx, dc, string(s))
 	if live == 0 {
 		return false, nil
 	}
-	fmt.Fprintf(out, "  ▶ %s renders no services, %d still live → removing the stack\n", string(s), live)
-	if err := dep.RemoveStack(ctx, string(s)); err != nil {
-		return false, fmt.Errorf("remove empty platform stack %s: %w", s, err)
+	fmt.Fprintf(out, "  ▶ %s renders no services, %d still live → pruning them\n", string(s), live)
+	if err := dep.PruneStack(ctx, string(s), fresh); err != nil {
+		return false, fmt.Errorf("prune empty platform stack %s: %w", s, err)
 	}
 	return true, nil
 }
