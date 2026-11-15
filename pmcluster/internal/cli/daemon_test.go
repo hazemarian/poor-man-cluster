@@ -2,11 +2,12 @@ package cli
 
 import (
 	"bytes"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 )
 
 // fakeSystemctl writes the received arguments into a log file so tests can

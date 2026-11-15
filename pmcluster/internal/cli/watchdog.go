@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"fmt"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 
 	"github.com/spf13/cobra"
 

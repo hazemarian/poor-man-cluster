@@ -2,8 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"io"
 	"os"
 	"os/exec"
@@ -11,6 +9,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 )
 
 // The control plane's own memory boundaries.

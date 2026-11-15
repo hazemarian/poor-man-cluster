@@ -186,8 +186,8 @@ func TestAPIBindAddresses(t *testing.T) {
 		{"", true, "127.0.0.1:9090"},
 	}
 	for _, tc := range cases {
-		if got := ApiAddr(tc.configured, tc.worker); got != tc.want {
-			t.Errorf("ApiAddr(%q, worker=%t) = %q, want %q", tc.configured, tc.worker, got, tc.want)
+		if got := APIAddr(tc.configured, tc.worker); got != tc.want {
+			t.Errorf("APIAddr(%q, worker=%t) = %q, want %q", tc.configured, tc.worker, got, tc.want)
 		}
 	}
 }

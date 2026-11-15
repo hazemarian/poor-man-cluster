@@ -280,7 +280,7 @@ func IsStandby(worker, leader, found bool, err error) bool {
 	return err == nil && found && !leader
 }
 
-// ApiAddr is the address this node's daemon API binds.
+// APIAddr is the address this node's daemon API binds.
 //
 // The leader binds what the operator configured (0.0.0.0:9090 by default: the
 // edge container reaches it through host.docker.internal, and Traefik routes
@@ -288,7 +288,7 @@ func IsStandby(worker, leader, found bool, err error) bool {
 // standing by, so its API answers nothing cluster-wide, but the runner loop needs
 // a local surface and doctor/`/health` must work on every node. Exposing that off
 // the host would turn every worker into a second, stale API — never.
-func ApiAddr(configured string, worker bool) string {
+func APIAddr(configured string, worker bool) string {
 	host, port, err := net.SplitHostPort(strings.TrimSpace(configured))
 	if err != nil {
 		// A bare port ("9090") or a value we cannot parse: keep the port if we

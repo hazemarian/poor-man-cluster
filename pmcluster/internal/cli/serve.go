@@ -312,7 +312,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// instead of failing because the daemon never bound at all. The leader
 		// keeps binding what the operator configured (all interfaces), below.
 		if standby {
-			localAPIStop, localAPIDone = noderuntime.StartWorkerAPI(cmd.Context(), dc, noderuntime.ApiAddr(cfg.ListenAddr, true), log)
+			localAPIStop, localAPIDone = noderuntime.StartWorkerAPI(cmd.Context(), dc, noderuntime.APIAddr(cfg.ListenAddr, true), log)
 			defer func() {
 				if localAPIStop != nil {
 					localAPIStop()
@@ -745,9 +745,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	// The leader binds what the operator configured (all interfaces by default:
 	// the edge container reaches it through host.docker.internal, and Traefik
-	// routes pmcluster.<domain> here). noderuntime.ApiAddr states the rule in one place and
+	// routes pmcluster.<domain> here). noderuntime.APIAddr states the rule in one place and
 	// leaves the value untouched for a non-worker.
-	listenAddr := noderuntime.ApiAddr(cfg.ListenAddr, false)
+	listenAddr := noderuntime.APIAddr(cfg.ListenAddr, false)
 	log.Info().Str("addr", listenAddr).Msg("pmcluster serve listening")
 	if err := server.Run(ctx, listenAddr, handler); err != nil {
 		return fmt.Errorf("server: %w", err)

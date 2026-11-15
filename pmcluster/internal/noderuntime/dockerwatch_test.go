@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 )
 
 // dockerHarness is one node's docker check: a probe the test controls, a unit state

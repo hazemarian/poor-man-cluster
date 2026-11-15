@@ -2,12 +2,13 @@ package cli
 
 import (
 	"bytes"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 )
 
 // TestMemoryLimitsFor_TheArithmetic is the whole point of the boundary: the

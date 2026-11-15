@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 )
 
 // watchdogHarness is one node's worth of watchdog state: a fake clock, a fake
