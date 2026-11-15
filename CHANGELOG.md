@@ -3,40 +3,72 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
-## Unreleased — the platform creates paths under the root you chose
+## v0.2.345 — cluster state travels by pull, and nothing of the platform lives in a config
 
-**Why:** `cluster up` had one host path that ignored the volume root. It created the
-storage roots and the backup root wherever the operator pointed them, then reached out to
-a hardcoded `/var/stack/nodestat` for the collector's node-stats bind source. On the CI
-runner that is `mkdir /var/stack/nodestat: permission denied`, and it failed `cluster up`
-plus ten downstream real-swarm tests for eight commits — while every other path in the run
-was inside the temp tree the harness had chosen.
+**Why:** the control plane left Docker configs last release series (ADR 0003, slices 1–3) but
+the config path was still the one that mattered: settings and the cipher key were written
+into Raft-replicated objects every five minutes, the control plane had its own backup
+archive, and promotion restored `data.db` from a config because a follower's store held only
+three tables. This release removes that channel, and everything that existed to work around
+it. Two things fell out of doing it — a real deploy bug and a sturdier upgrade.
 
-- **`NodeStatHostDirFor(root)` derives the directory as a SIBLING of the volume root.**
-  `/var/stack/data` still yields `/var/stack/nodestat`, so no deployed cluster moves and no
-  collected history is abandoned; any other root now yields a path the same user who owns
-  the tree can create. `cluster up` passes `in.VolumeRoot`, `cluster update` passes
-  `render.VolumeRoot` — the value the collector's mount was rendered from, so the mkdir and
-  the bind source cannot disagree.
-- **The same class of defect in the test suite:** `newUpDeps` and `seedUpdateState` stubbed
-  the host-mutating seams without restoring them, so every later test in the package ran
-  against a no-op `ensurePlatformHostDirs`. Two update tests were passing only because of
-  that leak and now stub explicitly. The package is green under `-shuffle=on -count=2`.
-- **`store.Open`'s never-create rule has one owner.** Six call sites hand-rolled the same
-  `os.Stat` guard with four different sentences; `requireInitialised`, `openExistingStore`,
-  `openOrCreateStore` (the two bootstrap exceptions, named) and `store.OpenExisting` now say
-  which one they mean. One behaviour change: an open racing a deleted file refuses instead
-  of recreating an empty database.
-- **The node's loops and its host units leave `internal/cli`** (`noderuntime`, `nodeunits`;
-  ADR 0004). `internal/cli` was 105 files / 26,461 lines of three different jobs — commands,
-  the loops `serve` starts, and the systemd units a node installs on itself. Now 45 files /
-  19,307, and its `-race` suite went 79.8s → 15.4s because the loops took their long waits
-  with them. `internal/cli/boundary_test.go` fails when a name is defined in two of the
-  three packages, or when a runtime entry point reappears in the CLI.
-- **Concurrency tests count waves, not milliseconds.** `TestStacksIndexReads...` failed CI
-  with "took 168ms for two 80ms reads: looks sequential" while both reads were in flight —
-  one descheduling event on a busy runner. The fake gate now counts bursts, so the assertion
-  measures the page instead of the machine.
+- **The mirror is the document (ADR 0005).** The mTLS snapshot carries every table except an
+  explicit, commented exclusion list, so a follower's store is a replica rather than a
+  projection. `store.MirroredTables`/`ExcludedTables` classify each table, and a test fails
+  when a migration adds one neither list mentions — `cluster_version` was the first it caught,
+  and it had been crossing in the kit and nowhere else.
+- **Promotion copies nothing.** `Store.Swap`, the staging directory and the rename of
+  `data.db`/`.encryption_key` are gone. On leadership gain the node stops and joins the mirror
+  loop, reads `sync_state`, and serves the store it already has. A **stale** mirror is served
+  and logged (the operator's call: five minutes of age is acceptable, and silence about it is
+  not); an **empty store with no snapshot ever applied** refuses leadership, because that is
+  nothing to serve rather than something old.
+- **`pmcluster_state_<ts>` is never written again**, and with it the control-plane BACKUP
+  path: the `control-plane-backup` service, its otel filter, `NewestControlPlaneArchive`,
+  `RestoreControlPlane`, `PruneControlPlaneArchives`. Backups are service volumes only.
+- **The drill was repointed, not deleted.** `cluster kit verify` → `cluster mirror verify`
+  (`clustersnapshot.Verify`), which answers on a follower because asking only the leader is
+  asking the node that needs no proof; `doctor`'s line follows, and the weekly systemd drill
+  runs the new command.
+- **`internal/controlplane` is reduced to the encryption key**, which still travels in its own
+  config until the join route lands (next release): `PublishKey`/`KeyLoop`, content-compared
+  and pruned to two, and `PublishKey` is the only config the platform now writes.
+
+Two more, found on the way:
+
+- **A platform stack that empties is removed, not skipped.** Deploying this to wafaa showed
+  `control-plane-backup` still 1/1 after the update that deleted it: `backup` now renders an
+  empty document, and the reconcile treated "renders no services" as nothing-to-do. The
+  render is the statement of what should exist, so an empty one over a live stack calls
+  `RemoveStack` — and a docker error leaves it alone, the same conservatism the drift check
+  applies.
+- **The upgrade order comes from the nodes, not an address match.** `hack/upgrade-nodes.sh`
+  sorted a public-IP list against the swarm's INTERNAL addresses, matched nothing, and
+  silently kept whatever order was typed — the one case where "leader last" was void printed
+  nothing at all. It now asks each host `docker node inspect self` over the ssh channel it
+  already uses, refuses to start when no host claims leadership, and takes `--assume-order`
+  when you mean it.
+
+And the earlier work in this release series:
+
+- **The node-stat bind source follows the volume root.** It was the literal
+  `/var/stack/nodestat` while every other platform path honoured the configured root, so
+  `cluster up` on a non-root host reached out of its temp tree and died on
+  `mkdir /var/stack/nodestat: permission denied` — eleven failing real-swarm tests, for eight
+  commits. `NodeStatHostDirFor` keeps `/var/stack/nodestat` for the stock root and derives a
+  creatable sibling otherwise.
+- **The node's loops and host units left `internal/cli`** (`noderuntime`, `nodeunits`; ADR
+  0004). 105 files/26,461 lines of three jobs became 45 files/19,307, and the `-race` suite
+  went 79.8s → 15.4s because the multi-minute loops took their waits with them.
+  `boundary_test.go` fails when a name is defined twice across the three packages or a runtime
+  entry point reappears in the CLI.
+- **One owner for the never-create rule.** `store.Open` creates a database, which is right in
+  `init` and `join` and wrong everywhere else; six hand-rolled `os.Stat` guards with four
+  different sentences are now `requireInitialised`, `openExistingStore`,
+  `openOrCreateStore` (the two bootstrap exceptions, named) and `store.OpenExisting`.
+- **Concurrency is counted in waves, not measured with a clock.** Four elapsed-time budgets
+  became assertions about the code: two 80ms reads took 168ms on a loaded CI runner with both
+  in flight, and the fake now counts bursts, parks the apply, and marks when a phase finishes.
 
 *v0.2.328 – v0.2.344 were tagged without a written entry. These are back-filled from the
 commits each tag carries, so they record what changed and why it had to — not what the
