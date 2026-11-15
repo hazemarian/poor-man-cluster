@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -88,15 +89,17 @@ func TestNoControlPlaneConfigE2E(t *testing.T) {
 	})
 	waitHealthy(t, addr, daemon, 20*time.Second)
 
-	// (1) The key is a FILE, minted once at init, 32 bytes of AES-GCM material.
-	keyBytes, err := os.ReadFile(homeDir + "/.encryption_key")
+	// (1) The key is a FILE, minted once at init, 32 bytes of AES-GCM material, in the data
+	// dir the daemon was given ($HOME/.pmcluster — the same place /root/.pmcluster holds it
+	// on a real host), not next to HOME itself.
+	keyBytes, err := os.ReadFile(filepath.Join(homeDir, ".pmcluster", ".encryption_key"))
 	if err != nil {
 		t.Fatalf("no key file at <data dir>/.encryption_key: %v", err)
 	}
 	if len(keyBytes) != 32 {
 		t.Fatalf("key file is %d bytes, want 32", len(keyBytes))
 	}
-	t.Logf("key file present: %d bytes at <data dir>/.encryption_key", len(keyBytes))
+	t.Logf("key file present: %d bytes at $HOME/.pmcluster/.encryption_key", len(keyBytes))
 
 	// (2)+(3) No config of either kind may appear, across several seconds of a running
 	// daemon. One assertion at t=0 would pass on a daemon that simply had not got there yet.
