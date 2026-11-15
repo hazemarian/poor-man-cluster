@@ -524,6 +524,39 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		DeployService: deploySvc,
 		Cipher:        cipher,
 		Backups:       backupSvc,
+		// The console's "export the control plane" button: the same exporter the CLI drives,
+		// refusing on a follower instead of exporting a mirror (ADR 0007).
+		PlatformExport: func(ctx context.Context) (backups.PlatformExportResult, error) {
+			return backups.PlatformExporter{
+				DataDir:  cfg.DataDir,
+				OutDir:   envOr("PMCLUSTER_BACKUP_DIR", backups.DefaultArchiveDir),
+				Hostname: hostname,
+				Version:  buildinfo.Version,
+				Commit:   buildinfo.Commit,
+				Leader: func(ctx context.Context) (bool, error) {
+					if dc == nil {
+						return true, nil // no docker: a standalone node is its own leader
+					}
+					leader, found, err := noderuntime.IsSwarmLeader(ctx, dc, hostname)
+					if err != nil {
+						return false, err
+					}
+					if !found {
+						return true, nil
+					}
+					return leader, nil
+				},
+				S3: func(ctx context.Context) backups.S3Config {
+					return backups.S3Config{
+						Endpoint:  st.SettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""),
+						Bucket:    st.SettingDefault(ctx, cluster.SettingBackupS3Bucket(), ""),
+						AccessKey: st.SettingDefault(ctx, cluster.SettingBackupS3AccessKey(), ""),
+						SecretKey: st.SettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""),
+						Region:    st.SettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"),
+					}
+				},
+			}.Run(ctx)
+		},
 		Settings: func() *settings.Local {
 			l := settings.NewLocal(st)
 			l.ApplyLogLevel = logger.SetLevel

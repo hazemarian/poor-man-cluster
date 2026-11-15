@@ -6,7 +6,7 @@
 {{else if .Error}}
 {{template "banner" (dict "Tone" "bad" "Icon" "alert" "Title" (T "err.upstream") "Raw" .Error)}}
 {{else if .MsgKey}}
-{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (T .MsgKey))}}
+{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (T .MsgKey) "Body" .MsgA)}}
 {{end}}
 
 {{if .AtRisk}}
@@ -184,6 +184,9 @@
 
 {{define "backups_actions"}}<form hx-post="/web/backups" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.trigger_confirm"}}" hx-disabled-elt="find [type='submit']">
       <button type="submit" class="btn btn-primary btn-sm" hx-disabled-elt="this" data-tip="{{T "backups.action_now"}}">{{icon "play"}}<span>{{T "backups.action_now"}}</span></button>
+    </form>
+    <form hx-post="/web/backups/platform" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{T "backups.platform_confirm"}}" hx-disabled-elt="find [type='submit']">
+      <button type="submit" class="btn btn-sm" hx-disabled-elt="this" data-tip="{{T "backups.platform_tip"}}">{{icon "shield"}}<span>{{T "backups.platform_action"}}</span></button>
     </form>{{end}}
 
 {{define "backups_action2"}}<a class="btn btn-sm" href="/web/stacks" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-tip="{{T "nav.stacks"}}">{{icon "stacks"}}<span>{{T "nav.stacks"}}</span></a>{{end}}

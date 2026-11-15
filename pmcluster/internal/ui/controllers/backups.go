@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -194,6 +195,9 @@ type backupBrowseData struct {
 	MsgKey   string
 	MsgCount int64
 	MsgPath  string
+	// MsgA carries a value into a message that names it (the offsite object key of a
+	// platform export), so the operator can see WHAT was written without opening the bucket.
+	MsgA string
 }
 
 // Browse renders the archive listing of one run.
@@ -426,6 +430,31 @@ func (c Backups) coverage(g *gin.Context, d *backupsData) {
 }
 
 // Create triggers a backup and re-renders the page.
+// Platform is the manual control-plane export (ADR 0007): the leader's data.db AND its
+// encryption key, written once and shipped to the offsite bucket.
+//
+// It is not `backup create`. That runs the volume agent for stack data; this exports the
+// platform's own state, which no schedule produces any more precisely because a scheduled
+// object moving platform state around is what ADR 0005/0006 removed.
+func (c Backups) Platform(g *gin.Context) {
+	d := backupsData{Limit: backupsListLimit, WarnDays: backupStaleDays}
+	res, err := c.API.ExportPlatform(g.Request.Context())
+	switch {
+	case err != nil:
+		d.ErrKey, d.ErrRaw = humanErr("err.backup_platform", err)
+	case res.OffsiteKey == "":
+		// It wrote the archive but had nowhere to send it. Saying "done" here would be the
+		// exact failure the artifact exists to prevent: a restore point on the host it is
+		// meant to survive.
+		d.ErrKey, d.ErrRaw = humanErr("err.backup_platform_offsite", fmt.Errorf("no offsite destination configured"))
+	default:
+		d.MsgKey = "backups.msg_platform"
+		d.MsgA = res.OffsiteKey
+	}
+	c.load(g, &d)
+	c.Views.Fragment(g, "backups", d)
+}
+
 func (c Backups) Create(g *gin.Context) {
 	d := backupsData{Limit: backupsListLimit, WarnDays: backupStaleDays}
 	if _, _, configured := c.loadParams(g.Request.Context()); !configured {

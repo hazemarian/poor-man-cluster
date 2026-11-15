@@ -311,6 +311,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	op.GET("/stacks/:name/secrets/reveal/:secret_name", scc.RevealSecret)
 
 	op.POST("/backups", bk.Create)
+	op.POST("/backups/platform", bk.Platform)
 	op.POST("/backups/:id/restore", bk.Restore)
 
 	op.POST("/deploy", dp.Submit)

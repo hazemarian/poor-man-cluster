@@ -5,6 +5,23 @@ docs under `docs/` describe the platform as built.
 
 ## Unreleased — the key config is gone; the key is a file
 
+**And the control plane has a restore point again, on a button.** Deleting the
+control-plane backup service (v0.2.345) was right for the mechanism and left a hole in
+disaster recovery: nothing archived the platform's own state, so losing every manager at
+once had no restore path. The answer is not a schedule — an autonomous object moving
+platform state is what ADR 0005/0006 removed — but a manual export: the leader's `data.db`
+**and `.encryption_key`** in one archive, offsite, triggered from the console
+(**Export platform**, on the backups page) or `pmcluster backup platform`.
+
+- The archive carries a `MANIFEST.json` (host, build, created-at, per-member sha256 and mode,
+  hashed as the bytes are written) and refuses to be written at all if the key or the database
+  is missing — a partial export reads as complete.
+- Leader-only: a follower answers 409, because a follower's `data.db` is a mirror and an
+  export of it has no provenance. The refusal names the leader.
+- Including the key is a deliberate departure from ADR 0003's split (ADR 0007): without it the
+  archive cannot decrypt a single stored secret, so it would look like a backup and restore
+  into a cluster nobody can read.
+
 **Why:** v0.2.345 deleted the data kit but left one Docker config behind — the encryption key,
 republished on promotion and every five minutes, pruned to two — to move 32 bytes that are
 minted once and never rotate. It was the last thing contradicting "no platform secrets in

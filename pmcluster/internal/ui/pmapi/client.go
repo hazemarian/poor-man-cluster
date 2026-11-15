@@ -293,6 +293,24 @@ func (c *Client) CreateBackup(ctx context.Context) (*Backup, error) {
 	return &b, err
 }
 
+// PlatformExportResult is the daemon's answer to a manual control-plane export.
+type PlatformExportResult struct {
+	Name       string `json:"name"`
+	Archive    string `json:"archive"`
+	Bytes      int64  `json:"bytes"`
+	OffsiteKey string `json:"offsite_key"`
+}
+
+// ExportPlatform asks the daemon to export the control plane offsite. The daemon refuses
+// (409) on a node that is not the swarm leader, and that reason reaches the page verbatim.
+func (c *Client) ExportPlatform(ctx context.Context) (*PlatformExportResult, error) {
+	var res PlatformExportResult
+	if err := c.do(ctx, http.MethodPost, "/backups/platform", nil, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
 // ListStackBackups returns backups for a specific stack.
 func (c *Client) ListStackBackups(ctx context.Context, name string) ([]Backup, error) {
 	var body struct {
