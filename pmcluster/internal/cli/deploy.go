@@ -158,7 +158,33 @@ func openDeploySvc(cmd *cobra.Command) (*stacks.Service, *store.Store, func(), e
 		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}, SetStackPin: func(ctx context.Context, stackName, node string) error {
 		return st.SetSetting(ctx, stacks.StackPinKey(stackName), node)
-	}}, Stdout: cmd.OutOrStdout(), Log: log, BackupDir: cluster.BackupRootDir(), AppLogLevel: cluster.LoadAppLogLevel(context.Background(), st),
+	},
+		// The CLI is often the thing that translates a stack (a hand deploy), so it
+		// needs the daemon's view of which nodes exist: a pin naming a node that
+		// left the swarm must be rewritten here too, not only when the reconciler
+		// happens to run. Opened lazily — a deploy that touches no pin should not
+		// need a daemon socket.
+		LiveNodes: func(ctx context.Context) (map[string]bool, error) {
+			c, cerr := docker.New()
+			if cerr != nil {
+				return nil, cerr
+			}
+			defer func() { _ = c.Close() }()
+			nodes, nerr := c.NodeList(ctx)
+			if nerr != nil {
+				return nil, nerr
+			}
+			live := make(map[string]bool, len(nodes))
+			for _, n := range nodes {
+				live[n.Hostname] = true
+			}
+			return live, nil
+		},
+		OnRelocate: func(_ context.Context, stackName, from, to string) {
+			log.Warn().Str("stack", stackName).Str("from", from).Str("to", to).
+				Msg("placement — pinned to a node that is not in the swarm; moved to a live storage node (the data did not follow)")
+		},
+	}, Stdout: cmd.OutOrStdout(), Log: log, BackupDir: cluster.BackupRootDir(), AppLogLevel: cluster.LoadAppLogLevel(context.Background(), st),
 		// Pulls use the stored read-only PAT, applied once before the first
 		// `docker stack deploy --with-registry-auth` freezes it into a spec.
 		BeforeApply: func(ctx context.Context) { loginBeforeDeploy(ctx, st, cfg, log) },
