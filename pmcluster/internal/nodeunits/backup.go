@@ -1,4 +1,4 @@
-package cli
+package nodeunits
 
 import (
 	"context"
@@ -12,65 +12,84 @@ import (
 	"strings"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
 )
 
 // The backup agent is a host unit, not a Swarm service.
 //
-// Two reasons, both learned from the offen agent it replaces. A Swarm task can
-// be rescheduled mid-run, which strands a half-written snapshot and drops the
-// only record of what happened; and the work itself needs root — lvcreate,
-// mount — while the daemon deliberately runs as the operator user.
-// So the privileged body is a one-shot unit and the daemon, which already
-// writes its own unit, writes this one too. No new install path, no second
-// daemon, and systemd — not the daemon — owns the schedule, so a restarting
-// daemon cannot skip an hour.
+// Two reasons, both learned from the offen agent it replaces. A Swarm task can be
+// rescheduled mid-run, which strands a half-written snapshot and drops the only
+// record of what happened; and the work itself needs root — lvcreate, mount —
+// while the daemon deliberately runs as the operator user. So the privileged body
+// is a one-shot unit and the daemon, which already writes its own unit, writes
+// this one too. No new install path, no second daemon, and systemd — not the
+// daemon — owns the schedule, so a restarting daemon cannot skip an hour.
 //
 // The unit is installed only where data lives: storage nodes. A node with no
 // volumes has nothing to freeze, and installing it everywhere would make every
 // worker carry a timer that can only no-op.
 
-// backupEnvFile holds the ship target (and nothing else) for the hourly run.
+// BackupEnvFile holds the ship target (and nothing else) for the hourly run.
 // 0600 and root-owned: the unit is world-readable and the store credential must
-// not be in it.
-const backupEnvFile = "/etc/pmcluster/backup.env"
+// not be in it. A variable, not a constant, so a test asserts what is written
+// instead of writing into /etc.
+var BackupEnvFile = "/etc/pmcluster/backup.env"
 
-// canonicalAgentPath is where the platform installs its own binary; the timer
-// must exec that, not whatever name the installer happened to be invoked as.
-const canonicalAgentPath = "/usr/local/bin/pmcluster"
+// CanonicalAgentPath is where the platform installs its own binary; the timer must
+// exec that, not whatever name the installer happened to be invoked as.
+const CanonicalAgentPath = "/usr/local/bin/pmcluster"
 
-// canonicalAgentBinary picks the path the timer should exec.
+// StoreServiceName is the Swarm service that carries the in-cluster store.
+const StoreServiceName = "backup_seaweedfs"
+
+// Paths and directories the units use. Variables, not constants, because every
+// test that proves "a node that is not a storage node gets no timer" has to point
+// them at a temp dir instead of /etc.
+var (
+	BackupUnitPath      = "/etc/systemd/system/pmcluster-backup.service"
+	BackupTimerPath     = "/etc/systemd/system/pmcluster-backup.timer"
+	BackupDrillUnitPath = "/etc/systemd/system/pmcluster-backup-drill.service"
+	BackupDrillTimer    = "/etc/systemd/system/pmcluster-backup-drill.timer"
+	OffsiteUnitPath     = "/etc/systemd/system/pmcluster-backup-offsite.service"
+	OffsiteTimerPath    = "/etc/systemd/system/pmcluster-backup-offsite.timer"
+	AgentVolumeRoot     = manifest.DefaultVolumeRoot
+	AgentArchiveDir     = "/var/stack/backup"
+	AgentStateDir       = "/var/lib/pmcluster-backup"
+)
+
+// CanonicalAgentBinary picks the path the timer should exec.
 //
 // os.Executable returns whatever was invoked: installing the unit from
 // /usr/local/bin/pmcluster.new wrote that name into ExecStart, so the timer kept
 // running a renamed copy while every `pmcluster` command reported the new build.
 // A stable install path wins whenever it exists.
-func canonicalAgentBinary(exe string, stat func(string) (os.FileInfo, error)) string {
-	if _, err := stat(canonicalAgentPath); err == nil {
-		return canonicalAgentPath
+func CanonicalAgentBinary(exe string, stat func(string) (os.FileInfo, error)) string {
+	if _, err := stat(CanonicalAgentPath); err == nil {
+		return CanonicalAgentPath
 	}
 	return exe
 }
 
-// writeBackupPolicyFile writes the node's copy of the backup settings.
+// WritePolicyFile writes the node's copy of the backup settings.
 //
 // This is how the control plane reaches a node without an endpoint: the installer
-// reads the cluster settings (from this node's store when it has one) and writes
-// a 0600 file the agent reads before every run. Re-running the installer is the
+// reads the cluster settings (from this node's store when it has one) and writes a
+// 0600 file the agent reads before every run. Re-running the installer is the
 // refresh — one command, and it is the same command that installs the unit.
-func writeBackupPolicyFile() error {
-	pol := backupPolicy{
-		Enabled: envOr("PMCLUSTER_BACKUP_ENABLED", "true"),
-		Cron:    envOr("PMCLUSTER_BACKUP_CRON", ""),
-		Store:   envOr("PMCLUSTER_BACKUP_STORE", ""),
+func WritePolicyFile(configPath string) error {
+	pol := Policy{
+		Enabled: EnvOrDefault("PMCLUSTER_BACKUP_ENABLED", "true"),
+		Cron:    EnvOrDefault("PMCLUSTER_BACKUP_CRON", ""),
+		Store:   EnvOrDefault("PMCLUSTER_BACKUP_STORE", ""),
 	}
-	pol.KeepLocal = envOr("PMCLUSTER_BACKUP_KEEP_LOCAL", "")
-	pol.S3.Endpoint = envOr("PMCLUSTER_BACKUP_S3_ENDPOINT", "")
-	pol.S3.Bucket = envOr("PMCLUSTER_BACKUP_S3_BUCKET", "")
-	pol.S3.Region = envOr("PMCLUSTER_BACKUP_S3_REGION", "")
-	pol.S3.AccessKey = envOr("PMCLUSTER_BACKUP_S3_ACCESS_KEY", "")
-	pol.S3.SecretKey = envOr("PMCLUSTER_BACKUP_S3_SECRET_KEY", "")
-	if days, err := strconv.Atoi(strings.TrimSpace(envOr("PMCLUSTER_BACKUP_RETENTION_DAYS", ""))); err == nil && days > 0 {
+	pol.KeepLocal = EnvOrDefault("PMCLUSTER_BACKUP_KEEP_LOCAL", "")
+	pol.S3.Endpoint = EnvOrDefault("PMCLUSTER_BACKUP_S3_ENDPOINT", "")
+	pol.S3.Bucket = EnvOrDefault("PMCLUSTER_BACKUP_S3_BUCKET", "")
+	pol.S3.Region = EnvOrDefault("PMCLUSTER_BACKUP_S3_REGION", "")
+	pol.S3.AccessKey = EnvOrDefault("PMCLUSTER_BACKUP_S3_ACCESS_KEY", "")
+	pol.S3.SecretKey = EnvOrDefault("PMCLUSTER_BACKUP_S3_SECRET_KEY", "")
+	if days, err := strconv.Atoi(strings.TrimSpace(EnvOrDefault("PMCLUSTER_BACKUP_RETENTION_DAYS", ""))); err == nil && days > 0 {
 		pol.RetentionDays = days
 	}
 	// Whatever the environment does not say, the control plane says. The offsite
@@ -79,7 +98,7 @@ func writeBackupPolicyFile() error {
 	// PMCLUSTER_BACKUP_S3_* wrote an EMPTY target into its policy and silently
 	// shipped nothing offsite — a node fully configured for R2 in `cluster
 	// settings`, whose every artifact stayed local.
-	if st, _, err := openStore(); err == nil {
+	if st, err := openLocalStore(configPath); err == nil {
 		ctx := context.Background()
 		if pol.Cron == "" {
 			pol.Cron = st.SettingDefault(ctx, cluster.SettingBackupCron(), "")
@@ -87,10 +106,10 @@ func writeBackupPolicyFile() error {
 		if pol.Store == "" {
 			pol.Store = st.SettingDefault(ctx, cluster.SettingBackupStoreOn(), "")
 		}
-		// Retention belongs with the ship target: both are the answer to "how
-		// much history does this cluster pay for". It used to stop at the
-		// setting, so backup_retention_days was editable, accepted by the API,
-		// and read by nothing — every node pruned at the flag default instead.
+		// Retention belongs with the ship target: both are the answer to "how much
+		// history does this cluster pay for". It used to stop at the setting, so
+		// backup_retention_days was editable, accepted by the API, and read by
+		// nothing — every node pruned at the flag default instead.
 		if pol.RetentionDays == 0 {
 			pol.RetentionDays = cluster.LoadBackupRetentionDays(ctx, st)
 		}
@@ -118,9 +137,9 @@ func writeBackupPolicyFile() error {
 	}
 	// The in-cluster store is just another S3 target, recorded here so the agent
 	// needs no environment at all.
-	if pol.Store == "" || !isOff(pol.Store) {
+	if pol.Store == "" || !IsOff(pol.Store) {
 		if ak, sk := storeS3Keys(); ak != "" && sk != "" {
-			pol.StoreS3 = policyS3{
+			pol.StoreS3 = S3Target{
 				Endpoint: storeS3Endpoint(), Bucket: storeS3Bucket(),
 				Region: "us-east-1", AccessKey: ak, SecretKey: sk,
 			}
@@ -130,32 +149,29 @@ func writeBackupPolicyFile() error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(backupPolicyFile), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(PolicyFile), 0o700); err != nil {
 		return err
 	}
-	tmp := backupPolicyFile + ".tmp"
+	tmp := PolicyFile + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, backupPolicyFile)
+	return os.Rename(tmp, PolicyFile)
 }
 
-// writeBackupEnv persists the WebDAV target handed to the installer through the
-// environment. Refusing to put it on a command line is deliberate: argv is
-// world-readable in /proc for the life of the process, and this is a password.
-// writeBackupEnv records the in-cluster store as an S3 target in the agent's
+// WriteEnvFile records the in-cluster store as an S3 target in the agent's
 // environment.
 //
 // It used to write a WebDAV URL with the credentials embedded as userinfo. The
 // store serves the S3 API on 8333 with the same Store.AccessKey/SecretKey, and
 // SeaweedFS creates a bucket on first upload — so the WebDAV gateway, its port and
 // its five-minute PUT timeout bought nothing but a second code path.
-func writeBackupEnv() error {
-	if err := os.MkdirAll(filepath.Dir(backupEnvFile), 0o700); err != nil {
+func WriteEnvFile() error {
+	if err := os.MkdirAll(filepath.Dir(BackupEnvFile), 0o700); err != nil {
 		return err
 	}
-	pol, _ := readBackupPolicy(backupPolicyFile)
-	if pol.Store != "" && isOff(pol.Store) {
+	pol, _ := ReadPolicy(PolicyFile)
+	if pol.Store != "" && IsOff(pol.Store) {
 		return nil
 	}
 	ak, sk := storeS3Keys()
@@ -171,16 +187,16 @@ func writeBackupEnv() error {
 		"PMCLUSTER_BACKUP_STORE_S3_ACCESS_KEY=" + ak,
 		"PMCLUSTER_BACKUP_STORE_S3_SECRET_KEY=" + sk,
 	}, "\n") + "\n"
-	temp := backupEnvFile + ".tmp"
+	temp := BackupEnvFile + ".tmp"
 	if err := os.WriteFile(temp, []byte(body), 0o600); err != nil {
 		return err
 	}
-	return os.Rename(temp, backupEnvFile)
+	return os.Rename(temp, BackupEnvFile)
 }
 
 // storeS3Endpoint is the store's S3 API, reachable on the routing mesh.
 func storeS3Endpoint() string {
-	if v := envOr("PMCLUSTER_BACKUP_STORE_S3_ENDPOINT", ""); v != "" {
+	if v := EnvOrDefault("PMCLUSTER_BACKUP_STORE_S3_ENDPOINT", ""); v != "" {
 		return v
 	}
 	return "http://127.0.0.1:8333"
@@ -188,7 +204,7 @@ func storeS3Endpoint() string {
 
 // storeS3Bucket is where the store keeps artifacts.
 func storeS3Bucket() string {
-	if v := envOr("PMCLUSTER_BACKUP_STORE_S3_BUCKET", ""); v != "" {
+	if v := EnvOrDefault("PMCLUSTER_BACKUP_STORE_S3_BUCKET", ""); v != "" {
 		return v
 	}
 	return "pmcluster-backups"
@@ -197,7 +213,7 @@ func storeS3Bucket() string {
 // storeS3Keys reads the store's own S3 identity from the running service — the
 // same two variables SeaweedFS promotes to an admin identity.
 func storeS3Keys() (string, string) {
-	out, err := exec.Command("docker", "service", "inspect", storeServiceName,
+	out, err := exec.Command("docker", "service", "inspect", StoreServiceName,
 		"--format", "{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}").Output()
 	if err != nil {
 		return "", ""
@@ -214,26 +230,23 @@ func storeS3Keys() (string, string) {
 	return ak, sk
 }
 
-// storeServiceName is the Swarm service that carries the in-cluster store.
-const storeServiceName = "backup_seaweedfs"
-
-// renderBackupServiceUnit builds the oneshot unit that performs one run.
+// RenderServiceUnit builds the oneshot unit that performs one run.
 //
-// The run lock lives in the agent, not here: a forced or single-stack run does
-// not come through this unit, and the lock has to cover those too. The comment
-// that used to justify flock in ExecStart follows, because the reasoning about
-// WHERE the lock must sit is the part that was wrong.
+// The run lock lives in the agent, not here: a forced or single-stack run does not
+// come through this unit, and the lock has to cover those too. The comment that
+// used to justify flock in ExecStart follows, because the reasoning about WHERE the
+// lock must sit is the part that was wrong.
 //
-// The lock is held for the whole run: a second
-// trigger (the timer and an on-demand `backup create` landing together) finds
-// the lock taken and exits instead of interleaving two freezes on the same
-// filesystem. -n makes it fail immediately rather than queue, and -E 0 makes a
-// skipped run exit 0 — nothing failed, a run was already in progress.
+// The lock is held for the whole run: a second trigger (the timer and an on-demand
+// `backup create` landing together) finds the lock taken and exits instead of
+// interleaving two freezes on the same filesystem. -n makes it fail immediately
+// rather than queue, and -E 0 makes a skipped run exit 0 — nothing failed, a run
+// was already in progress.
 //
 // It must NOT be an ExecStartPre: `flock -n <file>` with no command errors out
 // ("bad file descriptor"), and even with a command the lock would be released
 // before ExecStart ran, so the unit would not serialise anything at all.
-func renderBackupServiceUnit(exe, volumeRoot, archiveDir, stateDir string) string {
+func RenderServiceUnit(exe, volumeRoot, archiveDir, stateDir string) string {
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster volume snapshot backup (one run)
 Documentation=https://github.com/hazemarian/poor-man-cluster
@@ -272,15 +285,15 @@ TimeoutStartSec=3600
 
 [Install]
 WantedBy=multi-user.target
-`, volumeRoot, archiveDir, stateDir, storage.DefaultVG, storage.DefaultLV, backupEnvFile, exe)
+`, volumeRoot, archiveDir, stateDir, storage.DefaultVG, storage.DefaultLV, BackupEnvFile, exe)
 }
 
-// renderBackupTimerUnit builds the hourly schedule.
+// RenderTimerUnit builds the hourly schedule.
 //
-// Persistent=true means a run missed because the node was down fires as soon
-// as it comes back, instead of silently skipping an hour. AccuracySec=30s keeps
-// the fleet from synchronising on the same second.
-func renderBackupTimerUnit() string {
+// Persistent=true means a run missed because the node was down fires as soon as it
+// comes back, instead of silently skipping an hour. AccuracySec=30s keeps the
+// fleet from synchronising on the same second.
+func RenderTimerUnit() string {
 	return `[Unit]
 Description=pmcluster volume snapshot backup (hourly)
 
@@ -295,14 +308,14 @@ WantedBy=timers.target
 `
 }
 
-// renderBackupDrillServiceUnit builds the weekly restore drill.
+// RenderDrillServiceUnit builds the weekly restore drill.
 //
-// A backup nobody has restored is a hypothesis. The hourly run proves the
-// artifact could be WRITTEN; this proves one can be READ — extracted, and its
-// databases opened and asked a question. It runs on the node that holds the
-// archive, uses the same scratch discipline as `backup-agent drill`, and is
-// deliberately weekly: it competes with the apps for I/O and pool space.
-func renderBackupDrillServiceUnit(exe, volumeRoot, archiveDir, stateDir string) string {
+// A backup nobody has restored is a hypothesis. The hourly run proves the artifact
+// could be WRITTEN; this proves one can be READ — extracted, and its databases
+// opened and asked a question. It runs on the node that holds the archive, uses the
+// same scratch discipline as `backup-agent drill`, and is deliberately weekly: it
+// competes with the apps for I/O and pool space.
+func RenderDrillServiceUnit(exe, volumeRoot, archiveDir, stateDir string) string {
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster restore drill (extract the newest artifact and verify its databases)
 Documentation=https://github.com/hazemarian/poor-man-cluster
@@ -333,12 +346,12 @@ TimeoutStartSec=1800
 
 [Install]
 WantedBy=multi-user.target
-`, volumeRoot, archiveDir, stateDir, backupEnvFile, exe, exe)
+`, volumeRoot, archiveDir, stateDir, BackupEnvFile, exe, exe)
 }
 
-// renderBackupDrillTimerUnit builds the weekly schedule: Sunday, 03:00, spread
-// over 30 minutes so a fleet does not all extract at once.
-func renderBackupDrillTimerUnit() string {
+// RenderDrillTimerUnit builds the weekly schedule: Sunday, 03:00, spread over 30
+// minutes so a fleet does not all extract at once.
+func RenderDrillTimerUnit() string {
 	return `[Unit]
 Description=pmcluster restore drill (weekly)
 
@@ -354,14 +367,13 @@ WantedBy=timers.target
 `
 }
 
-// renderOffsiteCheckServiceUnit builds the daily "is it still in the bucket?"
-// check.
+// RenderOffsiteCheckServiceUnit builds the daily "is it still in the bucket?" check.
 //
 // The hourly run records where an artifact went at the time it shipped. That is
-// intent, not presence: lifecycle rules expire objects, quotas fill, keys rotate,
-// a bucket can be deleted. Nothing re-read the bucket after the fact, so "we have
+// intent, not presence: lifecycle rules expire objects, quotas fill, keys rotate, a
+// bucket can be deleted. Nothing re-read the bucket after the fact, so "we have
 // offsite backups" rested on a write that happened hours ago.
-func renderOffsiteCheckServiceUnit(exe, archiveDir, stateDir string) string {
+func RenderOffsiteCheckServiceUnit(exe, archiveDir, stateDir string) string {
 	return fmt.Sprintf(`[Unit]
 Description=pmcluster offsite check (are yesterday's artifacts still in the bucket?)
 Documentation=https://github.com/hazemarian/poor-man-cluster
@@ -379,14 +391,14 @@ TimeoutStartSec=600
 
 [Install]
 WantedBy=multi-user.target
-`, archiveDir, stateDir, backupEnvFile, exe)
+`, archiveDir, stateDir, BackupEnvFile, exe)
 }
 
-// renderOffsiteCheckTimerUnit runs the check HOURLY, twenty minutes past the
-// hour: the artifacts of the run that just happened are shipped and confirmed by
-// then, so the status file never lags a day behind the thing it describes. A
-// listing of the bucket is cheap; a stale "all present" is not.
-func renderOffsiteCheckTimerUnit() string {
+// RenderOffsiteCheckTimerUnit runs the check HOURLY, twenty minutes past the hour:
+// the artifacts of the run that just happened are shipped and confirmed by then, so
+// the status file never lags a day behind the thing it describes. A listing of the
+// bucket is cheap; a stale "all present" is not.
+func RenderOffsiteCheckTimerUnit() string {
 	return `[Unit]
 Description=pmcluster offsite check (daily)
 
@@ -402,36 +414,18 @@ WantedBy=timers.target
 `
 }
 
-// Overridable in tests, like the daemon's equivalents.
-var (
-	backupUnitPath      = "/etc/systemd/system/pmcluster-backup.service"
-	backupTimerPath     = "/etc/systemd/system/pmcluster-backup.timer"
-	backupDrillUnitPath = "/etc/systemd/system/pmcluster-backup-drill.service"
-	backupDrillTimer    = "/etc/systemd/system/pmcluster-backup-drill.timer"
-	offsiteUnitPath     = "/etc/systemd/system/pmcluster-backup-offsite.service"
-	offsiteTimerPath    = "/etc/systemd/system/pmcluster-backup-offsite.timer"
-	backupAgentVolumeRd = defaultVolumeRoot
-	backupAgentArchive  = "/var/stack/backup"
-	backupAgentStateDir = "/var/lib/pmcluster-backup"
-)
-
-// ensureBackupAgentInstalled writes both units and enables the timer.
-//
-// It is deliberately quiet on non-Linux hosts and when systemctl is missing:
-// the same binary is used on a laptop for `backup-agent drill`, and that must
-// not require an init system.
-// isStorageNode reports whether this host is meant to hold stack data.
+// IsStorageNode reports whether this host is meant to hold stack data.
 //
 // It is a question about the node's ROLE, not about its disk. Checking for a local
-// LV is not enough: a worker joined with storage provisioned has one, and would
-// then be handed an hourly root job that snapshots a volume holding nothing but a
-// test stack — observed on production, where the worker also carried a 41 GB backup
-// store on a 58 GB disk.
+// LV is not enough: a worker joined with storage provisioned has one, and would then
+// be handed an hourly root job that snapshots a volume holding nothing but a test
+// stack — observed on production, where the worker also carried a 41 GB backup store
+// on a 58 GB disk.
 //
 // A storage node is a manager (the fleet keeps stack data on managers) or a worker
 // that was explicitly marked as one at join time, which sets PMCLUSTER_STORAGE_NODE
 // in this unit's environment.
-func isStorageNode() (bool, string) {
+func IsStorageNode() (bool, string) {
 	if os.Getenv("PMCLUSTER_STORAGE_NODE") == "1" {
 		return true, ""
 	}
@@ -445,58 +439,63 @@ func isStorageNode() (bool, string) {
 	return false, "this node is a worker, and workers hold no stack data"
 }
 
-// storageNodeFn is isStorageNode, overridable for tests.
-var storageNodeFn = isStorageNode
+// StorageNodeFn is IsStorageNode, overridable for tests.
+var StorageNodeFn = IsStorageNode
 
-// removeBackupAgent takes the agent back off a node that should not have one. It
-// is idempotent: a node that never had the units just gets two failed removes.
-func removeBackupAgent(out io.Writer) {
-	if hostOS == "linux" && hasSystemctl() {
-		_ = systemctlFn("disable", "--now", "pmcluster-backup.timer")
+// RemoveBackupAgent takes the agent back off a node that should not have one. It is
+// idempotent: a node that never had the units just gets two failed removes.
+func RemoveBackupAgent(out io.Writer) {
+	if HostOS == "linux" && HasSystemctl() {
+		_ = Systemctl("disable", "--now", "pmcluster-backup.timer")
 	}
 	removed := false
-	if hostOS == "linux" && hasSystemctl() {
-		_ = systemctlFn("disable", "--now", "pmcluster-backup-drill.timer")
+	if HostOS == "linux" && HasSystemctl() {
+		_ = Systemctl("disable", "--now", "pmcluster-backup-drill.timer")
 	}
-	for _, p := range []string{backupTimerPath, backupUnitPath, backupDrillUnitPath, backupDrillTimer} {
+	for _, p := range []string{BackupTimerPath, BackupUnitPath, BackupDrillUnitPath, BackupDrillTimer} {
 		if err := os.Remove(p); err == nil {
 			removed = true
 		}
 	}
-	// Unit files are not the only thing an install leaves behind: the admin
-	// drop-in directory (and its drill twin) survives its unit and would sit there
-	// looking like configuration for an agent this node no longer runs.
-	for _, d := range []string{backupUnitPath + ".d", backupDrillUnitPath + ".d"} {
+	// Unit files are not the only thing an install leaves behind: the admin drop-in
+	// directory (and its drill twin) survives its unit and would sit there looking
+	// like configuration for an agent this node no longer runs.
+	for _, d := range []string{BackupUnitPath + ".d", BackupDrillUnitPath + ".d"} {
 		if err := os.RemoveAll(d); err == nil {
 			removed = true
 		}
 	}
 	if removed {
 		fmt.Fprintf(out, "  → removed %s and %s: this node is not a storage node\n",
-			filepath.Base(backupUnitPath), filepath.Base(backupTimerPath))
-		if hostOS == "linux" && hasSystemctl() {
-			_ = systemctlFn("daemon-reload")
+			filepath.Base(BackupUnitPath), filepath.Base(BackupTimerPath))
+		if HostOS == "linux" && HasSystemctl() {
+			_ = Systemctl("daemon-reload")
 		}
 	}
 }
 
-func ensureBackupAgentInstalled(out io.Writer) error {
+// EnsureBackupAgent writes the units and enables the timers.
+//
+// It is deliberately quiet on non-Linux hosts and when systemctl is missing: the
+// same binary is used on a laptop for `backup-agent drill`, and that must not
+// require an init system.
+func EnsureBackupAgent(out io.Writer, configPath string) error {
 	// No volume, no backup. A worker does not hold stack data, so an agent here
 	// would snapshot an empty directory forever.
-	if ok, why := storageNodeFn(); !ok {
+	if ok, why := StorageNodeFn(); !ok {
 		fmt.Fprintf(out, "  (not a storage node — %s; the backup agent was not installed)\n", why)
-		removeBackupAgent(out)
+		RemoveBackupAgent(out)
 		return nil
 	}
 	if os.Getenv("PMCLUSTER_SKIP_BACKUP_AGENT") != "" {
 		fmt.Fprintln(out, "  (PMCLUSTER_SKIP_BACKUP_AGENT set — the backup timer was not installed)")
 		return nil
 	}
-	if hostOS != "linux" {
+	if HostOS != "linux" {
 		fmt.Fprintln(out, "  (non-Linux host — the backup timer is a Linux systemd unit)")
 		return nil
 	}
-	if !hasSystemctl() {
+	if !HasSystemctl() {
 		fmt.Fprintln(out, "  (systemctl not found — run `pmcluster backup-agent run` from your own scheduler)")
 		return nil
 	}
@@ -504,36 +503,36 @@ func ensureBackupAgentInstalled(out io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
-	exe = canonicalAgentBinary(exe, os.Stat)
-	if err := os.MkdirAll(backupAgentStateDir, 0o755); err != nil {
-		// /var/lib needs root; the run itself will fail loudly if it cannot
-		// write, so a permission problem here is worth reporting but not fatal
-		// to the install.
-		fmt.Fprintf(out, "  (could not create %s: %v)\n", backupAgentStateDir, err)
+	exe = CanonicalAgentBinary(exe, os.Stat)
+	if err := os.MkdirAll(AgentStateDir, 0o755); err != nil {
+		// /var/lib needs root; the run itself will fail loudly if it cannot write,
+		// so a permission problem here is worth reporting but not fatal to the
+		// install.
+		fmt.Fprintf(out, "  (could not create %s: %v)\n", AgentStateDir, err)
 	}
-	if err := writeBackupPolicyFile(); err != nil {
-		fmt.Fprintf(out, "  (could not write %s: %v — the agent will use this node's stored settings)\n", backupPolicyFile, err)
+	if err := WritePolicyFile(configPath); err != nil {
+		fmt.Fprintf(out, "  (could not write %s: %v — the agent will use this node's stored settings)\n", PolicyFile, err)
 	}
-	if err := writeBackupEnv(); err != nil {
-		fmt.Fprintf(out, "  (could not write %s: %v — artifacts will stay local)\n", backupEnvFile, err)
+	if err := WriteEnvFile(); err != nil {
+		fmt.Fprintf(out, "  (could not write %s: %v — artifacts will stay local)\n", BackupEnvFile, err)
 	}
-	if err := writeUnitFn(backupUnitPath, []byte(renderBackupServiceUnit(exe, backupAgentVolumeRd, backupAgentArchive, backupAgentStateDir)), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", backupUnitPath, err)
+	if err := WriteUnit(BackupUnitPath, []byte(RenderServiceUnit(exe, AgentVolumeRoot, AgentArchiveDir, AgentStateDir)), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", BackupUnitPath, err)
 	}
-	if err := writeUnitFn(backupTimerPath, []byte(renderBackupTimerUnit()), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", backupTimerPath, err)
+	if err := WriteUnit(BackupTimerPath, []byte(RenderTimerUnit()), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", BackupTimerPath, err)
 	}
-	if err := writeUnitFn(backupDrillUnitPath, []byte(renderBackupDrillServiceUnit(exe, backupAgentVolumeRd, backupAgentArchive, backupAgentStateDir)), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", backupDrillUnitPath, err)
+	if err := WriteUnit(BackupDrillUnitPath, []byte(RenderDrillServiceUnit(exe, AgentVolumeRoot, AgentArchiveDir, AgentStateDir)), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", BackupDrillUnitPath, err)
 	}
-	if err := writeUnitFn(backupDrillTimer, []byte(renderBackupDrillTimerUnit()), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", backupDrillTimer, err)
+	if err := WriteUnit(BackupDrillTimer, []byte(RenderDrillTimerUnit()), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", BackupDrillTimer, err)
 	}
-	if err := writeUnitFn(offsiteUnitPath, []byte(renderOffsiteCheckServiceUnit(exe, backupAgentArchive, backupAgentStateDir)), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", offsiteUnitPath, err)
+	if err := WriteUnit(OffsiteUnitPath, []byte(RenderOffsiteCheckServiceUnit(exe, AgentArchiveDir, AgentStateDir)), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", OffsiteUnitPath, err)
 	}
-	if err := writeUnitFn(offsiteTimerPath, []byte(renderOffsiteCheckTimerUnit()), 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", offsiteTimerPath, err)
+	if err := WriteUnit(OffsiteTimerPath, []byte(RenderOffsiteCheckTimerUnit()), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", OffsiteTimerPath, err)
 	}
 	for _, args := range [][]string{
 		{"daemon-reload"},
@@ -541,12 +540,12 @@ func ensureBackupAgentInstalled(out io.Writer) error {
 		{"enable", "--now", "pmcluster-backup-drill.timer"},
 		{"enable", "--now", "pmcluster-backup-offsite.timer"},
 	} {
-		if err := systemctlFn(args...); err != nil {
+		if err := Systemctl(args...); err != nil {
 			return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
 		}
 	}
-	fmt.Fprintf(out, "  → installed %s + %s (hourly, root oneshot)\n", filepath.Base(backupUnitPath), filepath.Base(backupTimerPath))
-	fmt.Fprintf(out, "  → installed %s + %s (weekly restore drill, Sunday 03:00)\n", filepath.Base(backupDrillUnitPath), filepath.Base(backupDrillTimer))
-	fmt.Fprintf(out, "  → installed %s + %s (hourly offsite check, twenty past the hour)\n", filepath.Base(offsiteUnitPath), filepath.Base(offsiteTimerPath))
+	fmt.Fprintf(out, "  → installed %s + %s (hourly, root oneshot)\n", filepath.Base(BackupUnitPath), filepath.Base(BackupTimerPath))
+	fmt.Fprintf(out, "  → installed %s + %s (weekly restore drill, Sunday 03:00)\n", filepath.Base(BackupDrillUnitPath), filepath.Base(BackupDrillTimer))
+	fmt.Fprintf(out, "  → installed %s + %s (hourly offsite check, twenty past the hour)\n", filepath.Base(OffsiteUnitPath), filepath.Base(OffsiteTimerPath))
 	return nil
 }

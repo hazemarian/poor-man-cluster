@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"bytes"
 	"os"
 	"path/filepath"
@@ -119,15 +120,15 @@ func TestMemoryDropIn_IsTheOnlyOwner(t *testing.T) {
 // TestEnsureDaemonRunning_WritesTheHostsMemoryBounds: the unit on disk is what
 // systemd reads, so this asserts the file, not the renderer.
 func TestEnsureDaemonRunning_WritesTheHostsMemoryBounds(t *testing.T) {
-	oldPath, oldSys, oldHas, oldWrite, oldHost, oldMem := daemonUnitPath, systemctlFn, hasSystemctl, writeUnitFn, hostOS, hostMemTotalMiB
+	oldPath, oldSys, oldHas, oldWrite, oldHost, oldMem := daemonUnitPath, nodeunits.Systemctl, nodeunits.HasSystemctl, nodeunits.WriteUnit, nodeunits.HostOS, hostMemTotalMiB
 	t.Cleanup(func() {
-		daemonUnitPath, systemctlFn, hasSystemctl, writeUnitFn, hostOS, hostMemTotalMiB =
+		daemonUnitPath, nodeunits.Systemctl, nodeunits.HasSystemctl, nodeunits.WriteUnit, nodeunits.HostOS, hostMemTotalMiB =
 			oldPath, oldSys, oldHas, oldWrite, oldHost, oldMem
 	})
-	hostOS = "linux"
-	hasSystemctl = func() bool { return true }
-	writeUnitFn = os.WriteFile
-	systemctlFn = func(...string) error { return nil }
+	nodeunits.HostOS = "linux"
+	nodeunits.HasSystemctl = func() bool { return true }
+	nodeunits.WriteUnit = os.WriteFile
+	nodeunits.Systemctl = func(...string) error { return nil }
 	hostMemTotalMiB = func() int64 { return 1839 }
 	t.Setenv("PMCLUSTER_USER", "testuser")
 
@@ -162,15 +163,15 @@ func TestEnsureDaemonRunning_WritesTheHostsMemoryBounds(t *testing.T) {
 // TestEnsureDaemonRunning_UnknownRAMWarns: a node whose MemTotal cannot be read
 // gets no limit and a warning, never a plausible-looking default.
 func TestEnsureDaemonRunning_UnknownRAMWarns(t *testing.T) {
-	oldPath, oldSys, oldHas, oldWrite, oldHost, oldMem := daemonUnitPath, systemctlFn, hasSystemctl, writeUnitFn, hostOS, hostMemTotalMiB
+	oldPath, oldSys, oldHas, oldWrite, oldHost, oldMem := daemonUnitPath, nodeunits.Systemctl, nodeunits.HasSystemctl, nodeunits.WriteUnit, nodeunits.HostOS, hostMemTotalMiB
 	t.Cleanup(func() {
-		daemonUnitPath, systemctlFn, hasSystemctl, writeUnitFn, hostOS, hostMemTotalMiB =
+		daemonUnitPath, nodeunits.Systemctl, nodeunits.HasSystemctl, nodeunits.WriteUnit, nodeunits.HostOS, hostMemTotalMiB =
 			oldPath, oldSys, oldHas, oldWrite, oldHost, oldMem
 	})
-	hostOS = "linux"
-	hasSystemctl = func() bool { return true }
-	writeUnitFn = os.WriteFile
-	systemctlFn = func(...string) error { return nil }
+	nodeunits.HostOS = "linux"
+	nodeunits.HasSystemctl = func() bool { return true }
+	nodeunits.WriteUnit = os.WriteFile
+	nodeunits.Systemctl = func(...string) error { return nil }
 	hostMemTotalMiB = func() int64 { return 0 }
 	t.Setenv("PMCLUSTER_USER", "testuser")
 

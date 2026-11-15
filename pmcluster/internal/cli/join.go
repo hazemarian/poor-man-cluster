@@ -19,6 +19,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
 )
 
@@ -748,17 +749,17 @@ func manualStorageNodeHint(out io.Writer, sshHost, nodeHostname, merged string) 
 // whether this host should be snapshotting anything.
 func markStorageNodeEnv() error {
 	const line = "PMCLUSTER_STORAGE_NODE=1\n"
-	b, err := os.ReadFile(backupEnvFile)
+	b, err := os.ReadFile(nodeunits.BackupEnvFile)
 	if err == nil && strings.Contains(string(b), "PMCLUSTER_STORAGE_NODE=1") {
 		return nil
 	}
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(backupEnvFile), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(nodeunits.BackupEnvFile), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(backupEnvFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(nodeunits.BackupEnvFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}

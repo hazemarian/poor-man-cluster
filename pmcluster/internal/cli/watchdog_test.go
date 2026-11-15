@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -399,19 +400,19 @@ func TestWatchdogUnits_AreWiredEveryMinute(t *testing.T) {
 // daemon unit, with the timer enabled — a watchdog that is written but never
 // enabled is the failure mode this test names.
 func TestEnsureDaemonRunning_InstallsTheWatchdog(t *testing.T) {
-	oldPath, oldSys, oldHas, oldWrite, oldHost := daemonUnitPath, systemctlFn, hasSystemctl, writeUnitFn, hostOS
+	oldPath, oldSys, oldHas, oldWrite, oldHost := daemonUnitPath, nodeunits.Systemctl, nodeunits.HasSystemctl, nodeunits.WriteUnit, nodeunits.HostOS
 	t.Cleanup(func() {
-		daemonUnitPath, systemctlFn, hasSystemctl, writeUnitFn, hostOS = oldPath, oldSys, oldHas, oldWrite, oldHost
+		daemonUnitPath, nodeunits.Systemctl, nodeunits.HasSystemctl, nodeunits.WriteUnit, nodeunits.HostOS = oldPath, oldSys, oldHas, oldWrite, oldHost
 	})
-	hostOS = "linux"
-	hasSystemctl = func() bool { return true }
-	writeUnitFn = os.WriteFile
+	nodeunits.HostOS = "linux"
+	nodeunits.HasSystemctl = func() bool { return true }
+	nodeunits.WriteUnit = os.WriteFile
 	t.Setenv("PMCLUSTER_USER", "testuser")
 
 	dir := t.TempDir()
 	daemonUnitPath = filepath.Join(dir, "pmcluster.service")
 	var calls []string
-	systemctlFn = func(args ...string) error {
+	nodeunits.Systemctl = func(args ...string) error {
 		calls = append(calls, strings.Join(args, " "))
 		return nil
 	}

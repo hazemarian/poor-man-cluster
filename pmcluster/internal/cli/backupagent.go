@@ -19,6 +19,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -223,7 +224,7 @@ before retiring that node's volume-backup agent.`,
 			if os.Geteuid() != 0 {
 				return fmt.Errorf("installing the hourly unit needs root — re-run with sudo")
 			}
-			return ensureBackupAgentInstalled(cmd.OutOrStdout())
+			return nodeunits.EnsureBackupAgent(cmd.OutOrStdout(), configPath)
 		},
 	}
 	backupAgentCmd.AddCommand(backupAgentRunCmd, backupAgentDrillCmd, backupAgentDrillStatusCmd, backupStorePruneCmd,
@@ -347,7 +348,7 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	// deciding on the flag VALUES let their defaults overwrite the cluster
 	// setting, so a cluster configured for three days pruned at fifteen and the
 	// setting read as decoration.
-	policy := localRetentionPolicy(ctx)
+	policy := nodeunits.LocalRetentionPolicy(ctx, configPath)
 	flags := cmd.Flags()
 	if flags.Changed("keep-hours") {
 		policy.KeepHours = agentKeepHours
@@ -364,7 +365,7 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	retention := &policy
 	a := &backupagent.Agent{
 		Retention:     retention,
-		KeepLocalMode: keepLocalMode(),
+		KeepLocalMode: nodeunits.KeepLocalMode(),
 		Node:          node,
 		VolumeRoot:    root,
 		ArchiveDir:    agentArchiveDir,
@@ -674,8 +675,8 @@ func runBackupAgentDrillStatus(cmd *cobra.Command, _ []string) error {
 // a schedule setting and the wrong latency for an emergency stop — for that,
 // stop the unit on the node.
 func localBackupDecision(ctx context.Context) (cluster.BackupDecision, error) {
-	if pol, ok := readBackupPolicy(backupPolicyFile); ok {
-		return decisionFromPolicy(pol, time.Now()), nil
+	if pol, ok := nodeunits.ReadPolicy(nodeunits.PolicyFile); ok {
+		return nodeunits.DecisionFromPolicy(pol, time.Now()), nil
 	}
 	st, _, err := openStore()
 	if err != nil {
@@ -720,8 +721,8 @@ type shipTarget struct {
 func backupShipTargets() []shipTarget {
 	var targets []shipTarget
 
-	pol, havePol := readBackupPolicy(backupPolicyFile)
-	storeOff := havePol && pol.Store != "" && isOff(pol.Store)
+	pol, havePol := nodeunits.ReadPolicy(nodeunits.PolicyFile)
+	storeOff := havePol && pol.Store != "" && nodeunits.IsOff(pol.Store)
 
 	// The in-cluster store, as an S3 target in its own right.
 	if !storeOff {
@@ -733,7 +734,7 @@ func backupShipTargets() []shipTarget {
 			Region:    envOr("PMCLUSTER_BACKUP_STORE_S3_REGION", ""),
 		}
 		if havePol && pol.StoreS3.Endpoint != "" {
-			store = pol.StoreS3.config()
+			store = pol.StoreS3.Config()
 		}
 		if store.Configured() {
 			targets = append(targets, shipTarget{Label: "store", S3: store})
@@ -749,7 +750,7 @@ func backupShipTargets() []shipTarget {
 		Region:    envOr("PMCLUSTER_BACKUP_S3_REGION", ""),
 	}
 	if havePol && pol.S3.Endpoint != "" {
-		s3 = pol.S3.config()
+		s3 = pol.S3.Config()
 	}
 	if s3.Configured() {
 		targets = append(targets, shipTarget{Label: "s3", S3: s3})

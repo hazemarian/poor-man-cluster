@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backupagent"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
@@ -96,7 +97,7 @@ func agentVolumeRootFromPolicy() string {
 		return v
 	}
 	root := defaultVolumeRoot
-	b, err := os.ReadFile(backupPolicyFile)
+	b, err := os.ReadFile(nodeunits.PolicyFile)
 	if err != nil {
 		return root
 	}

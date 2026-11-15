@@ -1,35 +1,40 @@
-package cli
+package nodeunits
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
-// backupPolicyFile is the node's local copy of the backup settings.
+// PolicyFile is the node's local copy of the backup settings.
 //
 // There is no endpoint. The agent runs as root on the host, and the control plane
 // reaches it the only way it can reach any node without opening a port: by
 // writing a file during install. That file is the schedule, the master switch and
-// the ship target; `pmcluster backup-agent install` rewrites it on every run of
-// the installer, so refreshing a node is one command rather than an edit.
+// the ship target; installing the agent rewrites it on every run, so refreshing a
+// node is one command rather than an edit.
 //
 // When the file is absent the agent falls back to this node's copy of the
 // control-plane store (managers hold a live one), and then to the defaults — a
-// cluster that has not configured backups still gets backups.
-const backupPolicyFile = "/etc/pmcluster/backup.conf"
+// cluster that has not configured backups still gets backups. A variable, not a
+// constant, for the same reason as BackupEnvFile: the test that proves which
+// settings reach the node must write into a temp dir.
+var PolicyFile = "/etc/pmcluster/backup.conf"
 
-// backupPolicy mirrors the JSON written at install time.
-type backupPolicy struct {
+// Policy mirrors the JSON written at install time.
+type Policy struct {
 	Enabled string   `json:"enabled"`
 	Cron    string   `json:"cron"`
 	Store   string   `json:"store"`
-	S3      policyS3 `json:"s3"`
+	S3      S3Target `json:"s3"`
 	// RetentionDays is the sparse window: beyond the dense 48 hours, one
 	// artifact per calendar day is kept until this age. It mirrors the
 	// backup_retention_days setting, because the agent has no endpoint to ask
@@ -47,11 +52,11 @@ type backupPolicy struct {
 	// StoreS3 is the in-cluster store as an S3 target. It used to be a WebDAV URL
 	// with the credentials embedded in it; now it is the same five fields as any
 	// other destination, so one code path ships to both.
-	StoreS3 policyS3 `json:"store_s3,omitempty"`
+	StoreS3 S3Target `json:"store_s3,omitempty"`
 }
 
-// policyS3 is one destination.
-type policyS3 struct {
+// S3Target is one destination.
+type S3Target struct {
 	Endpoint  string `json:"endpoint"`
 	Bucket    string `json:"bucket"`
 	Region    string `json:"region"`
@@ -59,17 +64,17 @@ type policyS3 struct {
 	SecretKey string `json:"secret_key"`
 }
 
-// config converts the policy entry into the S3 client's shape.
-func (p policyS3) config() backups.S3Config {
+// Config converts the policy entry into the S3 client's shape.
+func (p S3Target) Config() backups.S3Config {
 	return backups.S3Config{
 		Endpoint: p.Endpoint, Bucket: p.Bucket, Region: p.Region,
 		AccessKey: p.AccessKey, SecretKey: p.SecretKey,
 	}
 }
 
-// readBackupPolicy loads the node's policy file, if there is one.
-func readBackupPolicy(path string) (backupPolicy, bool) {
-	var pol backupPolicy
+// ReadPolicy loads the node's policy file, if there is one.
+func ReadPolicy(path string) (Policy, bool) {
+	var pol Policy
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return pol, false
@@ -80,20 +85,20 @@ func readBackupPolicy(path string) (backupPolicy, bool) {
 	return pol, true
 }
 
-// decisionFromPolicy turns the file into the same decision type the settings
-// path produces, so the gate has one shape to reason about.
-func decisionFromPolicy(pol backupPolicy, now time.Time) cluster.BackupDecision {
+// DecisionFromPolicy turns the file into the same decision type the settings path
+// produces, so the gate has one shape to reason about.
+func DecisionFromPolicy(pol Policy, now time.Time) cluster.BackupDecision {
 	d := cluster.BackupDecision{
-		Enabled:  !isOff(pol.Enabled),
+		Enabled:  !IsOff(pol.Enabled),
 		Schedule: strings.TrimSpace(pol.Cron),
-		Store:    !isOff(pol.Store),
+		Store:    !IsOff(pol.Store),
 	}
 	if d.Schedule == "" {
 		d.Schedule = cluster.DefaultBackupCron
 	}
 	d.Offsite = pol.S3.Endpoint != "" && pol.S3.Bucket != "" && pol.S3.AccessKey != "" && pol.S3.SecretKey != ""
 	if !d.Enabled {
-		d.Reason = "backup_enabled is false in " + backupPolicyFile
+		d.Reason = "backup_enabled is false in " + PolicyFile
 		return d
 	}
 	due, err := cluster.CronDue(d.Schedule, now)
@@ -108,7 +113,7 @@ func decisionFromPolicy(pol backupPolicy, now time.Time) cluster.BackupDecision 
 	return d
 }
 
-// localRetentionPolicy answers "how long does this node keep artifacts?".
+// LocalRetentionPolicy answers "how long does this node keep artifacts?".
 //
 // The chain is the one the schedule and the ship targets already follow, and for
 // the same reason: the agent runs as root with no endpoint, so a cluster setting
@@ -117,21 +122,24 @@ func decisionFromPolicy(pol backupPolicy, now time.Time) cluster.BackupDecision 
 // setting, default — the file is the installer's snapshot of the setting and so
 // wins; the store is the live truth when the file is absent or predates it.
 //
-// KeepHours is deliberately not configurable: 48 dense hours is what "restore
-// the state from before this morning's deploy" needs, and every artifact inside
-// it is the cheap kind of history to keep. Only the sparse tail is a policy
-// decision, which is exactly what backup_retention_days names.
-func localRetentionPolicy(ctx context.Context) backups.Retention {
+// KeepHours is deliberately not configurable: 48 dense hours is what "restore the
+// state from before this morning's deploy" needs, and every artifact inside it is
+// the cheap kind of history to keep. Only the sparse tail is a policy decision,
+// which is exactly what backup_retention_days names.
+//
+// configPath is the CLI's --config path: this package reads THIS node's store, and
+// refuses to create one that is not there.
+func LocalRetentionPolicy(ctx context.Context, configPath string) backups.Retention {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if pol, ok := readBackupPolicy(backupPolicyFile); ok {
+	if pol, ok := ReadPolicy(PolicyFile); ok {
 		if policy, said := retentionFromPolicy(pol); said {
 			return policy
 		}
 	}
 	policy := backups.DefaultRetention()
-	if st, _, err := openStore(); err == nil {
+	if st, err := openLocalStore(configPath); err == nil {
 		if days := cluster.LoadBackupRetentionDays(ctx, st); days > 0 {
 			policy.KeepDays = days
 		}
@@ -143,10 +151,10 @@ func localRetentionPolicy(ctx context.Context) backups.Retention {
 // retentionFromPolicy maps a node policy onto the retention policy, and reports
 // whether the policy said anything about retention at all.
 //
-// A policy file written before backup_retention_days reached the installer has
-// no retention_days field, and that is not the same statement as "keep nothing":
-// it means "unknown", so the caller keeps looking.
-func retentionFromPolicy(pol backupPolicy) (backups.Retention, bool) {
+// A policy file written before backup_retention_days reached the installer has no
+// retention_days field, and that is not the same statement as "keep nothing": it
+// means "unknown", so the caller keeps looking.
+func retentionFromPolicy(pol Policy) (backups.Retention, bool) {
 	policy := backups.DefaultRetention()
 	if pol.RetentionDays <= 0 {
 		return policy, false
@@ -155,7 +163,8 @@ func retentionFromPolicy(pol backupPolicy) (backups.Retention, bool) {
 	return policy, true
 }
 
-func isOff(v string) bool {
+// IsOff interprets the several spellings of "off" a settings value may carry.
+func IsOff(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
 	case "false", "0", "no", "off":
 		return true
@@ -163,13 +172,13 @@ func isOff(v string) bool {
 	return false
 }
 
-// keepLocalMode answers how much history this node keeps on its own disk:
-// "dense" (the whole window, the default), "minimal" (one artifact per stack), or
-// "none" (nothing — the store and the bucket are the copies). The last value is
-// spelled "none"/"off"/"false"/"0".
-func keepLocalMode() string {
+// KeepLocalMode answers how much history this node keeps on its own disk: "dense"
+// (the whole window, the default), "minimal" (one artifact per stack), or "none"
+// (nothing — the store and the bucket are the copies). The last value is spelled
+// "none"/"off"/"false"/"0".
+func KeepLocalMode() string {
 	raw := ""
-	if pol, ok := readBackupPolicy(backupPolicyFile); ok && pol.KeepLocal != "" {
+	if pol, ok := ReadPolicy(PolicyFile); ok && pol.KeepLocal != "" {
 		raw = pol.KeepLocal
 	} else {
 		raw = os.Getenv("PMCLUSTER_BACKUP_KEEP_LOCAL")
@@ -182,4 +191,29 @@ func keepLocalMode() string {
 	default:
 		return "dense"
 	}
+}
+
+// openLocalStore reads this node's control-plane database WITHOUT creating one.
+// An empty data.db on a node that was never initialised is exactly what every
+// uninitialised-node guard exists to catch, so a package that wants to read a
+// setting must not be able to seed one.
+func openLocalStore(configPath string) (*store.Store, error) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("load config: %w", err)
+	}
+	if _, err := os.Stat(cfg.DBPath()); err != nil {
+		return nil, fmt.Errorf("no control-plane database at %s yet: %w", cfg.DBPath(), err)
+	}
+	return store.Open(cfg.DBPath())
+}
+
+// EnvOrDefault is os.Getenv with a fallback, for the install-time knobs that are
+// environment-only by design (a credential passed through the environment must
+// not travel on a command line, where /proc makes it world-readable).
+func EnvOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

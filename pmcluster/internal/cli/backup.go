@@ -18,6 +18,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -140,7 +141,7 @@ fleet mid-cutover those are the only backups that exist.
 		// The same resolution the hourly agent uses, so an operator pruning by
 		// hand cannot delete history the agent was told to keep (or keep what it
 		// would have deleted). The flags override it for this run only.
-		policy := localRetentionPolicy(cmd.Context())
+		policy := nodeunits.LocalRetentionPolicy(cmd.Context(), configPath)
 		flags := cmd.Flags()
 		if flags.Changed("keep-hours") {
 			policy.KeepHours, _ = flags.GetInt("keep-hours")

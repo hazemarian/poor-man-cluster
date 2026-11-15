@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"strconv"
 	"strings"
 )
@@ -248,7 +248,7 @@ func installWatchdog(out io.Writer, exe, dataDir, dockerSocket string) {
 		if string(existing) == u.body {
 			continue
 		}
-		if err := writeUnitFn(u.path, []byte(u.body), 0o644); err != nil {
+		if err := nodeunits.WriteUnit(u.path, []byte(u.body), 0o644); err != nil {
 			fmt.Fprintf(out, "  ⚠ health watchdog not installed: %v\n", err)
 			return
 		}
@@ -258,7 +258,7 @@ func installWatchdog(out io.Writer, exe, dataDir, dockerSocket string) {
 		fmt.Fprintf(out, "→ installed health watchdog units %s, %s\n", servicePath, timerPath)
 	}
 	for _, args := range [][]string{{"daemon-reload"}, {"enable", "pmcluster-watchdog.timer"}, {"restart", "pmcluster-watchdog.timer"}} {
-		if err := systemctlFn(args...); err != nil {
+		if err := nodeunits.Systemctl(args...); err != nil {
 			fmt.Fprintf(out, "  ⚠ health watchdog may not run: systemctl %s: %v\n", strings.Join(args, " "), err)
 			return
 		}
@@ -271,23 +271,10 @@ func installWatchdog(out io.Writer, exe, dataDir, dockerSocket string) {
 // root (see ensureDaemonRunning's SUDO_USER fallback). Overridable in tests.
 var rootDataDir = "/root/.pmcluster"
 
-// systemctlFn runs a systemctl subcommand (sudo-prefixed when not root).
-// Overridable in tests to avoid touching the real init system.
-var systemctlFn = systemctlSudo
-
-// hostOS is the platform the daemon would run on. Overridable in tests to
-// exercise the Linux systemd flow on any host.
-var hostOS = runtime.GOOS
-
-// hasSystemctl reports whether systemctl exists on PATH. Overridable in tests.
-var hasSystemctl = func() bool {
-	_, err := exec.LookPath("systemctl")
-	return err == nil
-}
-
-// writeUnitFn writes the systemd unit file. Defaults to writeFileSudo (direct
-// when root, sudo-tee otherwise); overridable in tests to avoid sudo.
-var writeUnitFn = writeFileSudo
+// The systemd seams (systemctl, the unit writer, the host OS, the systemctl
+// probe) live in internal/nodeunits, because the backup agent's six units and the
+// daemon's own unit must be installed through the same three calls and stubbed by
+// the same tests.
 
 // daemonExecStart returns the ExecStart command the systemd unit runs. The
 // daemon is the `serve` subcommand — the unit must never run the bare binary
@@ -312,11 +299,11 @@ func ensureDaemonRunning(out io.Writer) error {
 		fmt.Fprintln(out, "  (PMCLUSTER_SKIP_DAEMON set — start the daemon with: pmcluster serve)")
 		return nil
 	}
-	if hostOS != "linux" {
+	if nodeunits.HostOS != "linux" {
 		fmt.Fprintln(out, "  (non-Linux host — start the daemon with: pmcluster serve)")
 		return nil
 	}
-	if !hasSystemctl() {
+	if !nodeunits.HasSystemctl() {
 		fmt.Fprintln(out, "  (systemctl not found — start the daemon with: pmcluster serve)")
 		return nil
 	}
@@ -381,7 +368,7 @@ func ensureDaemonRunning(out io.Writer) error {
 	// Write the unit only when missing or changed (operator edits win).
 	existing, _ := os.ReadFile(daemonUnitPath)
 	if string(existing) != unit {
-		if err := writeUnitFn(daemonUnitPath, []byte(unit), 0o644); err != nil {
+		if err := nodeunits.WriteUnit(daemonUnitPath, []byte(unit), 0o644); err != nil {
 			return fmt.Errorf("write %s: %w", daemonUnitPath, err)
 		}
 		fmt.Fprintf(out, "→ installed systemd unit %s (user %s, group %s)\n", daemonUnitPath, pmUser, group)
@@ -405,11 +392,11 @@ func ensureDaemonRunning(out io.Writer) error {
 	}
 
 	for _, args := range [][]string{{"daemon-reload"}, {"enable", "pmcluster"}} {
-		if err := systemctlFn(args...); err != nil {
+		if err := nodeunits.Systemctl(args...); err != nil {
 			return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
 		}
 	}
-	if err := systemctlFn("restart", "pmcluster"); err != nil {
+	if err := nodeunits.Systemctl("restart", "pmcluster"); err != nil {
 		return fmt.Errorf("systemctl restart pmcluster: %w", err)
 	}
 	fmt.Fprintln(out, "→ pmcluster daemon started via systemd (pmcluster serve)")
@@ -434,35 +421,7 @@ func ensureDaemonRunning(out io.Writer) error {
 	// Removing the offen agent before the agent is live would leave the node
 	// with no working backup at all.
 	if os.Getenv("PMCLUSTER_BACKUP_AGENT") != "" {
-		return ensureBackupAgentInstalled(out)
-	}
-	return nil
-}
-
-// writeFileSudo writes a file, prefixing sudo when the current process is not
-// root (systemd unit lives under /etc).
-func writeFileSudo(path string, data []byte, mode os.FileMode) error {
-	if os.Geteuid() == 0 {
-		return os.WriteFile(path, data, mode)
-	}
-	cmd := exec.Command("sudo", "tee", path)
-	cmd.Stdin = strings.NewReader(string(data))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("sudo tee %s: %w (%s)", path, err, strings.TrimSpace(string(out)))
-	}
-	_ = exec.Command("sudo", "chmod", fmt.Sprintf("%o", mode), path).Run()
-	return nil
-}
-
-// systemctlSudo runs a systemctl subcommand, prefixing sudo when not root.
-func systemctlSudo(args ...string) error {
-	argv := append([]string{"systemctl"}, args...)
-	if os.Geteuid() != 0 {
-		argv = append([]string{"sudo"}, argv...)
-	}
-	cmd := exec.Command(argv[0], argv[1:]...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("%s: %w (%s)", strings.Join(argv, " "), err, strings.TrimSpace(string(out)))
+		return nodeunits.EnsureBackupAgent(out, configPath)
 	}
 	return nil
 }
@@ -473,10 +432,10 @@ func systemctlSudo(args ...string) error {
 // foreground daemon (or a non-systemd host) gets a hint and the purge proceeds.
 // Never fatal.
 func stopDaemon(out io.Writer) {
-	if hostOS != "linux" || !hasSystemctl() {
+	if nodeunits.HostOS != "linux" || !nodeunits.HasSystemctl() {
 		return
 	}
-	if err := systemctlFn("stop", "pmcluster"); err != nil {
+	if err := nodeunits.Systemctl("stop", "pmcluster"); err != nil {
 		fmt.Fprintf(out, "  ⚠ could not stop the daemon: %v (continue — re-run purge after stopping it manually if resources reappear)\n", err)
 		return
 	}

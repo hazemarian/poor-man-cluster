@@ -1,4 +1,4 @@
-package cli
+package nodeunits
 
 import (
 	"errors"
@@ -13,10 +13,10 @@ func TestCanonicalAgentBinaryPrefersTheInstallPath(t *testing.T) {
 	existing := func(string) (os.FileInfo, error) { return nil, nil }
 	missing := func(string) (os.FileInfo, error) { return nil, errors.New("not found") }
 
-	if got := canonicalAgentBinary("/usr/local/bin/pmcluster.new", existing); got != canonicalAgentPath {
-		t.Fatalf("existing install path: got %q, want %q", got, canonicalAgentPath)
+	if got := CanonicalAgentBinary("/usr/local/bin/pmcluster.new", existing); got != CanonicalAgentPath {
+		t.Fatalf("existing install path: got %q, want %q", got, CanonicalAgentPath)
 	}
-	if got := canonicalAgentBinary("/opt/pmcluster", missing); got != "/opt/pmcluster" {
+	if got := CanonicalAgentBinary("/opt/pmcluster", missing); got != "/opt/pmcluster" {
 		t.Fatalf("no install path: got %q, want the invoked path", got)
 	}
 }

@@ -1,4 +1,4 @@
-package cli
+package nodeunits
 
 import (
 	"os"
@@ -17,23 +17,23 @@ func TestPolicyFileDrivesTheDecision(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pol, ok := readBackupPolicy(path)
+	pol, ok := ReadPolicy(path)
 	if !ok {
 		t.Fatal("policy file not read")
 	}
 	at := func(h, m int) time.Time { return time.Date(2026, 11, 4, h, m, 0, 0, time.Local) }
 
-	if d := decisionFromPolicy(pol, at(2, 0)); !d.Due || !d.Enabled || d.Store || !d.Offsite {
+	if d := DecisionFromPolicy(pol, at(2, 0)); !d.Due || !d.Enabled || d.Store || !d.Offsite {
 		t.Fatalf("02:00 decision %+v", d)
 	}
-	if d := decisionFromPolicy(pol, at(3, 0)); d.Due {
+	if d := DecisionFromPolicy(pol, at(3, 0)); d.Due {
 		t.Fatalf("03:00 must not be due: %+v", d)
 	}
 }
 
 func TestDisabledPolicyNeverRuns(t *testing.T) {
-	pol := backupPolicy{Enabled: "false", Cron: "* * * * *"}
-	d := decisionFromPolicy(pol, time.Now())
+	pol := Policy{Enabled: "false", Cron: "* * * * *"}
+	d := DecisionFromPolicy(pol, time.Now())
 	if d.Enabled || d.Due {
 		t.Fatalf("disabled policy still due: %+v", d)
 	}
@@ -49,7 +49,7 @@ func TestPolicyFileCarriesTheRetentionWindow(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	pol, ok := readBackupPolicy(path)
+	pol, ok := ReadPolicy(path)
 	if !ok {
 		t.Fatal("policy file not read")
 	}
@@ -71,7 +71,7 @@ func TestPolicyFileCarriesTheRetentionWindow(t *testing.T) {
 // That is not the same statement as "keep for zero days", and it must not be
 // read as one — the agent keeps looking (the setting, then the default).
 func TestPolicyWithoutRetentionIsUnknownNotZero(t *testing.T) {
-	for name, pol := range map[string]backupPolicy{
+	for name, pol := range map[string]Policy{
 		"field absent":   {Enabled: "true", Cron: "0 * * * *"},
 		"field zero":     {Enabled: "true", Cron: "0 * * * *", RetentionDays: 0},
 		"field negative": {Enabled: "true", Cron: "0 * * * *", RetentionDays: -4},
@@ -97,7 +97,7 @@ func TestDefaultRetentionIsThreeDays(t *testing.T) {
 }
 
 func TestMissingPolicyFileIsNotAnError(t *testing.T) {
-	if _, ok := readBackupPolicy(filepath.Join(t.TempDir(), "nope.conf")); ok {
+	if _, ok := ReadPolicy(filepath.Join(t.TempDir(), "nope.conf")); ok {
 		t.Fatal("a missing file must report absent, not empty")
 	}
 }
