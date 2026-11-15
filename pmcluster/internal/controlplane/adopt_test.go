@@ -12,7 +12,7 @@ import (
 
 	"github.com/rs/zerolog"
 
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -54,28 +54,56 @@ func pinClock(t *testing.T, at time.Time) {
 	t.Cleanup(func() { Now = prev })
 }
 
-// publishKeyConfig puts the cluster's key into a key config on the fake swarm, named the way
-// Snapshot names it so newestSnapshot finds it.
-func publishKeyConfig(t *testing.T, dc *fakeClient, key []byte) {
+// writeKeyFile puts a key where a manager expects it: <data dir>/.encryption_key. This is the
+// only place a cluster's key lives now (ADR 0006) — there is no config to publish.
+func writeKeyFile(t *testing.T, dir string, key []byte) {
 	t.Helper()
-	name := KeyNamePrefix + "_00000000000000000001"
-	if err := dc.ConfigCreate(context.Background(), runtime.ConfigSpec{
-		Name: name,
-		Data: key,
-		Labels: map[string]string{
-			ManagedLabel:    "true",
-			LabelKind:       KindKey,
-			LabelSnapshotAt: time.Now().Format(time.RFC3339Nano),
-			LabelVersion:    "test",
-		},
-	}); err != nil {
-		t.Fatalf("create key config: %v", err)
+	if err := os.WriteFile(filepath.Join(dir, ".encryption_key"), key, 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
 	}
 }
 
+// storeWithSecret writes a secret encrypted under key, so "does this key open this store?"
+// has something real to answer. The clause that matters: a secret's ciphertext is only
+// meaningful next to the key that produced it.
+func storeWithSecret(t *testing.T, dir string, key []byte, value string) *store.Store {
+	t.Helper()
+	ctx := context.Background()
+	writeKeyFile(t, dir, key)
+	cipher, err := credentials.Open(filepath.Join(dir, ".encryption_key"))
+	if err != nil {
+		t.Fatalf("open cipher: %v", err)
+	}
+	st, err := store.Open(filepath.Join(dir, "data.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	payload, err := cipher.Encrypt([]byte(value))
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+	if _, err := st.CreateSecret(ctx, "cluster", "", "offsite-key", payload, store.SecretHash(value)); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
+	}
+	if err := st.ApplySnapshot(ctx, &store.Snapshot{
+		Version: 2, GeneratedAt: time.Now().Unix() - 60,
+		Tables: map[string]store.TableData{
+			"cluster_settings": {Columns: []string{"key", "value"}, Types: []string{"TEXT", "TEXT"}, Rows: [][]any{{"domain", "example.test"}}},
+		},
+	}, "leader-1", time.Now().Unix()-30); err != nil {
+		t.Fatalf("ApplySnapshot: %v", err)
+	}
+	if err := st.ConfirmMirrorSync(ctx, time.Now().Unix()); err != nil {
+		t.Fatalf("ConfirmMirrorSync: %v", err)
+	}
+	return st
+}
+
 func TestAdoptOnLeadership_StandaloneIsItsOwnSource(t *testing.T) {
-	// No Docker: a standalone box has no peer and no mirror, and it has always served.
-	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
+	// Standalone: no swarm, so no peer and no mirror, and it has always served. It is also
+	// the one case where a nil store is allowed — there is nothing to verify against.
+	kit := &Kit{DataDir: t.TempDir(), Standalone: true, Log: zerolog.Nop()}
 	adoption, err := kit.AdoptOnLeadership(context.Background(), nil, false)
 	if err != nil {
 		t.Fatalf("AdoptOnLeadership: %v", err)
@@ -90,7 +118,7 @@ func TestAdoptOnLeadership_FirstLeaderHasNothingToVouchFor(t *testing.T) {
 	// process) IS the source. Refusing here would make bootstrapping impossible.
 	st, _ := newMirrorStore(t, "leader-1", 1, time.Now())
 	pinClock(t, time.Now())
-	kit := &Kit{Docker: newFake(), DataDir: t.TempDir(), Log: zerolog.Nop()}
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
 
 	// Clear the mirror: this node has never applied a snapshot.
 	if _, err := st.DB().Exec(`DELETE FROM sync_state`); err != nil {
@@ -116,7 +144,7 @@ func TestAdoptOnLeadership_EmptyStoreRefuses(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	pinClock(t, time.Now())
-	kit := &Kit{Docker: newFake(), DataDir: t.TempDir(), Log: zerolog.Nop()}
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
 
 	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
 	if err == nil {
@@ -139,7 +167,7 @@ func TestAdoptOnLeadership_NeverMirroredButHoldingStateIsTheSource(t *testing.T)
 		t.Fatalf("clear sync_state: %v", err)
 	}
 	pinClock(t, time.Now())
-	kit := &Kit{Docker: newFake(), DataDir: t.TempDir(), Log: zerolog.Nop()}
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
 
 	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
 	if err != nil {
@@ -154,7 +182,7 @@ func TestAdoptOnLeadership_FreshMirrorIsReady(t *testing.T) {
 	now := time.Now()
 	st, _ := newMirrorStore(t, "leader-1", 7, now.Add(-10*time.Second))
 	pinClock(t, now)
-	kit := &Kit{Docker: newFake(), DataDir: t.TempDir(), Log: zerolog.Nop()}
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
 
 	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
 	if err != nil {
@@ -176,7 +204,7 @@ func TestAdoptOnLeadership_StaleMirrorIsServedAndSaysSo(t *testing.T) {
 	st, _ := newMirrorStore(t, "wafaa", 4, now.Add(-10*time.Minute))
 	pinClock(t, now)
 	var buf bytes.Buffer
-	kit := &Kit{Docker: newFake(), DataDir: t.TempDir(), Log: zerolog.New(&buf)}
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.New(&buf)}
 
 	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
 	if err != nil {
@@ -209,7 +237,7 @@ func TestAdoptOnLeadership_ServesTheStoreItAlreadyHas(t *testing.T) {
 		t.Fatalf("stat: %v", err)
 	}
 
-	kit := &Kit{Docker: newFake(), DataDir: dir, Log: zerolog.Nop()}
+	kit := &Kit{DataDir: dir, Log: zerolog.Nop()}
 	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
 	if err != nil || !adoption.Ready {
 		t.Fatalf("AdoptOnLeadership = %+v, %v", adoption, err)
@@ -241,78 +269,96 @@ func TestAdoptOnLeadership_ServesTheStoreItAlreadyHas(t *testing.T) {
 	}
 }
 
-func TestAdoptOnLeadership_RefusesAForeignKey(t *testing.T) {
+// The key is proven by decrypting what the store holds. Comparing bytes against a published
+// config — what this used to do — was a proxy; a wrong key and a right one are indistinguishable
+// by name, and only the ciphertext knows.
+func TestAdoptOnLeadership_ForeignKeyIsReported(t *testing.T) {
 	now := time.Now()
-	st, dir := newMirrorStore(t, "leader-1", 2, now.Add(-5*time.Second))
 	pinClock(t, now)
-	// The node holds a DIFFERENT key from the cluster's: every secret ciphertext it
-	// mirrored was written with the other one.
-	if err := os.WriteFile(filepath.Join(dir, ".encryption_key"), []byte("ffffffffffffffffffffffffffffffff"), 0o600); err != nil {
-		t.Fatal(err)
+	dir := t.TempDir()
+	st := storeWithSecret(t, dir, []byte(clusterKey), "s3cr3t-offsite")
+	// The node holds a DIFFERENT key: every secret ciphertext it mirrors was written with
+	// the other one.
+	foreign := []byte("ffffffffffffffffffffffffffffffff")
+	writeKeyFile(t, dir, foreign)
+	cipher, err := credentials.OpenExisting(filepath.Join(dir, ".encryption_key"))
+	if err != nil {
+		t.Fatalf("open foreign cipher: %v", err)
 	}
-	dc := newFake()
-	publishKeyConfig(t, dc, []byte(clusterKey))
 
-	kit := &Kit{Docker: dc, DataDir: dir, Log: zerolog.Nop()}
+	kit := &Kit{DataDir: dir, Cipher: cipher, Log: zerolog.Nop()}
 	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
 	if err != nil {
 		t.Fatalf("a foreign key must be reported, not turned into a refusal: %v", err)
 	}
-	if adoption.KeyOK || !strings.Contains(adoption.KeyProblem, "differs") {
-		t.Errorf("adoption = %+v, want KeyProblem naming the mismatch", adoption)
+	if adoption.KeyOK || !strings.Contains(adoption.KeyProblem, "do not decrypt") {
+		t.Errorf("adoption = %+v, want KeyProblem naming the secrets that do not decrypt", adoption)
+	}
+	if !strings.Contains(adoption.KeyProblem, ".encryption_key") {
+		t.Errorf("KeyProblem does not name the file to fix: %q", adoption.KeyProblem)
 	}
 }
 
-func TestAdoptOnLeadership_RefusesAMissingLocalKeyWhenTheClusterHasOne(t *testing.T) {
+func TestAdoptOnLeadership_MissingKeyFileIsReported(t *testing.T) {
 	now := time.Now()
-	st, dir := newMirrorStore(t, "leader-1", 2, now.Add(-5*time.Second))
 	pinClock(t, now)
-	dc := newFake()
-	publishKeyConfig(t, dc, []byte(clusterKey))
+	dir := t.TempDir()
+	st := storeWithSecret(t, dir, []byte(clusterKey), "s3cr3t-offsite")
+	if err := os.Remove(filepath.Join(dir, ".encryption_key")); err != nil {
+		t.Fatalf("remove key: %v", err)
+	}
 
-	kit := &Kit{Docker: dc, DataDir: dir, Log: zerolog.Nop()}
+	kit := &Kit{DataDir: dir, Log: zerolog.Nop()}
 	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
 	if err != nil {
 		t.Fatalf("a missing key must be reported, not turned into a refusal: %v", err)
 	}
-	if adoption.KeyOK || !strings.Contains(adoption.KeyProblem, "no local encryption key") {
-		t.Errorf("adoption = %+v, want KeyProblem about the missing key", adoption)
+	if adoption.KeyOK || !strings.Contains(adoption.KeyProblem, "no encryption key at") {
+		t.Errorf("adoption = %+v, want KeyProblem about the missing key file", adoption)
+	}
+	if !strings.Contains(adoption.KeyProblem, "copy it") {
+		t.Errorf("KeyProblem does not tell the operator what to do: %q", adoption.KeyProblem)
 	}
 }
 
 func TestAdoptOnLeadership_MatchingKeyIsReady(t *testing.T) {
 	now := time.Now()
-	st, dir := newMirrorStore(t, "leader-1", 2, now.Add(-5*time.Second))
 	pinClock(t, now)
-	if err := os.WriteFile(filepath.Join(dir, ".encryption_key"), []byte(clusterKey), 0o600); err != nil {
-		t.Fatal(err)
+	dir := t.TempDir()
+	st := storeWithSecret(t, dir, []byte(clusterKey), "s3cr3t-offsite")
+	cipher, err := credentials.OpenExisting(filepath.Join(dir, ".encryption_key"))
+	if err != nil {
+		t.Fatalf("open cipher: %v", err)
 	}
-	dc := newFake()
-	publishKeyConfig(t, dc, []byte(clusterKey))
 
-	kit := &Kit{Docker: dc, DataDir: dir, Log: zerolog.Nop()}
+	kit := &Kit{DataDir: dir, Cipher: cipher, Log: zerolog.Nop()}
 	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
 	if err != nil || !adoption.Ready || !adoption.KeyOK {
 		t.Fatalf("AdoptOnLeadership = %+v, %v", adoption, err)
 	}
 }
 
-func TestAdoptOnLeadership_NoKeyConfigIsNotARefusal(t *testing.T) {
-	// A cluster that has never published a key config has no key to disagree with. Refusing
-	// here would make this check the thing that stops a bootstrap.
+func TestAdoptOnLeadership_StoreWithoutSecretsHasNothingToDisagreeWith(t *testing.T) {
+	// A cluster with no secrets yet has no ciphertext to prove anything against. Reporting a
+	// key problem here would make every bootstrap look broken.
 	now := time.Now()
-	st, _ := newMirrorStore(t, "leader-1", 2, now.Add(-5*time.Second))
+	st, dir := newMirrorStore(t, "leader-1", 2, now.Add(-5*time.Second))
 	pinClock(t, now)
-	kit := &Kit{Docker: newFake(), DataDir: t.TempDir(), Log: zerolog.Nop()}
+	writeKeyFile(t, dir, []byte(clusterKey))
+	cipher, err := credentials.OpenExisting(filepath.Join(dir, ".encryption_key"))
+	if err != nil {
+		t.Fatalf("open cipher: %v", err)
+	}
 
+	kit := &Kit{DataDir: dir, Cipher: cipher, Log: zerolog.Nop()}
 	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
-	if err != nil || !adoption.Ready {
+	if err != nil || !adoption.Ready || !adoption.KeyOK {
 		t.Fatalf("AdoptOnLeadership = %+v, %v", adoption, err)
 	}
 }
 
 func TestAdoptOnLeadership_NoStoreIsAnError(t *testing.T) {
-	kit := &Kit{Docker: newFake(), DataDir: t.TempDir(), Log: zerolog.Nop()}
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
 	if _, err := kit.AdoptOnLeadership(context.Background(), nil, true); err == nil {
 		t.Fatal("AdoptOnLeadership accepted a nil store")
 	}
@@ -324,7 +370,7 @@ func TestAdoptOnLeadership_ClockBehindIsNotNegativeAge(t *testing.T) {
 	now := time.Now()
 	st, _ := newMirrorStore(t, "leader-1", 2, now.Add(30*time.Second))
 	pinClock(t, now)
-	kit := &Kit{Docker: newFake(), DataDir: t.TempDir(), Log: zerolog.Nop()}
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
 
 	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
 	if err != nil || !adoption.Ready {

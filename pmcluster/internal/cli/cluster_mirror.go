@@ -61,9 +61,13 @@ func runClusterMirrorVerify(cmd *cobra.Command, _ []string) error {
 
 	// The key is not part of the mirror, so it is asked for here: a node holding the
 	// cluster's ciphertext but not the key that opens it would promote a leader that 500s
-	// on every secret read.
-	cipher, cipherErr := credentials.Open(cfg.EncryptionKeyPath())
+	// on every secret read. OpenExisting, never Open — a verify that MINTS a key would
+	// report "has a key" for a node that has none, and leave a key file behind as a souvenir.
+	cipher, cipherErr := credentials.OpenExisting(cfg.EncryptionKeyPath())
 	hasKey := cipherErr == nil && cipher != nil
+	if !hasKey && cipherErr != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: %v\n", cipherErr)
+	}
 
 	rep, err := clustersnapshot.Verify(cmd.Context(), st, hasKey, time.Now())
 	if err != nil {

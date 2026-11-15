@@ -783,8 +783,10 @@ mirroring the cluster's state, so it keeps serving that store and becomes the
 writer (ADR 0005). The check decides only whether there is anything to serve — a
 node that has never applied a snapshot AND whose store holds no cluster state
 refuses, loudly, and starts no control loop; a STALE mirror is served and the
-version and age are logged. The encryption key is compared with its own config
-(`pmcluster_state_key_<ts>`) and a mismatch is a warning, not a refusal. While the
+version and age are logged. The encryption key is checked by DECRYPTING what the store
+holds (a bounded sample of secrets) and a key that does not open them is a warning, not a
+refusal: ending up with no leader over a key the operator is about to copy into place is
+the wrong trade. While the
 check runs, `adoptionGate` answers 503 + `Retry-After: 1` for every route but
 `/health` (`internal/noderuntime/adoptgate.go`).
 
@@ -797,10 +799,13 @@ so a promoted leader reads the manifest behind its live stack pointer and contin
 the version counter instead of restarting it. The steady state is a 304 (no body);
 a changed poll is a few megabytes of JSON, accepted.
 
-The leader publishes exactly one Docker config family: the encryption KEY
-(`pmcluster_state_key_<ts>`, `kit.PublishKey` on promotion and on `kit.KeyLoop`'s
-5-minute tick, keeping 2). The data kit (`pmcluster_state_<ts>`) is retired and
-never written.
+The platform writes NO Docker config: the data kit (`pmcluster_state_<ts>`) is retired,
+the control-plane archive is deleted, and the key config (`pmcluster_state_key_<ts>`)
+went with it (ADR 0006). The cipher key is the file `<data dir>/.encryption_key`, minted
+once at `cluster init`, never rotated, copied by the operator today and delivered by the join
+route when it lands. Two consequences worth knowing: a node that already has `data.db` never MINTS a
+key (`credentials.OpenExisting`, so a forgotten copy fails loudly instead of silently
+poisoning new secrets), and `cluster update` no longer has a key publish step to fail.
 
 ### Upgrading the platform
 Push a `v*` tag → `release.yml` cross-compiles 4 tarballs + SHA256SUMS +

@@ -65,7 +65,10 @@ copied, the Docker-config path has no remaining job:
    with it. A node that has never mirrored but DOES hold state is the cluster's source (the
    first leader after `cluster up`): it adopts itself.
 
-6. **The key keeps its config for now.** The key is still read from `pmcluster_state_key_*`
+6. ~~**The key keeps its config for now.**~~ **Superseded by ADR 0006**: the key config is
+   deleted; the key is a file delivered by the join route (or copied by hand) and proven by
+   decrypting stored secrets. What follows is the original reasoning, kept for the history.
+   The key was still read from `pmcluster_state_key_*`
    and compared with the local key file; a mismatch is reported (adoption WARN, `cluster
    mirror verify` problem), never a second way to end up with no leader. The join-time key
    route replaces this in a separate step.

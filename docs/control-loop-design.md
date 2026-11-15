@@ -97,8 +97,10 @@ Startup says the same thing without copying: `noderuntime.ConfirmMirrorAtStartup
 reports the leader, version and age it holds, or that it is waiting for the first
 snapshot. A manager with no data yet starts, serves `/health` and says why.
 
-**The one Docker config family left is the key.** `kit.PublishKey` writes
-`pmcluster_state_key_<ts>` on promotion and on a 5-minute loop, keeping two; the
-data kit `pmcluster_state_<ts>` is never written again, and the control-plane
-backup archive (`pmcluster-ctlplane-*.tar.gz`) is deleted with its service and its
-restore path — backups are service volumes only.
+**No Docker config is written at all.** The data kit `pmcluster_state_<ts>` went with
+the mirror, the control-plane backup archive (`pmcluster-ctlplane-*.tar.gz`) went with
+its service and its restore path — backups are service volumes only — and the key
+config `pmcluster_state_key_<ts>` went last (ADR 0006). The cipher key is a file,
+`<data dir>/.encryption_key`, minted once at `cluster init` and never rotated; it
+reaches the other managers through the join route, or by an operator copying it. A key
+that does not change needs somewhere to live, not a delivery channel.

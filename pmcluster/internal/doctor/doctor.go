@@ -64,7 +64,7 @@ type Input struct {
 	Docker runtime.Client
 	Store  *store.Store
 	Cipher *credentials.Cipher
-	// DataDir is the daemon's data dir (the key config is read from the swarm,
+	// DataDir is the daemon's data dir (the key FILE is read from here,
 	// the drill extracts to a temp dir).
 	DataDir string
 	// Version is the running binary version, the reference for skew.

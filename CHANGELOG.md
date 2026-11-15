@@ -3,6 +3,30 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — the key config is gone; the key is a file
+
+**Why:** v0.2.345 deleted the data kit but left one Docker config behind — the encryption key,
+republished on promotion and every five minutes, pruned to two — to move 32 bytes that are
+minted once and never rotate. It was the last thing contradicting "no platform secrets in
+Docker configs", and it existed only to answer a question the store can answer directly.
+
+- **The key is `<data dir>/.encryption_key`.** `PublishKey`, `KeyLoop`, `newestKey`,
+  `ErrNoKeyConfig`, the prune, the label family and the `PMCLUSTER_CONTROLPLANE_SNAPSHOT_INTERVAL`
+  interval are deleted; `internal/controlplane` keeps the adoption check and the two paths
+  (ADR 0006). The platform now writes **no Docker config at all**.
+- **A node with `data.db` never mints a key.** `credentials.OpenExisting` fails instead of
+  creating one. This is the property the design rests on: `loadOrCreateKey` would have let a
+  manager that never received the key invent one silently and encrypt every new secret with
+  material no other manager holds.
+- **The key is proven by decrypting, not by comparing.** On a leadership gain the node decrypts
+  a bounded sample of its secrets with the loaded cipher; a key that opens none is a WARN naming
+  the file (and `doctor` reports it), never a refusal — no leader is a worse outcome than a
+  leader that cannot read its secrets, and the file is a copy away from fixed.
+
+The join route (`POST /internal/api/join/key`, swarm mTLS) is still the plan for delivering it
+automatically; until it lands an operator copies the file, and every message that mentions the
+key names its path so the copy is obvious.
+
 ## v0.2.345 — cluster state travels by pull, and nothing of the platform lives in a config
 
 **Why:** the control plane left Docker configs last release series (ADR 0003, slices 1–3) but

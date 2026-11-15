@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -169,10 +170,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	// One Kit per daemon: it is the object that remembers which snapshot this
-	// node published, so a leadership gain cannot re-extract this node's own
-	// state. Created even when Docker is unavailable (the Kit then no-ops).
-	kit := &controlplane.Kit{Docker: dc, DataDir: cfg.DataDir, Log: log}
+	// One Kit per daemon: it answers the leadership-gain question about this node's
+	// own store. Docker being unavailable is what "standalone" means here — a box with
+	// no swarm has no peers and no mirror, so it is its own source.
+	kit := &controlplane.Kit{DataDir: cfg.DataDir, Standalone: dc == nil, Log: log}
 
 	// Every daemon describes its OWN node: the OTel collector is a single
 	// leader-pinned task and hostmetrics can only read its own host, so the only
@@ -397,13 +398,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// mirroring, and the leadership watcher below decides — with the mirror's age in
 		// hand — whether it may vouch for it before it becomes the writer.
 
-		// First publication as leader: the KEY config only. The data kit is retired —
-		// the mirror is the document, so a promoted manager has nothing to fetch from a
-		// Docker config (ADR 0005).
-		if err := kit.PublishKey(cmd.Context()); err != nil {
-			log.Warn().Err(err).Msg("initial control-plane key publish had issues")
-		}
-
+		// Nothing is published here any more. The data kit went with ADR 0005 and the
+		// key config with ADR 0006: the key is a file, delivered by the join route or
+		// copied by the operator. This daemon writes no platform config at all.
 		checkConfigVersions(cmd.Context(), dc, log)
 	}
 
@@ -448,10 +445,14 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 
-	cipher, cipherErr := credentials.Open(cfg.EncryptionKeyPath())
+	// A node that already has a database must not MINT a key: it would encrypt every new
+	// secret with a key no other manager holds, and the mirrored ciphertext would be
+	// undecryptable here forever (ADR 0006). Only a genuinely fresh node creates one.
+	cipher, cipherErr := openNodeCipher(cfg)
 	if cipherErr != nil {
-		log.Warn().Err(cipherErr).Msg("encryption key not available; /webhook/* disabled")
+		log.Warn().Err(cipherErr).Msg("encryption key not available; /webhook/* disabled and the leadership gate will report a key problem")
 	}
+	kit.Cipher = cipher
 
 	// The in-cluster SeaweedFS store, when enabled (seaweedfs_admin credential
 	// present), holds the newest backup copies, so reads — failover restore,
@@ -723,13 +724,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 					continue
 				}
 
-				if err := kit.PublishKey(ctx); err != nil {
-					log.Warn().Err(err).Msg("control-plane key publish on leadership gain had issues")
-				}
 				var loopCtx context.Context
 				loopCtx, loopCancel = context.WithCancel(ctx)
 				go reconciler.Loop(loopCtx)
-				go kit.KeyLoop(loopCtx, controlPlaneKeyInterval())
 			} else {
 				log.Info().Msg("control loop: stopped (not the swarm leader)")
 			}
@@ -805,21 +802,20 @@ func checkConfigVersions(ctx context.Context, dc runtime.Client, log zerolog.Log
 	}
 }
 
-// controlPlaneKeyInterval returns how often the leader re-checks its encryption key and
-// publishes it into a Raft-replicated Docker config. Defaults to
-// controlplane.KeyPublishInterval; the PMCLUSTER_CONTROLPLANE_SNAPSHOT_INTERVAL env var
-// (seconds) still overrides it — the name is kept because the e2e harness sets it and the
-// cadence it controls is the same one (a key rotation instead of a data snapshot).
-func controlPlaneKeyInterval() time.Duration {
-	raw := os.Getenv("PMCLUSTER_CONTROLPLANE_SNAPSHOT_INTERVAL")
-	if raw == "" {
-		return controlplane.KeyPublishInterval
+// openNodeCipher opens this node's encryption key, minting one ONLY when the node has no
+// database yet.
+//
+// The distinction is the whole point of ADR 0006. `credentials.Open` creates a key when the
+// file is missing, which is right exactly once in a cluster's life: at `cluster init`, and
+// on a fresh node joining with nothing to serve. On a node that already holds data.db it is
+// catastrophic and silent — a new key would encrypt the secrets written from then on with
+// material no other manager has, and the check that could have caught it (comparing against
+// the published key config) is what this release deleted.
+func openNodeCipher(cfg *config.Config) (*credentials.Cipher, error) {
+	if _, err := os.Stat(filepath.Join(cfg.DataDir, "data.db")); err == nil {
+		return credentials.OpenExisting(cfg.EncryptionKeyPath())
 	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return controlplane.KeyPublishInterval
-	}
-	return time.Duration(n) * time.Second
+	return credentials.Open(cfg.EncryptionKeyPath())
 }
 
 // reconcileIntervalSeconds reads the persisted reconcile_interval setting

@@ -310,15 +310,6 @@ func TestWatchSwarmLeadership_SwarmWorkerStandsByIdle(t *testing.T) {
 	}
 }
 
-// noConfigDocker is a runtime.Client that answers the config list with nothing: a swarm
-// that has never published a control-plane key config. Every other method is the embedded
-// nil interface, which is fine because nothing here calls one.
-type noConfigDocker struct{ runtime.Client }
-
-func (noConfigDocker) ConfigList(context.Context, string, string) ([]string, error) {
-	return nil, nil
-}
-
 // confirmCfg is a config whose data dir optionally holds a store.
 func confirmCfg(t *testing.T) *config.Config {
 	t.Helper()
@@ -423,7 +414,7 @@ func TestAdoptOnLeadershipGain_ServesAStaleMirrorAndSaysSo(t *testing.T) {
 
 	logs := &logCapture{}
 	gate := &AdoptionGate{}
-	kit := &controlplane.Kit{Docker: noConfigDocker{}, DataDir: cfg.DataDir, Log: logs.logger()}
+	kit := &controlplane.Kit{DataDir: cfg.DataDir, Log: logs.logger()}
 	if ready := AdoptOnLeadershipGain(ctx, kit, st, gate, true, logs.logger()); !ready {
 		t.Fatal("AdoptOnLeadershipGain refused a stale mirror, which the operator decided is served")
 	}
@@ -449,7 +440,7 @@ func TestAdoptOnLeadershipGain_EmptyStoreRefusesAndStartsNothing(t *testing.T) {
 
 	logs := &logCapture{}
 	gate := &AdoptionGate{}
-	kit := &controlplane.Kit{Docker: noConfigDocker{}, DataDir: cfg.DataDir, Log: logs.logger()}
+	kit := &controlplane.Kit{DataDir: cfg.DataDir, Log: logs.logger()}
 	if ready := AdoptOnLeadershipGain(ctx, kit, st, gate, true, logs.logger()); ready {
 		t.Fatal("AdoptOnLeadershipGain said ready for an empty store that has never mirrored")
 	}
@@ -481,7 +472,7 @@ func TestAdoptOnLeadershipGain_FreshMirrorIsReady(t *testing.T) {
 	}
 
 	gate := &AdoptionGate{}
-	kit := &controlplane.Kit{Docker: noConfigDocker{}, DataDir: cfg.DataDir, Log: zerolog.Nop()}
+	kit := &controlplane.Kit{DataDir: cfg.DataDir, Log: zerolog.Nop()}
 	if ready := AdoptOnLeadershipGain(ctx, kit, st, gate, true, zerolog.Nop()); !ready {
 		t.Fatal("AdoptOnLeadershipGain refused a mirror confirmed ten seconds ago")
 	}

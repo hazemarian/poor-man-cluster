@@ -1,12 +1,12 @@
 package controlplane
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/clustersnapshot"
@@ -100,8 +100,8 @@ var Now = time.Now
 // mirrored reports whether THIS process ran the mirror loop before the transition. It
 // separates "never a follower" from "a follower whose polls never landed".
 func (k *Kit) AdoptOnLeadership(ctx context.Context, st *store.Store, mirrored bool) (Adoption, error) {
-	if k.Docker == nil {
-		// Standalone/local: no swarm, no peer, no mirror. This node is its own source.
+	if k.Standalone {
+		// No swarm, no peer, no mirror. This node is its own source.
 		return Adoption{Ready: true, Source: true, Reason: "standalone: this node is its own source"}, nil
 	}
 	if st == nil {
@@ -159,12 +159,13 @@ func (k *Kit) AdoptOnLeadership(ctx context.Context, st *store.Store, mirrored b
 		}
 	}
 
-	if err := k.checkClusterKey(ctx); err != nil {
-		// A warning, never a refusal: the key route is the next decision, and ending up
-		// with no leader over a key the operator is about to replace is the wrong trade.
+	if err := k.checkLocalKey(ctx, st); err != nil {
+		// A warning, never a refusal: ending up with no leader over a key the operator is
+		// about to copy into place is the wrong trade. Saying it loudly is what makes the
+		// copy happen before the next failover.
 		adoption.KeyProblem = err.Error()
 		log.Warn().Err(err).
-			Msg("this node's encryption key is not the cluster's: secret ciphertext it mirrors cannot be decrypted until the key route lands")
+			Msg("this node's encryption key is not the cluster's: the secret ciphertext it mirrors cannot be decrypted until it holds the right key file")
 	} else {
 		adoption.KeyOK = true
 	}
@@ -179,30 +180,47 @@ func (k *Kit) AdoptOnLeadership(ctx context.Context, st *store.Store, mirrored b
 	return adoption, nil
 }
 
-// checkClusterKey proves this node holds the key the cluster's ciphertext was written with.
+// checkLocalKey proves this node's key is the one the cluster's ciphertext was written
+// with — by decrypting what the store actually holds.
 //
-// The key still lives in its own Docker config (`pmcluster_state_key_*`) — the security
-// split from ADR 0003 — and this reads it rather than adopting a file: the join-time key
-// route is the next decision, not this one. A cluster that has never published a key config
-// has nothing to disagree with, and a swarm that cannot be read right now is not evidence of
-// a wrong key; both answer nil.
-func (k *Kit) checkClusterKey(ctx context.Context) error {
-	name, published, err := k.newestKey(ctx)
-	switch {
-	case errors.Is(err, ErrNoKeyConfig):
-		return nil
-	case err != nil:
-		if IsSwarmUnavailable(err) {
-			return nil
-		}
-		return fmt.Errorf("read the cluster's key config: %w", err)
+// There is no config to compare against any more (ADR 0006 deleted it), and comparing bytes
+// was only ever a proxy for this question anyway. A bounded sample is enough: one secret that
+// opens proves the key, and the check runs on a leadership gain where "all 200 secrets" would
+// be work nobody asked for. A store with no secrets has nothing to disagree with.
+//
+// A missing cipher is NOT a key problem to report here — a node with no key file has no
+// cipher either, and the first branch names the file the operator has to copy.
+func (k *Kit) checkLocalKey(ctx context.Context, st *store.Store) error {
+	if _, err := os.Stat(k.KeyPath()); err != nil {
+		return fmt.Errorf("no encryption key at %s: copy it from the node that initialised the cluster (same path), or the join route delivers it on the next start — secrets mirrored here cannot be decrypted without it", k.KeyPath())
 	}
-	local, err := os.ReadFile(k.KeyPath())
+	if k.Cipher == nil {
+		return fmt.Errorf("the key at %s could not be loaded", k.KeyPath())
+	}
+	rows, err := st.ListSecrets(ctx, "", "")
 	if err != nil {
-		return fmt.Errorf("no local encryption key at %s: the mirrored secret ciphertext cannot be decrypted without it", k.KeyPath())
+		return fmt.Errorf("list secrets to check the key: %w", err)
 	}
-	if !bytes.Equal(local, published) {
-		return fmt.Errorf("the local encryption key differs from %s", name)
+	if len(rows) == 0 {
+		return nil
+	}
+	const sampleSize = 4
+	if len(rows) > sampleSize {
+		rows = rows[:sampleSize]
+	}
+	var broken []string
+	for _, meta := range rows {
+		row, err := st.Secret(ctx, meta.Name)
+		if err != nil {
+			return fmt.Errorf("read secret %s to check the key: %w", meta.Name, err)
+		}
+		if _, err := k.Cipher.Decrypt(row.Payload); err != nil {
+			broken = append(broken, meta.Name)
+		}
+	}
+	if len(broken) > 0 {
+		return fmt.Errorf("%d of %d sampled secret(s) do not decrypt with this node's key (%s): the file at %s is not the cluster's",
+			len(broken), len(rows), strings.Join(broken, ", "), k.KeyPath())
 	}
 	return nil
 }
