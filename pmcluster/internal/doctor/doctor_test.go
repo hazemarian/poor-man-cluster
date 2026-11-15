@@ -303,10 +303,16 @@ func TestBackupCoverageFlagsDataOutsideTheBackupPath(t *testing.T) {
 	if c.Status != StatusFail {
 		t.Fatalf("status = %q, want fail (%s)", c.Status, c.Detail)
 	}
-	for _, want := range []string{"shop", "not a storage node", "never archived"} {
+	for _, want := range []string{"shop", "not a storage node"} {
 		if !strings.Contains(c.Detail, want) {
 			t.Errorf("detail %q does not mention %q", c.Detail, want)
 		}
+	}
+	// No row means no history, never "never archived": the agent records its
+	// artifacts as sidecars on the node that took them, and `abbas` had a fresh
+	// hourly artifact with no row at all.
+	if strings.Contains(c.Detail, "never archived") {
+		t.Errorf("detail claims a stack was never archived from a missing row: %q", c.Detail)
 	}
 }
 
@@ -336,5 +342,28 @@ func TestBackupCoverageIsGreenWhenArchived(t *testing.T) {
 	c := checkBackupCoverage(ctx, Input{Docker: dc, Store: st})
 	if c.Status != StatusOK {
 		t.Fatalf("status = %q, want ok (%s)", c.Status, c.Detail)
+	}
+}
+
+// A stack on a storage node with no backup row is NOT reported: the leader cannot
+// see another node's archive directory, and "no row" is not "no archive".
+func TestBackupCoverageDoesNotInferFromMissingRows(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.SetSetting(ctx, cluster.SettingStorageNodes(), "nxt-sw-1-m"); err != nil {
+		t.Fatalf("setting: %v", err)
+	}
+	dc := backupCovDocker{
+		svcs:   []runtime.Service{{ID: "s1", Name: "shop_web"}},
+		mounts: map[string][]runtime.Mount{"s1": {{Type: "volume", Source: "shop_data", Target: "/data"}}},
+		cons:   map[string][]string{"s1": {"node.hostname == nxt-sw-1-m"}},
+	}
+	c := checkBackupCoverage(ctx, Input{Docker: dc, Store: st})
+	if c.Status != StatusOK {
+		t.Fatalf("status = %q, want ok — a stack on a storage node without a row is unknown, not unbacked (%s)", c.Status, c.Detail)
 	}
 }

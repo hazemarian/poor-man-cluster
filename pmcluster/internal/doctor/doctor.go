@@ -875,16 +875,27 @@ func checkBackupCoverage(ctx context.Context, in Input) Check {
 		}
 	}
 
+	// What this check may and may not claim:
+	//
+	//   - It CAN know where a stack's data lives, and whether that node is part of
+	//     the storage set. That is structural and always answerable.
+	//   - It CANNOT know, from the leader, what every storage node has archived:
+	//     the agent writes a sidecar next to each artifact on the node that took
+	//     it, and only some runs end up as rows here. Measured 2026-11-15: `abbas`
+	//     had a fresh hourly artifact and no row at all, so "no row" is not "no
+	//     archive". Claiming it would have made this check cry wolf on nine
+	//     stacks and taught the operator to ignore it.
+	//
+	// So staleness is asserted only where a history exists, and "never archived"
+	// is never asserted from the database.
 	var outside, stale []string
 	for stackName, node := range pinned {
 		if node != "" && !storage[node] {
 			outside = append(outside, stackName+" on "+node+" (not a storage node)")
 		}
 		at := newest[stackName]
-		if at == 0 {
-			stale = append(stale, stackName+" (never archived)")
-		} else if now.Sub(time.Unix(at, 0)) > backupCoverageWindow {
-			stale = append(stale, fmt.Sprintf("%s (last archive %s)", stackName,
+		if at > 0 && now.Sub(time.Unix(at, 0)) > backupCoverageWindow {
+			stale = append(stale, fmt.Sprintf("%s (last recorded archive %s)", stackName,
 				time.Unix(at, 0).UTC().Format("2006-01-02")))
 		}
 	}
