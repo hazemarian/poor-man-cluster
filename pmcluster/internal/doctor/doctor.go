@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodever"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -111,6 +113,7 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 	add(checkCollectorExposure(ctx, in))
 	add(checkNodeLabels(ctx, in))
 	add(checkPlacementPins(ctx, in))
+	add(checkBackupCoverage(ctx, in))
 	add(checkSkew(ctx, in))
 	add(checkKit(ctx, in))
 	add(checkSecrets(ctx, in))
@@ -786,4 +789,125 @@ func hostnameConstraint(c string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(parts[1]), true
+}
+
+// backupCoverageWindow is how stale an archive may be before a stack's data is
+// considered unprotected. The agent keeps 48 hours hour-by-hour, so a gap wider
+// than that means the pipeline stopped, not that the window was unlucky.
+const backupCoverageWindow = 48 * time.Hour
+
+// checkBackupCoverage answers "can this stack's data actually be recovered?".
+//
+// Two ways a stack holding a volume ends up with no recoverable copy, both of
+// which used to be silent:
+//
+//  1. Its data sits on a node that is NOT a storage node. The snapshot disk, the
+//     hourly agent and the archive all live with the storage nodes, so a stack
+//     pinned anywhere else has never been backed up — and nothing said so.
+//     Measured on nextrum-landing (2026-11-15): pinned to nxt-sw-2-m, outside the
+//     storage set, zero archives ever, and the node then left the swarm.
+//  2. No archive has been recorded for it inside the retention window, which is
+//     what a stopped agent looks like from the control plane.
+//
+// Platform stacks are exempt: their volumes (the SeaweedFS store, the collector's
+// queue) are infrastructure the platform places deliberately, not customer data.
+func checkBackupCoverage(ctx context.Context, in Input) Check {
+	const name = "backup coverage"
+	if in.Docker == nil || in.Store == nil {
+		return Check{Name: name, Status: StatusSkip, Detail: "needs a runtime handle and the control-plane store"}
+	}
+	svcs, err := in.Docker.ServiceList(ctx)
+	if err != nil {
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "could not list services (" + err.Error() + "), so coverage was not checked"}
+	}
+	storage := map[string]bool{}
+	for _, n := range stacks.ParseStorageNodes(in.Store.SettingDefault(ctx, cluster.SettingStorageNodes(), "")) {
+		storage[n] = true
+	}
+	platform := map[string]bool{
+		string(cluster.StackInfra): true, string(cluster.StackEdge): true,
+		string(cluster.StackObservability): true, string(cluster.StackBackup): true,
+		string(cluster.StackSSO): true,
+	}
+
+	// stack -> node it is pinned to, for stacks that hold a volume.
+	pinned := map[string]string{}
+	for _, svc := range svcs {
+		stackName := stackOfService(svc.Name)
+		if platform[stackName] {
+			continue
+		}
+		ins, ierr := in.Docker.ServiceInspect(ctx, svc.ID)
+		if ierr != nil || len(ins.Mounts) == 0 {
+			continue
+		}
+		for _, c := range ins.Constraints {
+			if host, ok := hostnameConstraint(c); ok {
+				pinned[stackName] = host
+			}
+		}
+		if _, ok := pinned[stackName]; !ok {
+			pinned[stackName] = "" // holds a volume, no node pin
+		}
+	}
+	if len(pinned) == 0 {
+		return Check{Name: name, Status: StatusSkip, Detail: "no application stack holds a volume"}
+	}
+
+	// Newest recorded archive per stack.
+	newest := map[string]int64{}
+	rows, lerr := in.Store.ListBackups(ctx, 2000)
+	if lerr != nil {
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "could not read the backup records (" + lerr.Error() + "), so coverage was not checked"}
+	}
+	now := in.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	for _, b := range rows {
+		if b.Status != "succeeded" || !b.StackName.Valid {
+			continue
+		}
+		if b.StartedAt > newest[b.StackName.String] {
+			newest[b.StackName.String] = b.StartedAt
+		}
+	}
+
+	var outside, stale []string
+	for stackName, node := range pinned {
+		if node != "" && !storage[node] {
+			outside = append(outside, stackName+" on "+node+" (not a storage node)")
+		}
+		at := newest[stackName]
+		if at == 0 {
+			stale = append(stale, stackName+" (never archived)")
+		} else if now.Sub(time.Unix(at, 0)) > backupCoverageWindow {
+			stale = append(stale, fmt.Sprintf("%s (last archive %s)", stackName,
+				time.Unix(at, 0).UTC().Format("2006-01-02")))
+		}
+	}
+	sort.Strings(outside)
+	sort.Strings(stale)
+	if len(outside) > 0 || len(stale) > 0 {
+		var parts []string
+		if len(outside) > 0 {
+			parts = append(parts, "data outside the backup path — the snapshot disk and the hourly agent live on storage nodes, so these stacks have never been archived: "+strings.Join(outside, "; "))
+		}
+		if len(stale) > 0 {
+			parts = append(parts, "no archive in 48h: "+strings.Join(stale, "; "))
+		}
+		return Check{Name: name, Status: StatusFail, Detail: strings.Join(parts, ". ")}
+	}
+	return Check{Name: name, Status: StatusOK,
+		Detail: fmt.Sprintf("%d stack(s) hold a volume, all inside the backup path with an archive in the last 48h", len(pinned))}
+}
+
+// stackOfService turns "nextrum-landing_web" into "nextrum-landing".
+func stackOfService(serviceName string) string {
+	if i := strings.Index(serviceName, "_"); i > 0 {
+		return serviceName[:i]
+	}
+	return serviceName
 }

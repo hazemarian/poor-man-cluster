@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -261,4 +262,79 @@ func doctorStore(t *testing.T) *store.Store {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	return st
+}
+
+// backupCovDocker answers the two reads the coverage check makes, and panics on
+// anything else via the nil embedded interface.
+type backupCovDocker struct {
+	runtime.Client
+	svcs   []runtime.Service
+	mounts map[string][]runtime.Mount
+	cons   map[string][]string
+}
+
+func (d backupCovDocker) ServiceList(context.Context) ([]runtime.Service, error) { return d.svcs, nil }
+
+func (d backupCovDocker) ServiceInspect(_ context.Context, id string) (runtime.ServiceInspectResult, error) {
+	return runtime.ServiceInspectResult{
+		ID: id, Image: "img", Mounts: d.mounts[id], Constraints: d.cons[id],
+	}, nil
+}
+
+// A stack holding a volume but pinned outside the storage set has never been
+// archived: the snapshot disk and the hourly agent live with the storage nodes.
+// nextrum-landing lived this way for its whole life and nothing said so.
+func TestBackupCoverageFlagsDataOutsideTheBackupPath(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.SetSetting(ctx, cluster.SettingStorageNodes(), "nxt-sw-1-m"); err != nil {
+		t.Fatalf("setting: %v", err)
+	}
+	dc := backupCovDocker{
+		svcs:   []runtime.Service{{ID: "s1", Name: "shop_web"}},
+		mounts: map[string][]runtime.Mount{"s1": {{Type: "volume", Source: "shop_data", Target: "/data"}}},
+		cons:   map[string][]string{"s1": {"node.hostname == nxt-sw-2-m"}},
+	}
+	c := checkBackupCoverage(ctx, Input{Docker: dc, Store: st})
+	if c.Status != StatusFail {
+		t.Fatalf("status = %q, want fail (%s)", c.Status, c.Detail)
+	}
+	for _, want := range []string{"shop", "not a storage node", "never archived"} {
+		if !strings.Contains(c.Detail, want) {
+			t.Errorf("detail %q does not mention %q", c.Detail, want)
+		}
+	}
+}
+
+// A stack on a storage node with a fresh archive is covered.
+func TestBackupCoverageIsGreenWhenArchived(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	defer func() { _ = st.Close() }()
+	if err := st.SetSetting(ctx, cluster.SettingStorageNodes(), "nxt-sw-1-m"); err != nil {
+		t.Fatalf("setting: %v", err)
+	}
+	id, cerr := st.CreateBackup(ctx, "shop", 0)
+	if cerr != nil {
+		t.Fatalf("CreateBackup: %v", cerr)
+	}
+	if ferr := st.FinishBackup(ctx, id, "succeeded", "archive.tar.gz", ""); ferr != nil {
+		t.Fatalf("FinishBackup: %v", ferr)
+	}
+	dc := backupCovDocker{
+		svcs:   []runtime.Service{{ID: "s1", Name: "shop_web"}},
+		mounts: map[string][]runtime.Mount{"s1": {{Type: "volume", Source: "shop_data", Target: "/data"}}},
+		cons:   map[string][]string{"s1": {"node.hostname == nxt-sw-1-m"}},
+	}
+	c := checkBackupCoverage(ctx, Input{Docker: dc, Store: st})
+	if c.Status != StatusOK {
+		t.Fatalf("status = %q, want ok (%s)", c.Status, c.Detail)
+	}
 }
