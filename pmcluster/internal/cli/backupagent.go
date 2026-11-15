@@ -19,6 +19,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Defaults for a host-side run. They match the paths the platform already
@@ -372,6 +373,10 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 		},
+		// Report each archived stack to the leader the moment it is confirmed on
+		// every destination. Same swarm mTLS channel the node's own stats use: no
+		// token, no published port, and the leader is the only writer of the row.
+		Report: backupReportSender(),
 	}
 	// One stack on request: the operator asked for THIS stack, so the run is
 	// narrowed before anything is frozen. An unknown name is an error, not an
@@ -824,5 +829,26 @@ func pruneRemoteLegs(ctx context.Context, out io.Writer, policy backups.Retentio
 		} else if del > 0 {
 			fmt.Fprintf(out, "%s control-plane retention: deleted %d, kept %d\n", t.Label, del, kept)
 		}
+	}
+}
+
+// backupReportSender posts an artifact record to the leader over the swarm mTLS
+// node channel. Nil when no docker client can be opened: a node that cannot talk
+// to the leader still backs up, and its sidecars remain the fallback record.
+func backupReportSender() func(ctx context.Context, rec store.ArtifactRecord) error {
+	dc, err := docker.New()
+	if err != nil {
+		return nil
+	}
+	sender := nodeReportSender(dc)
+	if sender == nil {
+		return nil
+	}
+	return func(ctx context.Context, rec store.ArtifactRecord) error {
+		body, merr := json.Marshal(rec)
+		if merr != nil {
+			return merr
+		}
+		return sender.PostJSON(ctx, backups.RecordPath, body)
 	}
 }

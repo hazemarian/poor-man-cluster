@@ -3,6 +3,7 @@ package stacks
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
@@ -119,20 +120,35 @@ func TestResolvePlacement_Precedence(t *testing.T) {
 		}
 	})
 
-	t.Run("Explicit placement never rewritten", func(t *testing.T) {
+	t.Run("Explicit placement on a storage node is never rewritten", func(t *testing.T) {
 		r := &PinResolver{StorageNodes: []string{"s1"}}
 		ir := testIR("app",
-			st("db", []string{"data"}, "explicit-host"),
+			st("db", []string{"data"}, "s1"),
 			st("worker", []string{"jobs"}, "worker"),
 			st("api", []string{"cache"}, "manager"))
 		if err := r.ResolvePlacement(ctx, "app", ir); err != nil {
 			t.Fatal(err)
 		}
-		if ir.Services[0].Placement != "explicit-host" {
+		if ir.Services[0].Placement != "s1" {
 			t.Fatalf("explicit placement clobbered: %q", ir.Services[0].Placement)
 		}
 		if ir.Services[1].Placement != "worker" || ir.Services[2].Placement != "manager" {
 			t.Fatalf("role placements clobbered: %q %q", ir.Services[1].Placement, ir.Services[2].Placement)
+		}
+	})
+
+	// A volume on a node outside the storage set is outside the backup path, and
+	// the translation refuses it rather than discovering it when the node leaves
+	// the swarm and the data goes with it.
+	t.Run("Explicit placement outside the storage set is refused", func(t *testing.T) {
+		r := &PinResolver{StorageNodes: []string{"s1"}}
+		ir := testIR("app", st("db", []string{"data"}, "explicit-host"))
+		err := r.ResolvePlacement(ctx, "app", ir)
+		if err == nil {
+			t.Fatalf("accepted a volume on %q; want a refusal naming the storage nodes", ir.Services[0].Placement)
+		}
+		if !strings.Contains(err.Error(), "not a storage node") {
+			t.Fatalf("error %q does not explain the rule", err)
 		}
 	})
 
@@ -319,10 +335,11 @@ func TestResolvePlacementKeepsALivePin(t *testing.T) {
 
 // An explicit placement in the DSL is the operator's promise about WHERE. When
 // the node is gone the platform says so (doctor) instead of quietly relocating
-// the workload to somewhere it was excluded from.
+// the workload to somewhere it was excluded from — provided the node it names is
+// a storage node, which is the one thing a volume is allowed to require.
 func TestResolvePlacementNeverRewritesAnExplicitPlacement(t *testing.T) {
 	r := &PinResolver{
-		StorageNodes: []string{"nxt-sw-1-m"},
+		StorageNodes: []string{"nxt-sw-1-m", "nxt-sw-2-m"},
 		StackPin:     func(context.Context, string) (string, error) { return "", nil },
 		SetStackPin:  func(context.Context, string, string) error { return nil },
 		LiveNodes:    func(context.Context) (map[string]bool, error) { return map[string]bool{"nxt-sw-1-m": true}, nil },

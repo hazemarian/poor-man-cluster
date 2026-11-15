@@ -60,6 +60,11 @@ type PinResolver struct {
 	// OnRelocate is told about a pin rewritten away from a node that is gone, so
 	// the operator learns it from the log rather than from a Pending task.
 	OnRelocate func(ctx context.Context, stackName, from, to string)
+
+	// Exempt names stacks that may hold a volume outside the storage set — the
+	// platform's own (the object store, the collector's queue). Customer stacks
+	// may not: their data would sit where no snapshot disk and no agent exist.
+	Exempt map[string]bool
 }
 
 // SetStorageNodes live-replaces the storage-node list. Called by the daemon's
@@ -105,12 +110,43 @@ func (r *PinResolver) ResolvePlacement(ctx context.Context, appName string, ir *
 			live = m
 		}
 	}
+	storageSet := map[string]bool{}
+	for _, n := range r.storageNodes() {
+		storageSet[n] = true
+	}
 	for i := range ir.Services {
 		s := &ir.Services[i]
-		if s.Placement != "" || len(s.Volumes) == 0 {
-			continue // explicit placement, or nothing to pin
+		if len(s.Volumes) == 0 {
+			continue // stateless: any node will do
+		}
+		// A stack that holds a volume may only run on a storage node. That is not
+		// a preference: the snapshot disk, the hourly agent and the archive all live
+		// with the storage nodes, so data placed anywhere else is data outside the
+		// backup path — and it stays there silently until the node leaves the swarm
+		// (nextrum-landing, 2026-11-15: zero archives ever, database gone).
+		if s.Placement != "" {
+			if !r.onAStorageNode(appName, s.Placement, storageSet) {
+				return fmt.Errorf("service %s/%s holds a volume but is placed on %q, which is not a storage node; a stack's data can only live where the snapshot disk and the backup agent are (storage_nodes: %s)",
+					appName, s.Name, s.Placement, strings.Join(r.storageNodes(), ","))
+			}
+			continue // explicit placement, inside the storage set
 		}
 		node := r.resolve(appName, pin)
+		if node != "" && !r.onAStorageNode(appName, node, storageSet) {
+			// Outside the storage set: move it to a live storage node, and make it
+			// stick, for the same reason a dead-node pin is re-pinned.
+			if to := r.liveNode(appName, live); to != "" {
+				if r.SetStackPin != nil {
+					if serr := r.SetStackPin(ctx, appName, to); serr != nil {
+						return fmt.Errorf("re-pin %s from %s to %s: %w", appName, node, to, serr)
+					}
+				}
+				if r.OnRelocate != nil {
+					r.OnRelocate(ctx, appName, node, to)
+				}
+				node = to
+			}
+		}
 		if node != "" && live != nil && !live[node] {
 			// The pin names a node that is not in the swarm. Rewrite it only when
 			// the platform made it — an explicit placement in the DSL is the
@@ -327,4 +363,22 @@ func (s *Service) StoragePinsForStack(ctx context.Context, stackName string) ([]
 		return nil, fmt.Errorf("re-translate %s: %w", stackName, err)
 	}
 	return s.Pins.StoragePins(ctx, stackName, built)
+}
+
+// onAStorageNode reports whether node is an acceptable home for a stack that
+// holds a volume.
+//
+// Three cases pass: role placements ("manager"/"worker") describe a class rather
+// than a node; an empty storage set means the platform has no storage nodes to
+// compare against, so the resolver cannot judge and does not invent a refusal;
+// and the platform's own stacks are exempt because their volumes are
+// infrastructure it places deliberately.
+func (r *PinResolver) onAStorageNode(stackName, node string, storage map[string]bool) bool {
+	if node == "" || node == "manager" || node == "worker" {
+		return true
+	}
+	if r.Exempt[stackName] || len(storage) == 0 {
+		return true
+	}
+	return storage[node]
 }

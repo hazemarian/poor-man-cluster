@@ -486,6 +486,9 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 			return live, nil
 		},
+		// The platform's own stacks hold volumes deliberately outside the storage
+		// set (the object store lives on a worker); customer stacks may not.
+		Exempt: platformStackSet(),
 		OnRelocate: func(ctx context.Context, stackName, from, to string) {
 			log.Warn().Str("stack", stackName).Str("from", from).Str("to", to).
 				Msg("placement — pinned to a node that is not in the swarm; moved to a live storage node (the data did not follow: restore it from the stack's archive)")
@@ -1014,5 +1017,15 @@ func nodePolicyLoop(ctx context.Context, cfg *config.Config, log zerolog.Logger)
 		case <-tick.C:
 			applyNodePolicyOnce(ctx, cfg, log)
 		}
+	}
+}
+
+// platformStackSet is the set of stacks the platform deploys itself: their volumes
+// are infrastructure, not customer data, so the storage-node rule does not apply.
+func platformStackSet() map[string]bool {
+	return map[string]bool{
+		string(cluster.StackInfra): true, string(cluster.StackEdge): true,
+		string(cluster.StackObservability): true, string(cluster.StackBackup): true,
+		string(cluster.StackSSO): true,
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth/swarmtls"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/clustersnapshot"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodereport"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
@@ -182,6 +183,14 @@ func startAssignmentListener(ctx context.Context, o assignmentListenerOptions) {
 		// State only. The sample's telemetry half was already exported by the node that
 		// took it, straight to the collector, so nothing here republishes it: this handler
 		// writes the current value the panel reads and stops there.
+	}))
+	// Artifact records: a node's backup agent telling the leader "this stack is
+	// archived, here is the artifact and where its copies live". Written by the run
+	// itself, after the last destination confirmed the object — not by a scan that
+	// only happens when somebody opens the backups page.
+	mux.Handle(backups.RecordPath, verifier.Middleware(&backups.RecordService{
+		Store: o.Store,
+		Log:   log.With().Str("component", "backup-record").Logger(),
 	}))
 	// The cluster snapshot: the read half of the pull-based replication that replaces
 	// writing settings into docker configs (pmcluster/docs/adr/0003-cluster-state-by-pull.md).

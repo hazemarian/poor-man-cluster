@@ -180,6 +180,9 @@ func openDeploySvc(cmd *cobra.Command) (*stacks.Service, *store.Store, func(), e
 			}
 			return live, nil
 		},
+		// The platform's own stacks hold volumes deliberately outside the storage
+		// set (the object store lives on a worker); customer stacks may not.
+		Exempt: platformStackSet(),
 		OnRelocate: func(_ context.Context, stackName, from, to string) {
 			log.Warn().Str("stack", stackName).Str("from", from).Str("to", to).
 				Msg("placement — pinned to a node that is not in the swarm; moved to a live storage node (the data did not follow)")

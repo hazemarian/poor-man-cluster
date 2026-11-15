@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // fakeSnap is a Snapshotter whose behaviour each test steers. It records the
@@ -698,5 +699,50 @@ func TestUnplannedDirsIgnoresLostAndFound(t *testing.T) {
 	}
 	if got := UnplannedDirs(root, Plan{Stacks: []StackPlan{{Name: "app"}}}); len(got) != 0 {
 		t.Fatalf("UnplannedDirs = %v, want none (lost+found is a filesystem artefact)", got)
+	}
+}
+
+// TestRunReportsEachArchivedStackAndSkipsEmptyOnes pins the record-at-run-time
+// contract: the row is written by the run, after the artifact is confirmed on
+// every destination, and a stack that had nothing to archive reports nothing as
+// backed up.
+func TestRunReportsEachArchivedStackAndSkipsEmptyOnes(t *testing.T) {
+	root, archive := t.TempDir(), t.TempDir()
+	seedStack(t, root, "horizon-erp", true)
+	// A directory that exists and holds nothing: what an app that has never
+	// written data looks like, and what must not be called a failure.
+	if err := os.MkdirAll(filepath.Join(root, "empty-app", "data"), 0o755); err != nil {
+		t.Fatalf("seed empty stack: %v", err)
+	}
+	a := newAgent(t, root, archive, &fakeSnap{kind: "lvm", usage: 1})
+
+	var got []store.ArtifactRecord
+	a.Report = func(_ context.Context, rec store.ArtifactRecord) error {
+		got = append(got, rec)
+		return nil
+	}
+	res, err := a.Run(context.Background(), Plan{
+		Node:       a.Node,
+		VolumeRoot: root,
+		Stacks:     []StackPlan{{Name: "horizon-erp"}, {Name: "empty-app"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Succeeded() {
+		t.Fatalf("a stack with nothing to archive made the run fail: %+v", res.Stacks)
+	}
+	if len(got) != 1 {
+		t.Fatalf("reported %d records, want 1 (only the stack with an artifact): %+v", len(got), got)
+	}
+	rec := got[0]
+	if rec.Stack != "horizon-erp" || rec.Node != a.Node || rec.Archive == "" {
+		t.Fatalf("record = %+v", rec)
+	}
+	if rec.Files == 0 || rec.Bytes == 0 || rec.SHA256 == "" {
+		t.Errorf("record lacks size/hash: %+v", rec)
+	}
+	if rec.Status != "succeeded" {
+		t.Errorf("status = %q, want succeeded", rec.Status)
 	}
 }

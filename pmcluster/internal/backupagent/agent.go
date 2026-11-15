@@ -62,6 +62,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Prefix is the member prefix inside every artifact.
@@ -234,12 +235,23 @@ type Result struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// Succeeded reports whether every planned stack produced a verified artifact.
+// Succeeded reports whether every planned stack that HAD something to archive
+// produced a verified artifact.
+//
+// A stack with an empty subtree is not a failure: an app that has written nothing
+// yet is not broken, and a stack whose volume lives on another node is a
+// placement question, not a backup error. Both are reported (Empty, plus a run
+// warning) so nobody mistakes "no artifact" for "archived", but neither turns the
+// hourly run red — a check that fails on a healthy empty stack is a check that
+// gets ignored, which is how a real failure hides.
 func (r Result) Succeeded() bool {
 	if r.Error != "" {
 		return false
 	}
 	for _, s := range r.Stacks {
+		if s.Empty {
+			continue
+		}
 		if !s.OK {
 			return false
 		}
@@ -390,6 +402,13 @@ type Agent struct {
 	// Ship, when set, is called per artifact after it is written and
 	// verified: the node uploads its own archives.
 	Ship func(ctx context.Context, archivePath string) ([]string, error)
+
+	// Report tells the control plane that a stack is archived: the artifact, its
+	// size, its hash and where the copies live. Called per stack, AFTER the last
+	// destination confirmed the object, so a record never claims a backup that did
+	// not land. Nil-safe: a node that cannot reach the leader still backs up, and
+	// the sidecar beside the artifact remains the fallback record.
+	Report func(ctx context.Context, rec store.ArtifactRecord) error
 	// Verify inspects one artifact. Nil means VerifyArchive with the default
 	// rules.
 	Verify func(archivePath, stack string) (engine, detail string, err error)
@@ -581,7 +600,9 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 	}
 	freezeSpan.End()
 	res.Snapshot.FrozenAt = a.now().UnixNano()
-	freezeCost := a.now().Sub(freezeStarted)
+	// Measured only so a future implementation of Freeze cannot silently go slow:
+	// today it returns immediately.
+	_ = a.now().Sub(freezeStarted)
 	at := a.now()
 
 	snapDir := ""
@@ -601,8 +622,13 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 	if snapErr != nil {
 		freezeSpan.RecordError(snapErr)
 	}
-	if freezeCost > 2*time.Second || snapCost > 2*time.Second {
-		a.logf("backup-agent: warning: SLOW WINDOW — fsfreeze %s, lvcreate+thaw %s", freezeCost.Round(time.Millisecond), snapCost.Round(time.Millisecond))
+	// Freeze is a no-op by design (see LVMSnapshotter.Freeze: fsfreeze hung a node
+	// for 19 minutes), so the only phase that can be slow is the snapshot itself.
+	// Naming a freeze here would send an operator looking for a stall that cannot
+	// happen and away from the one that can.
+	if snapCost > 2*time.Second {
+		a.logf("backup-agent: warning: SLOW SNAPSHOT — lvcreate+mount took %s (freeze is a no-op; the window is the snapshot)",
+			snapCost.Round(time.Millisecond))
 	}
 	if snapErr != nil {
 		// Deliberately no fallback to tarring the live tree: that is exactly
@@ -672,6 +698,27 @@ func (a *Agent) Run(ctx context.Context, plan Plan) (Result, error) {
 							}
 						}
 					}
+				}
+			}
+			// Tell the control plane now, not when somebody next opens the
+			// backups page: the artifact is on every destination we intended, the
+			// local copies are pruned as configured, and this is the only moment
+			// that knows all of it.
+			if a.Report != nil {
+				rec := store.ArtifactRecord{
+					Stack: st.Stack, Node: a.Node, Archive: st.Archive,
+					Status: "succeeded", Files: st.Files, Bytes: st.Bytes,
+					SHA256: st.SHA256, CreatedAt: at.Unix(),
+				}
+				if !st.OK {
+					rec.Status = "failed"
+					rec.Note = st.Reason
+				} else if st.Verified && st.Engine != "" {
+					rec.Note = fmt.Sprintf("verified (%s): %s", st.Engine, st.Detail)
+				}
+				if rerr := a.Report(ctx, rec); rerr != nil {
+					res.Warnings = append(res.Warnings,
+						fmt.Sprintf("stack %s: shipped but the record did not reach the leader: %v", st.Stack, rerr))
 				}
 			}
 			res.Stacks[len(res.Stacks)-1] = st

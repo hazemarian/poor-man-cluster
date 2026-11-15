@@ -267,3 +267,66 @@ func (s *Store) AttributeUnnamedBackups(ctx context.Context, name func(filename 
 	}
 	return named, nil
 }
+
+// ArtifactRecord is one archived stack as the node that took it reports it.
+//
+// This exists because the table used to be filled by discovery — a scan that ran
+// only when somebody opened the backups page, and that recorded artifacts from the
+// object store without their stack (1639 of 1770 rows on 2026-11-15). The agent
+// knows all of this the moment the upload is confirmed; it should say so then.
+type ArtifactRecord struct {
+	Stack     string `json:"stack"`
+	Node      string `json:"node"`
+	Archive   string `json:"archive"`
+	Status    string `json:"status"`
+	Note      string `json:"note,omitempty"`
+	Files     int    `json:"files"`
+	Bytes     int64  `json:"bytes"`
+	SHA256    string `json:"sha256,omitempty"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// RecordArtifact writes the row for an archive the node just shipped. Idempotent
+// on the filename, so a retry (or discovery running later over the same object)
+// updates the row instead of duplicating it, and a row that lacked its stack
+// gains it.
+func (s *Store) RecordArtifact(ctx context.Context, r ArtifactRecord) error {
+	if r.Archive == "" {
+		return fmt.Errorf("record artifact: empty archive name")
+	}
+	status := r.Status
+	if status == "" {
+		status = "succeeded"
+	}
+	at := r.CreatedAt
+	if at == 0 {
+		at = time.Now().Unix()
+	}
+	var stack any
+	if r.Stack != "" {
+		stack = r.Stack
+	}
+	note := r.Note
+	if note == "" && r.Files > 0 {
+		note = fmt.Sprintf("%d file(s), %d byte(s)", r.Files, r.Bytes)
+	}
+	// INSERT OR IGNORE then UPDATE rather than an upsert: the unique index on
+	// filename is partial (WHERE filename != ''), and SQLite requires a conflict
+	// target to repeat that predicate — a detail that fails at write time, on the
+	// one path that must not fail.
+	if _, err := s.conn().ExecContext(ctx,
+		`INSERT OR IGNORE INTO backups (filename, stack_name, status, archive_paths, error_message, started_at, finished_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		r.Archive, stack, status, r.Archive, note, at, at,
+	); err != nil {
+		return fmt.Errorf("record artifact %s: %w", r.Archive, err)
+	}
+	if _, err := s.conn().ExecContext(ctx,
+		`UPDATE backups SET stack_name = COALESCE(?, stack_name), status = ?, error_message = ?
+		  WHERE filename = ?`,
+		stack, status, note, r.Archive,
+	); err != nil {
+		return fmt.Errorf("record artifact %s: %w", r.Archive, err)
+	}
+	return nil
+}
