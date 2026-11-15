@@ -3,6 +3,41 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — the platform creates paths under the root you chose
+
+**Why:** `cluster up` had one host path that ignored the volume root. It created the
+storage roots and the backup root wherever the operator pointed them, then reached out to
+a hardcoded `/var/stack/nodestat` for the collector's node-stats bind source. On the CI
+runner that is `mkdir /var/stack/nodestat: permission denied`, and it failed `cluster up`
+plus ten downstream real-swarm tests for eight commits — while every other path in the run
+was inside the temp tree the harness had chosen.
+
+- **`NodeStatHostDirFor(root)` derives the directory as a SIBLING of the volume root.**
+  `/var/stack/data` still yields `/var/stack/nodestat`, so no deployed cluster moves and no
+  collected history is abandoned; any other root now yields a path the same user who owns
+  the tree can create. `cluster up` passes `in.VolumeRoot`, `cluster update` passes
+  `render.VolumeRoot` — the value the collector's mount was rendered from, so the mkdir and
+  the bind source cannot disagree.
+- **The same class of defect in the test suite:** `newUpDeps` and `seedUpdateState` stubbed
+  the host-mutating seams without restoring them, so every later test in the package ran
+  against a no-op `ensurePlatformHostDirs`. Two update tests were passing only because of
+  that leak and now stub explicitly. The package is green under `-shuffle=on -count=2`.
+- **`store.Open`'s never-create rule has one owner.** Six call sites hand-rolled the same
+  `os.Stat` guard with four different sentences; `requireInitialised`, `openExistingStore`,
+  `openOrCreateStore` (the two bootstrap exceptions, named) and `store.OpenExisting` now say
+  which one they mean. One behaviour change: an open racing a deleted file refuses instead
+  of recreating an empty database.
+- **The node's loops and its host units leave `internal/cli`** (`noderuntime`, `nodeunits`;
+  ADR 0004). `internal/cli` was 105 files / 26,461 lines of three different jobs — commands,
+  the loops `serve` starts, and the systemd units a node installs on itself. Now 45 files /
+  19,307, and its `-race` suite went 79.8s → 15.4s because the loops took their long waits
+  with them. `internal/cli/boundary_test.go` fails when a name is defined in two of the
+  three packages, or when a runtime entry point reappears in the CLI.
+- **Concurrency tests count waves, not milliseconds.** `TestStacksIndexReads...` failed CI
+  with "took 168ms for two 80ms reads: looks sequential" while both reads were in flight —
+  one descheduling event on a busy runner. The fake gate now counts bursts, so the assertion
+  measures the page instead of the machine.
+
 ## v0.2.327 — collector 0.165.0 (and what the churn actually was)
 
 The filelog receivers are rebuilt ~0.9 times a second, and each rebuild re-emits the tail it
