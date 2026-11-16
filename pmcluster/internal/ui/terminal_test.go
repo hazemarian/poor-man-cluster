@@ -78,6 +78,20 @@ func TestTerminalPageRenders(t *testing.T) {
 			t.Errorf("terminal page missing %q", want)
 		}
 	}
+
+	// xterm is loaded with `defer`, so it runs AFTER the document is parsed — i.e. after an inline
+	// script at the end of <body>. The page's inline block used to read window.Terminal there,
+	// always found it undefined, printed "failed to load" and never opened the websocket: the page
+	// rendered, the server logged the page request, and no handshake ever arrived. It must start on
+	// DOMContentLoaded (deferred scripts run before that event).
+	if !strings.Contains(b, "addEventListener('DOMContentLoaded'") {
+		t.Error("the terminal page starts before its deferred scripts: its inline code must wait for DOMContentLoaded, or xterm is always undefined")
+	}
+	// The rendered URL carries a cache-busting query, so match the attribute pair rather than the
+	// literal tag.
+	if !strings.Contains(b, "xterm.min.js?v=") || !strings.Contains(b, " defer></script>") {
+		t.Error("xterm.min.js is no longer deferred; if that changed deliberately, this test's premise is stale")
+	}
 }
 
 // TestTerminalWSBridge drives the full relay: browser → console WS → daemon

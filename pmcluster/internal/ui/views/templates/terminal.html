@@ -37,7 +37,13 @@
 </main>
 
 <script>
-(function () {
+// WAIT FOR THE DEFERRED SCRIPTS. xterm.min.js and preferences.js are loaded with `defer`, which
+// means they execute AFTER the document is parsed — later than this inline block, which sits at the
+// end of <body> and runs immediately. Reading window.Terminal here always found undefined, showed
+// "the terminal failed to load", and never opened the websocket: the page rendered, the server saw
+// the page request, and no handshake ever arrived. Deferred scripts run before DOMContentLoaded, so
+// that is the correct place to start.
+document.addEventListener('DOMContentLoaded', function () {
   "use strict";
 
   var ws = null;
@@ -127,7 +133,7 @@
   window.addEventListener('resize', function () { fit(); });
 
   connect();
-})();
+});
 </script>
 </body>
 </html>
