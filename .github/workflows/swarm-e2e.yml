@@ -33,8 +33,39 @@ on:
 
 jobs:
   swarm-e2e:
-    name: cluster up + deploy + webhook e2e (real swarm)
+    # ONE JOB PER GROUP, not one job for the suite.
+    #
+    # The whole tier in a single runner meant one red test cost the other thirty their result, a
+    # leaked stack from an earlier test poisoned a later one, and the run took six minutes because
+    # every swarm test waited behind every other. Split by subject on isolated runners: each group
+    # gets a fresh swarm, a failure names its subject, and the wall clock is the slowest group
+    # instead of the sum.
+    #
+    # `run` is a -run regex: adding a test to an existing file needs no workflow change, and a test
+    # that belongs to no group shows up as "no tests to run" on the group that claims it rather
+    # than silently not running at all.
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: e2e — environment, smoke, tokens
+            run: 'TestE2EEnvironment|TestSmoke|TestTokenRegex'
+          - name: e2e — cluster up
+            run: 'TestClusterUp|TestSetupWizardClusterUp|TestNoControlPlaneConfigE2E'
+          - name: e2e — deploy, webhook, configs and secrets
+            run: 'TestDeployPipeline|TestWebhookE2E|TestSecretsConfigsE2E'
+          - name: e2e — control loop and observability
+            run: 'TestControlLoopE2E|TestObservabilityAlertsE2E|TestE2EFilelogAttributionAndSkip'
+          - name: e2e — backups and restore
+            run: 'TestBackupAgent|TestBackupRestoreE2E'
+          - name: e2e — edge and standalone
+            run: 'TestEdgeCombined|TestEdgeRateLimit|TestEdgeOutsideCluster|TestSetupWizardNoSSO|TestSetupWizardFallback|TestRemoteCLIStandalone'
+          - name: e2e — install script
+            run: 'TestInstallScript'
+          - name: e2e — terminal exec
+            run: 'TestTerminalExecE2E'
     env:
       # Pin where docker stores registry credentials so the e2e harness
       # (which runs pmcluster with HOME=<temp>) can find them via
@@ -98,4 +129,16 @@ jobs:
         # -v so the log names every e2e test and whether it PASSed or SKIPped:
         # without it a skipped test is indistinguishable from a passing one, and
         # a skip that hides a real regression looks exactly like a green run.
-        run: go test -v -timeout 20m -tags=e2e ./e2e/...
+        run: |
+          set -o pipefail
+          go test -v -timeout 20m -tags=e2e -run '${{ matrix.run }}' ./e2e/... 2>&1 | tee /tmp/e2e.log
+
+      # A group whose regex matched nothing exits 0 for having run no tests — the failure mode a
+      # split suite invites. Say so loudly instead of reporting a green run of zero.
+      - name: Assert this group matched at least one test
+        if: always()
+        run: |
+          if ! grep -qE '^(=== RUN|--- PASS|--- SKIP|--- FAIL)' /tmp/e2e.log; then
+            echo "::error::no test matched -run '${{ matrix.run }}' — this group is silently empty"
+            exit 1
+          fi
