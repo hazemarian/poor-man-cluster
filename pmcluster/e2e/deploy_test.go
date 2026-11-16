@@ -88,31 +88,8 @@ func TestDeployPipeline(t *testing.T) {
 		})
 	}
 
-	for _, net := range []string{"traefik-net", "monitoring-net"} {
-		netCtx, netCancel := context.WithTimeout(ctx, 30*time.Second)
-		out, err := dockerRun(netCtx, "network", "create", "--driver=overlay", "--attachable", net)
-		netCancel()
-		if err != nil {
-
-			if !strings.Contains(out, "already exists") && !strings.Contains(err.Error(), "already exists") {
-				t.Fatalf("docker network create %s: %v\n%s", net, err, out)
-			}
-			t.Logf("network %s already exists — reusing", net)
-		} else {
-			t.Logf("created overlay network: %s", net)
-		}
-	}
-	t.Cleanup(func() {
-		t.Log("TestDeployPipeline: removing overlay networks (cleanup)")
-		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanCancel()
-		for _, net := range []string{"traefik-net", "monitoring-net"} {
-			out, err := dockerRun(cleanCtx, "network", "rm", net)
-			if err != nil {
-				t.Logf("docker network rm %s: %v\n%s", net, err, out)
-			}
-		}
-	})
+	// Shared with the other swarm tests, and owned: this test removes only what it created.
+	ensurePlatformNetworks(t, ctx)
 
 	homeDir := t.TempDir()
 	initOut, _, initCode := runCmd(t, homeDir, "init")

@@ -50,29 +50,10 @@ func TestSecretsConfigsE2E(t *testing.T) {
 		})
 	}
 
-	for _, net := range []string{"traefik-net", "monitoring-net"} {
-		netCtx, netCancel := context.WithTimeout(ctx, 30*time.Second)
-		out, err := dockerRun(netCtx, "network", "create", "--driver=overlay", "--attachable", net)
-		netCancel()
-		if err != nil {
-			if !strings.Contains(out, "already exists") && !strings.Contains(err.Error(), "already exists") {
-				t.Fatalf("docker network create %s: %v\n%s", net, err, out)
-			}
-			t.Logf("network %s already exists — reusing", net)
-		} else {
-			t.Logf("created overlay network: %s", net)
-		}
-	}
-	t.Cleanup(func() {
-		cleanCtx, cleanCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanCancel()
-		for _, net := range []string{"traefik-net", "monitoring-net"} {
-			out, err := dockerRun(cleanCtx, "network", "rm", net)
-			if err != nil {
-				t.Logf("docker network rm %s: %v\n%s", net, err, out)
-			}
-		}
-	})
+	// Create the platforms' networks if this runner lacks them, and remove ONLY the ones this
+	// test created: deleting a network another test is still using is how the old single-job
+	// ordering stayed green while any reordering (or a separate CI group) went red.
+	ensurePlatformNetworks(t, ctx)
 
 	homeDir := t.TempDir()
 	initOut, _, initCode := runCmd(t, homeDir, "init")
