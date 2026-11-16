@@ -3,6 +3,14 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.357 — Back is a page load
+
+Pressing Back or Forward on any console screen returned raw HTML — no head, no stylesheets, no
+sidebar. HTMX sends `HX-Request` **and** `HX-History-Restore-Request` when it restores history, and it
+replaces the entire document with whatever comes back, so a fragment response became the page. The
+renderer only treated a missing `HX-Request` as a full page load. All 21 pushed URLs were exposed.
+History restore now renders the full page; HTMX partial navigations are unchanged.
+
 ## v0.2.356 — the agent on join, and the checks on the page
 
 - **`pmcluster join --storage-node` installs the agent immediately**, not at the next daemon start:
