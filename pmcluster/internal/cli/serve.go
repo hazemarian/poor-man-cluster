@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -270,6 +271,31 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			// restart — the toggle would look broken for hours. The check is cheap
 			// (findmnt + one readdir) and only provisions when the answer changed.
 			convergeStorage(cmd.Context(), st, host, logf)
+			// Being a storage node INCLUDES having the agent that archives it (ADR 0008).
+			//
+			// It lives here, not in the leader's reconcile, because a leader cannot install a
+			// systemd unit on another host and `cluster update` is refused on a follower manager
+			// — measured on nxt-sw-4-m, which held a live stack with no unit, no timer and no
+			// policy for weeks. The daemon restart that a binary upgrade performs is exactly the
+			// moment this runs, so "install or update" is when the agent converges.
+			//
+			// EnsureBackupAgent is idempotent and self-policing: on a node that is NOT a storage
+			// node it removes the units (a worker must not snapshot an empty directory), so
+			// calling it unconditionally is the correct converge rather than a guess.
+			ensureAgent := func() {
+				var buf bytes.Buffer
+				if err := nodeunits.EnsureBackupAgent(&buf, cfg.ConfigPath()); err != nil {
+					log.Warn().Err(err).Msg("backup agent: could not be ensured on this node")
+					return
+				}
+				if s := strings.TrimSpace(buf.String()); s != "" {
+					log.Info().Msg("backup agent: " + s)
+				}
+			}
+			ensureAgent()
+			// Re-check when the membership actually changes (an operator flips the toggle), not
+			// every tick: writing units and running systemctl every two minutes is noise.
+			wasMember := storageNodeFor(st, host)
 			tick := time.NewTicker(2 * time.Minute)
 			defer tick.Stop()
 			for {
@@ -278,6 +304,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 					return
 				case <-tick.C:
 					convergeStorage(cmd.Context(), st, host, logf)
+					if now := storageNodeFor(st, host); now != wasMember {
+						wasMember = now
+						ensureAgent()
+					}
 				}
 			}
 		}()
@@ -833,6 +863,20 @@ func checkConfigVersions(ctx context.Context, dc runtime.Client, log zerolog.Log
 			log.Warn().Str("base", base).Msg("version check: no managed config found")
 		}
 	}
+}
+
+// storageNodeFor reports whether this host is currently designated a storage node, read from the
+// mirrored settings — the same source the reconcile uses, so the daemon and the leader agree.
+func storageNodeFor(st *store.Store, host string) bool {
+	if st == nil || host == "" {
+		return false
+	}
+	for _, h := range stacks.ParseStorageNodes(st.SettingDefault(context.Background(), cluster.SettingStorageNodes(), "")) {
+		if h == host {
+			return true
+		}
+	}
+	return false
 }
 
 // openNodeCipher opens this node's encryption key, minting one ONLY when the node has no

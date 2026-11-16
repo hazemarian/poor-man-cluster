@@ -24,15 +24,22 @@ accepting a PUT.
 
 ## Decision
 
-**1. Becoming a storage node installs the agent.** The reconcile that maintains `storage_nodes`
-and the storage label now calls `nodeunits.EnsureBackupAgent` on the node that is being kept in the
-set — that is, on the node itself, during `cluster update`, which is what runs after `node promote`
-and after a binary upgrade. A node that stops being a storage node keeps its existing behaviour
-(the installer removes the units).
+**1. A storage node's daemon installs its own agent, at startup.** `convergeStorage` already runs on
+every node once at start and every two minutes, before the leadership wait. The daemon now calls
+`nodeunits.EnsureBackupAgent` there, so the restart that a binary upgrade performs is the moment the
+agent converges — "install or update" is literally when it happens. It is re-checked only when the
+node's storage membership CHANGES, so the toggle an operator flips takes effect within a tick
+instead of every tick writing units.
 
-The installer is injected (`UpdateDeps.EnsureBackupAgent`) rather than imported: `internal/nodeunits`
-imports `internal/cluster`, and the layering is right this way round — nodeunits owns the units,
-cluster owns reconciliation. A nil installer is **reported**, never silently skipped.
+Why not the leader's reconcile, which was the first attempt: **`cluster update` is refused on a
+follower manager** ("this node holds no authoritative copy …"), so the reconcile only ever runs on
+the leader, and a leader cannot install a systemd unit on another host. Measured: a reconcile-side
+install on `nxt-sw-4-m` never ran, and the unit never came back until the daemon did it.
+
+`EnsureBackupAgent` is self-policing — on a node that is not a storage node it removes the units —
+so calling it unconditionally is a converge, not a guess. The leader also still ensures its own
+agent during `cluster update` (injected as `UpdateDeps.EnsureBackupAgent`, since nodeunits imports
+cluster); a nil installer is reported, never silently skipped.
 
 **2. The agent's absence is a finding, on the leader.** `doctor`'s `backup agents` check fails when
 a designated storage node has not reported a run in seven days, reading the node id out of the

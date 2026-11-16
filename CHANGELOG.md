@@ -9,12 +9,12 @@ docs under `docs/` describe the platform as built.
 invisible because the agent is opt-in per node and nothing tracked adoption. Two fixes, plus the
 drill the platform export never had.
 
-- **A storage node ends every `cluster update` with a working agent.** The reconcile that maintains
-  `storage_nodes` and the storage label now calls the installer on this node — so `install.sh`,
-  `cluster update` after a binary upgrade, and `cluster update` after `node promote` all leave a
-  storage node with a unit, a timer and a policy. The installer is injected (`UpdateDeps.
-  EnsureBackupAgent`) because `internal/nodeunits` imports `internal/cluster`; a nil installer is
-  reported, never silently skipped (ADR 0008).
+- **A storage node's daemon installs its own agent.** `convergeStorage` runs on every node at start
+  and every two minutes, so the restart a binary upgrade performs is when the agent converges; it
+  re-checks when the node's storage membership changes, so flipping the toggle takes effect within a
+  tick. The first attempt put this in the leader's reconcile and never ran: `cluster update` is
+  refused on a follower manager, and a leader cannot install a unit on another host — measured on
+  `nxt-sw-4-m`, where the unit stayed missing until the daemon did it (ADR 0008).
 - **`pmcluster backup platform-verify`** proves an export restores instead of assuming it: manifest
   sha256 per member, `PRAGMA integrity_check` on `data.db`, and the archived key decrypting a
   sampled secret — the step that proves the key belongs to the ciphertext it shipped with. Refuses
