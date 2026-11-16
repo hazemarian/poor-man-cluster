@@ -77,7 +77,7 @@ func TestBackupAgents_SilentStorageNodeFails(t *testing.T) {
 	f.recordRun(t, "aaa", time.Time{})
 	f.recordRun(t, "ccc", time.Time{})
 
-	got := checkBackupAgents(f.ctx, backupView{Store: f.store, Runtime: agentsDocker(), Now: time.Now()})
+	got := checkBackupAgents(f.ctx, backupView{Store: f.store, Runtime: agentsDocker(), RunsAvailable: true, Now: time.Now()})
 	if got.Status != StatusFail {
 		t.Fatalf("status = %v, want fail (%s)", got.Status, got.Detail)
 	}
@@ -97,7 +97,7 @@ func TestBackupAgents_AllNodesReportingIsOK(t *testing.T) {
 	f.recordRun(t, "aaa", time.Time{})
 	f.recordRun(t, "bbb", time.Time{})
 
-	got := checkBackupAgents(f.ctx, backupView{Store: f.store, Runtime: agentsDocker(), Now: time.Now()})
+	got := checkBackupAgents(f.ctx, backupView{Store: f.store, Runtime: agentsDocker(), RunsAvailable: true, Now: time.Now()})
 	if got.Status != StatusOK {
 		t.Fatalf("status = %v, want ok (%s)", got.Status, got.Detail)
 	}
@@ -112,19 +112,19 @@ func TestBackupAgents_AnOldRunDoesNotCount(t *testing.T) {
 
 	// Eight days later the same row is outside the window: the node has stopped.
 	late := time.Now().Add(8 * 24 * time.Hour)
-	if got := checkBackupAgents(f.ctx, backupView{Store: f.store, Runtime: agentsDocker(), Now: late}); got.Status != StatusFail {
+	if got := checkBackupAgents(f.ctx, backupView{Store: f.store, Runtime: agentsDocker(), RunsAvailable: true, Now: late}); got.Status != StatusFail {
 		t.Fatalf("a run outside the window read as ok: %v", got.Detail)
 	}
 	// Six days later it is still inside it.
 	soon := time.Now().Add(6 * 24 * time.Hour)
-	if got := checkBackupAgents(f.ctx, backupView{Store: f.store, Runtime: agentsDocker(), Now: soon}); got.Status != StatusOK {
+	if got := checkBackupAgents(f.ctx, backupView{Store: f.store, Runtime: agentsDocker(), RunsAvailable: true, Now: soon}); got.Status != StatusOK {
 		t.Fatalf("a run inside the window did not count: %s", got.Detail)
 	}
 }
 
 func TestBackupAgents_NoDesignationSkips(t *testing.T) {
 	f := newAgentsFixture(t) // no storage_nodes
-	got := checkBackupAgents(f.ctx, backupView{Store: f.store, Runtime: agentsDocker()})
+	got := checkBackupAgents(f.ctx, backupView{Store: f.store, Runtime: agentsDocker(), RunsAvailable: true})
 	if got.Status != StatusSkip {
 		t.Fatalf("status = %v, want skip when nothing is designated", got.Status)
 	}
@@ -143,5 +143,19 @@ func TestNodeFromArchivePaths(t *testing.T) {
 		if got := nodeFromArchivePaths(c.in); got != c.want {
 			t.Errorf("nodeFromArchivePaths(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestBackupAgents_SkipsWhereTheHistoryIsNotMirrored: the backups table is node-local and not
+// mirrored, so a follower sees no rows and would call every storage node silent. Measured on the
+// fleet the moment this check reached a follower.
+func TestBackupAgents_SkipsWhereTheHistoryIsNotMirrored(t *testing.T) {
+	f := newAgentsFixture(t, "nxt-sw-1-m", "nxt-sw-4-m")
+	got := checkBackupAgents(f.ctx, backupView{Store: f.store, Runtime: agentsDocker()})
+	if got.Status != StatusSkip {
+		t.Fatalf("status = %v, want skip on a node that cannot see the run history", got.Status)
+	}
+	if !strings.Contains(got.Detail, "leader") {
+		t.Errorf("the skip does not say where to ask: %s", got.Detail)
 	}
 }

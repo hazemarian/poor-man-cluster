@@ -37,13 +37,19 @@ type backupView struct {
 	Runtime    runtime.Client
 	VolumeRoot string
 	Now        time.Time
+	// RunsAvailable says this process can see the backup RUN HISTORY. Only the leader can: the
+	// backups table is node-local and NOT mirrored (ADR 0005's exclusion list), so a follower's
+	// store answers "no runs ever" for a cluster that is backing up hourly. Measured on the fleet
+	// the moment the check reached a follower: it called all three storage nodes silent.
+	RunsAvailable bool
 }
 
 func (in Input) backupView() backupView {
-	return backupView{Store: in.Store, Runtime: in.Docker, VolumeRoot: in.VolumeRoot, Now: in.Now}
+	return backupView{Store: in.Store, Runtime: in.Docker, VolumeRoot: in.VolumeRoot, Now: in.Now, RunsAvailable: true}
 }
 
 func (in NodeInput) backupView() backupView {
+	// A follower cannot answer this one, and must not pretend to: see RunsAvailable.
 	return backupView{Store: in.Store, Runtime: in.Runtime, VolumeRoot: in.VolumeRoot}
 }
 
@@ -51,6 +57,10 @@ func checkBackupAgents(ctx context.Context, v backupView) Check {
 	const name = "backup agents"
 	if v.Store == nil || v.Runtime == nil {
 		return Check{Name: name, Status: StatusSkip, Detail: "no store or swarm client on this host"}
+	}
+	if !v.RunsAvailable {
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "the backup run history is not mirrored (the backups table is node-local), so this can only be answered on the leader — run `pmcluster doctor` there"}
 	}
 	raw := v.Store.SettingDefault(ctx, cluster.SettingStorageNodes(), "")
 	configured := stacks.ParseStorageNodes(raw)
