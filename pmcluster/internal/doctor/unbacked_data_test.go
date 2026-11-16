@@ -39,7 +39,7 @@ func TestUnbackedData(t *testing.T) {
 	t.Run("a directory with data that belongs to no stack fails", func(t *testing.T) {
 		root := t.TempDir()
 		mk(t, root, map[string]int{"shop": 3, "dep-s2": 954, "dep-s3": 954})
-		got := checkUnbackedData(context.Background(), Input{VolumeRoot: root, Docker: docker})
+		got := checkUnbackedData(context.Background(), backupView{VolumeRoot: root, Runtime: docker})
 		if got.Status != StatusFail {
 			t.Fatalf("status = %v (%s)", got.Status, got.Detail)
 		}
@@ -59,7 +59,7 @@ func TestUnbackedData(t *testing.T) {
 	t.Run("live stacks only is ok", func(t *testing.T) {
 		root := t.TempDir()
 		mk(t, root, map[string]int{"shop": 2, "cms": 1})
-		got := checkUnbackedData(context.Background(), Input{VolumeRoot: root, Docker: docker})
+		got := checkUnbackedData(context.Background(), backupView{VolumeRoot: root, Runtime: docker})
 		if got.Status != StatusOK {
 			t.Fatalf("status = %v (%s)", got.Status, got.Detail)
 		}
@@ -68,7 +68,7 @@ func TestUnbackedData(t *testing.T) {
 	t.Run("empty leftovers are named but not a failure", func(t *testing.T) {
 		root := t.TempDir()
 		mk(t, root, map[string]int{"shop": 1, "abbas": 0})
-		got := checkUnbackedData(context.Background(), Input{VolumeRoot: root, Docker: docker})
+		got := checkUnbackedData(context.Background(), backupView{VolumeRoot: root, Runtime: docker})
 		if got.Status != StatusOK {
 			t.Fatalf("an empty leftover made the check fail: %v (%s)", got.Status, got.Detail)
 		}
@@ -78,7 +78,7 @@ func TestUnbackedData(t *testing.T) {
 	})
 
 	t.Run("no volume root skips", func(t *testing.T) {
-		if got := checkUnbackedData(context.Background(), Input{Docker: docker}); got.Status != StatusSkip {
+		if got := checkUnbackedData(context.Background(), backupView{Runtime: docker}); got.Status != StatusSkip {
 			t.Fatalf("status = %v", got.Status)
 		}
 	})

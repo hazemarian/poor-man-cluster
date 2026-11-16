@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // checkBackupAgents answers the question the coverage check cannot: does every storage node
@@ -26,12 +28,31 @@ import (
 // with no working agent. A WINDOW of days rather than "the newest row is fresh" is deliberate:
 // the run table is known to be an unreliable clock (rows stuck for days while artifacts were
 // perfectly fresh), and this check must not inherit that — it only has to catch "never".
-func checkBackupAgents(ctx context.Context, in Input) Check {
+// backupView is what the backup checks need, so the leader view (Input) and the node-local
+// view (NodeInput) can both run them. A follower manager mirrors the settings, so it can answer
+// "is every storage node reporting" too — and that is exactly where an operator is standing when
+// a node has no agent.
+type backupView struct {
+	Store      *store.Store
+	Runtime    runtime.Client
+	VolumeRoot string
+	Now        time.Time
+}
+
+func (in Input) backupView() backupView {
+	return backupView{Store: in.Store, Runtime: in.Docker, VolumeRoot: in.VolumeRoot, Now: in.Now}
+}
+
+func (in NodeInput) backupView() backupView {
+	return backupView{Store: in.Store, Runtime: in.Runtime, VolumeRoot: in.VolumeRoot}
+}
+
+func checkBackupAgents(ctx context.Context, v backupView) Check {
 	const name = "backup agents"
-	if in.Store == nil || in.Docker == nil {
+	if v.Store == nil || v.Runtime == nil {
 		return Check{Name: name, Status: StatusSkip, Detail: "no store or swarm client on this host"}
 	}
-	raw := in.Store.SettingDefault(ctx, cluster.SettingStorageNodes(), "")
+	raw := v.Store.SettingDefault(ctx, cluster.SettingStorageNodes(), "")
 	configured := stacks.ParseStorageNodes(raw)
 	if len(configured) == 0 {
 		// No designation at all: `checkBackupCoverage` already reports that, and a node cannot
@@ -39,7 +60,7 @@ func checkBackupAgents(ctx context.Context, in Input) Check {
 		return Check{Name: name, Status: StatusSkip, Detail: "no storage nodes are designated (see backup coverage)"}
 	}
 
-	nodes, err := in.Docker.NodeList(ctx)
+	nodes, err := v.Runtime.NodeList(ctx)
 	if err != nil {
 		return Check{Name: name, Status: StatusSkip, Detail: "could not list swarm nodes: " + err.Error()}
 	}
@@ -49,8 +70,8 @@ func checkBackupAgents(ctx context.Context, in Input) Check {
 	}
 
 	window := 7 * 24 * time.Hour
-	cutoff := in.now().Add(-window).Unix()
-	rows, err := in.Store.ListBackups(ctx, backupAgentScanLimit)
+	cutoff := v.now().Add(-window).Unix()
+	rows, err := v.Store.ListBackups(ctx, backupAgentScanLimit)
 	if err != nil {
 		return Check{Name: name, Status: StatusSkip, Detail: "could not list backup runs: " + err.Error()}
 	}
@@ -110,10 +131,10 @@ func nodeFromArchivePaths(paths string) string {
 	return ""
 }
 
-// now is the clock this file's checks compare against, overridable in tests.
-func (in Input) now() time.Time {
-	if in.Now.IsZero() {
+// now is the clock these checks compare against, overridable in tests.
+func (v backupView) now() time.Time {
+	if v.Now.IsZero() {
 		return time.Now()
 	}
-	return in.Now
+	return v.Now
 }

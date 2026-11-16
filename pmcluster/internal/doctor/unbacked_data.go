@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
 )
 
 // checkUnbackedData answers "what is on the volume that no backup covers?".
@@ -21,24 +23,28 @@ import (
 //
 // Local by nature: it describes THIS node's volume root, because that is the only one this
 // process can see. Run `pmcluster doctor` on each storage node to get the whole picture.
-func checkUnbackedData(ctx context.Context, in Input) Check {
+func checkUnbackedData(ctx context.Context, v backupView) Check {
 	const name = "unbacked data"
-	if in.VolumeRoot == "" {
-		return Check{Name: name, Status: StatusSkip, Detail: "no volume root on this host"}
+	root := v.VolumeRoot
+	if root == "" {
+		// A node that never had the setting still has the stock root; and a node with no
+		// volume at all skips on the ReadDir below rather than claiming an empty answer.
+		root = storage.DefaultVolumeRoot
 	}
-	if in.Docker == nil {
+	v.VolumeRoot = root
+	if v.Runtime == nil {
 		return Check{Name: name, Status: StatusSkip, Detail: "no swarm client on this host"}
 	}
-	entries, err := os.ReadDir(in.VolumeRoot)
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return Check{Name: name, Status: StatusSkip, Detail: "this node has no volume root (" + in.VolumeRoot + ")"}
+			return Check{Name: name, Status: StatusSkip, Detail: "this node has no volume root (" + v.VolumeRoot + ")"}
 		}
-		return Check{Name: name, Status: StatusWarn, Detail: "could not read " + in.VolumeRoot + ": " + err.Error()}
+		return Check{Name: name, Status: StatusWarn, Detail: "could not read " + v.VolumeRoot + ": " + err.Error()}
 	}
 
 	// The live stacks, from the swarm: a service's Stack field is the stack it belongs to.
-	svcs, err := in.Docker.ServiceList(ctx)
+	svcs, err := v.Runtime.ServiceList(ctx)
 	if err != nil {
 		return Check{Name: name, Status: StatusSkip, Detail: "could not list services: " + err.Error()}
 	}
@@ -59,7 +65,7 @@ func checkUnbackedData(ctx context.Context, in Input) Check {
 		if dirName == "lost+found" || live[dirName] {
 			continue
 		}
-		files := countFiles(filepath.Join(in.VolumeRoot, dirName))
+		files := countFiles(filepath.Join(v.VolumeRoot, dirName))
 		if files > 0 {
 			withData = append(withData, fmt.Sprintf("%s (%d file(s))", dirName, files))
 		} else {
@@ -70,7 +76,7 @@ func checkUnbackedData(ctx context.Context, in Input) Check {
 	sort.Strings(empty)
 
 	if len(withData) > 0 {
-		detail := "directories under " + in.VolumeRoot + " belong to no stack in this swarm, so no backup will ever archive them: " +
+		detail := "directories under " + v.VolumeRoot + " belong to no stack in this swarm, so no backup will ever archive them: " +
 			strings.Join(withData, ", ") + " — either restore the stack they belong to (a deploy re-adopts the directory) or move the data out and delete it; `docs/backup.md` has the procedure"
 		if len(empty) > 0 {
 			detail += ". Empty and safe to delete: " + strings.Join(empty, ", ")
@@ -80,9 +86,9 @@ func checkUnbackedData(ctx context.Context, in Input) Check {
 	if len(empty) > 0 {
 		return Check{Name: name, Status: StatusOK,
 			Detail: fmt.Sprintf("every directory with data under %s belongs to a live stack; %d empty leftover(s) could be removed: %s",
-				in.VolumeRoot, len(empty), strings.Join(empty, ", "))}
+				v.VolumeRoot, len(empty), strings.Join(empty, ", "))}
 	}
-	return Check{Name: name, Status: StatusOK, Detail: "every directory under " + in.VolumeRoot + " belongs to a live stack"}
+	return Check{Name: name, Status: StatusOK, Detail: "every directory under " + v.VolumeRoot + " belongs to a live stack"}
 }
 
 // countFiles counts regular files under root, bounded: this is a health check, not an inventory,

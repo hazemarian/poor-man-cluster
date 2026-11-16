@@ -90,6 +90,12 @@ func RunNodeLocal(ctx context.Context, in NodeInput) *Report {
 	add(checkAppDataOwnership(ctx, in))
 	add(checkSwarmNodeLocal(ctx, in))
 	add(checkMirrorState(ctx, in))
+	// The backup checks answer "is every storage node reporting" and "is anything on this
+	// volume unbacked" — both meaningful from a follower too, and a follower is often where an
+	// operator stands. Measured 2026-11-16: a storage node with no agent at all, invisible
+	// because these checks only existed in the leader view.
+	add(checkBackupAgents(ctx, in.backupView()))
+	add(checkUnbackedData(ctx, in.backupView()))
 	add(Check{
 		Name:   "cluster state",
 		Status: StatusSkip,
