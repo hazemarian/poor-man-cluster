@@ -3,7 +3,7 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
-## Unreleased — the key config is gone; the key is a file
+## v0.2.346 — the key config is gone; the key is a file
 
 **And the control plane has a restore point again, on a button.** Deleting the
 control-plane backup service (v0.2.345) was right for the mechanism and left a hole in
@@ -21,6 +21,29 @@ platform state is what ADR 0005/0006 removed — but a manual export: the leader
 - Including the key is a deliberate departure from ADR 0003's split (ADR 0007): without it the
   archive cannot decrypt a single stored secret, so it would look like a backup and restore
   into a cluster nobody can read.
+
+**Also fixed, both found by deploying this release rather than by reading the code:**
+
+- **An unset `storage_nodes` now designates the leader**, instead of skipping the entire
+  reconcile. The function documents "the leader MUST be a storage node: otherwise a manual
+  `backup create` finds no local agent" and implemented it *below* an
+  `if raw == "" { return nil }` — and every fresh install starts empty, so the leader rule, the
+  label stamping and the label adoption never ran on exactly the clusters that had never
+  configured anything. Measured on wafaa: one manager, hourly backups succeeding and verified,
+  `storage_nodes` empty, no `pmcluster.storage` label, and `doctor` failing backup coverage
+  with "not a storage node" — which read like the data was unbacked when it was. The same three
+  lines appended the leader as `raw + "," + host`, persisting a leading comma (`,idlib-wafaa`)
+  into a setting the console shows verbatim; `appendStorageNode` joins properly.
+- **The loop-mode image follows the configured volume root.** Designating the leader made the
+  convergence provision on every fresh cluster, at the hardcoded `/var/lib/pmcluster/app-data.img`
+  — root-owned, so a temp-rooted or non-root host could not create it and its storage node
+  "CANNOT host stateful stacks yet". `storage.ImagePathFor` derives a sibling of the volume root
+  for any non-stock root, and the deploy-time mount guard uses the same path (it was checking
+  the stock one, so a custom-rooted cluster that WAS provisioned but unmounted read as "never
+  provisioned", which is the one case the guard exists to catch).
+- **An emptied platform stack is pruned, not removed** (`RemoveStack` took the stack's network
+  down asynchronously; a render that became non-empty again a moment later failed with
+  `network backup_net not found`).
 
 **Why:** v0.2.345 deleted the data kit but left one Docker config behind — the encryption key,
 republished on promotion and every five minutes, pruned to two — to move 32 bytes that are
