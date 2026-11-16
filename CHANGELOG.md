@@ -3,6 +3,28 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.351 — a storage node with no agent, and data no backup covers, are now findings
+
+**Why:** a backup audit on production found one of three storage nodes (`nxt-sw-4-m`) with **no
+backup unit at all** — no service, no timer, no policy, no env — while its share of the data (a
+live stack, five sqlite databases) sat on the volume, and `doctor` reported
+`✓ backup coverage 15 stack(s) hold a volume, all on a storage node` on every run. The agent is
+opt-in per node, and nothing tracked which storage nodes had it.
+
+- **`backup agents`** (new check): every designated storage node must have reported a backup run
+  in the last 7 days. The signal is "has this node EVER reported", read from the artifact names
+  the run rows carry (`backup-<node>-<ts>-stack-<stack>.tar.gz`) — deliberately not "is the
+  newest row fresh", because the run table is a known-unreliable clock and the check must not
+  inherit that. A node that has never produced a row is a node with no working agent, and the
+  finding names it plus `pmcluster backup-agent install`.
+- **`unbacked data`** (new check, local): directories under the volume root that belong to no
+  stack in the swarm are archived by nothing. Measured the same day: `dep-s2` and `dep-s3` on
+  nxt-sw-1-m held 954 files each, warned about hourly into a journal nobody reads, and appeared
+  in no check. Data there is a failure; empty leftovers are named and are not.
+- **A delivered record no longer reports as lost.** The record route answers `204 No Content` and
+  the node client accepted only `200`, so a run that had landed said "the record did not reach
+  the leader" — the row was in the leader's table. Any 2xx is acceptance now.
+
 ## v0.2.350 — a platform export ships its sidecar, so the offsite copy is verifiable
 
 **Why:** the verifier reported the three offsite exports as "restorable, not verifiable". It looks

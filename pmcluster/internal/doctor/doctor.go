@@ -114,6 +114,8 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 	add(checkNodeLabels(ctx, in))
 	add(checkPlacementPins(ctx, in))
 	add(checkBackupCoverage(ctx, in))
+	add(checkBackupAgents(ctx, in))
+	add(checkUnbackedData(ctx, in))
 	add(checkSkew(ctx, in))
 	add(checkMirrorVerify(ctx, in))
 	add(checkSecrets(ctx, in))

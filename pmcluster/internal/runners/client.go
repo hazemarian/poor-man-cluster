@@ -341,7 +341,7 @@ func (c *Client) postPath(ctx context.Context, client *http.Client, base, path s
 	}
 	defer func() { _ = resp.Body.Close() }()
 	out, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
-	if resp.StatusCode == http.StatusOK {
+	if acceptedStatus(resp.StatusCode) {
 		return nil
 	}
 	if resp.StatusCode == http.StatusNotImplemented {
@@ -351,6 +351,15 @@ func (c *Client) postPath(ctx context.Context, client *http.Client, base, path s
 	}
 	return fmt.Errorf("%s: %s", resp.Status, apiErrorText(out))
 }
+
+// acceptedStatus reports whether a response means the leader took the body.
+//
+// ANY 2xx counts, not just 200. The backup record route answers 204 No Content ("written,
+// nothing to say"), so requiring 200 reported a record that had in fact landed as "the record
+// did not reach the leader" — measured on nxt-sw-4-m (2026-11-16), where the row was in the
+// leader's table while the agent warned on every run, sending an operator after a problem that
+// did not exist.
+func acceptedStatus(code int) bool { return code >= 200 && code < 300 }
 
 // errNotRecorded means the leader accepted the connection and declined the feature.
 var errNotRecorded = errors.New("this leader does not record cache reports")
