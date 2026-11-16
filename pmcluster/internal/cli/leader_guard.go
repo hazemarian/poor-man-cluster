@@ -284,9 +284,48 @@ func notLeader(cmd *cobra.Command, self docker.SelfNode) error {
 			"mirror of the leader's settings, labelled with its age. Only WRITING needs the leader.\n\n")
 	}
 
-	b.WriteString("Run it on the leader, or use the remote CLI from your own machine:\n")
-	fmt.Fprintf(&b, "  %s\n", remoteHint(cmd, leaderURL(self)))
+	// The hint must be TRUE. It used to read "Run it on the leader, or use the remote CLI from
+	// your own machine" for every refused command — including `cluster update`, which has no
+	// remote form at all: it opens the local store and the local docker socket. An operator who
+	// followed that advice got a connection error and reasonably concluded the cluster was broken.
+	if hasRemoteForm(cmd) {
+		b.WriteString("Run it on the leader, or use the remote CLI from your own machine:\n")
+		fmt.Fprintf(&b, "  %s\n", remoteHint(cmd, leaderURL(self)))
+	} else {
+		b.WriteString("This command has no remote form: it reads this cluster's store and drives the\n" +
+			"local docker socket, so there is nothing for your machine to talk to. Run it ON the\n" +
+			"leader (ssh, or `pmcluster node` over ssh), and use `--api-url` only for commands that\n" +
+			"announce it (`pmcluster stack deploy`, `config`, `secret`, `service`, `settings`).\n")
+	}
 	return fmt.Errorf("%s", b.String())
+}
+
+// remoteBackedCommands are the command paths the daemon actually exposes over the API, verified
+// against internal/remote. The list is deliberately an allowlist: a command missing from it loses
+// a helpful hint, while a command wrongly in it makes the CLI LIE about a way out.
+// Each entry mirrors a remote.New* client the CLI actually wires up in backend.go.
+var remoteBackedCommands = map[string]bool{
+	"pmcluster config":         true, // remote.NewConfigs
+	"pmcluster secret":         true, // remote.NewSecrets
+	"pmcluster service":        true, // remote.NewServices
+	"pmcluster settings":       true, // remote.NewClusterSettings / NewUsage
+	"pmcluster stack":          true, // remote.NewStacks / NewDeploy
+	"pmcluster webhook":        true, // remote.NewWebhooks
+	"pmcluster observability":  true, // remote.NewObservability
+	"pmcluster cluster leader": true, // remote.NewTLS (leader move)
+	"pmcluster apikey":         true, // remote.NewAPIKeys
+	"pmcluster backup":         true, // remote.NewBackups
+}
+
+// hasRemoteForm reports whether this command (or its top-level parent) is served by the daemon API.
+func hasRemoteForm(cmd *cobra.Command) bool {
+	path := cmd.CommandPath()
+	for p := path; strings.Contains(p, " "); p = p[:strings.LastIndex(p, " ")] {
+		if remoteBackedCommands[p] {
+			return true
+		}
+	}
+	return remoteBackedCommands[path]
 }
 
 // remoteHint renders a copy-pasteable remote invocation. The URL is the edge when

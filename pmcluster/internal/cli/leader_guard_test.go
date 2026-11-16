@@ -117,6 +117,34 @@ func TestBackupPlatformScope(t *testing.T) {
 	}
 }
 
+// TestRemoteHintIsOnlyOfferedWhereItExists: the guard used to tell every refused command to
+// "use the remote CLI from your own machine" — including `cluster update`, which has no remote
+// form (it opens the local store and the local docker socket). An operator who followed that
+// advice got a connection error and thought the cluster was broken.
+func TestRemoteHintIsOnlyOfferedWhereItExists(t *testing.T) {
+	if !hasRemoteForm(findSub(t, findCmd(t, "secret"), "create")) {
+		t.Error("`secret create` is served by remote.NewSecrets but the guard offers no remote hint")
+	}
+	if !hasRemoteForm(findSub(t, findCmd(t, "config"), "list")) {
+		t.Error("`config list` is served by remote.NewConfigs but the guard offers no remote hint")
+	}
+	cluster := findCmd(t, "cluster")
+	for _, name := range []string{"update", "upgrade", "reset", "up"} {
+		if sub := findOptionalSub(cluster, name); sub != nil && hasRemoteForm(sub) {
+			t.Errorf("`cluster %s` has no remote form, but the guard would suggest --api-url for it", name)
+		}
+	}
+}
+
+func findOptionalSub(parent *cobra.Command, name string) *cobra.Command {
+	for _, c := range parent.Commands() {
+		if c.Name() == name {
+			return c
+		}
+	}
+	return nil
+}
+
 func findCmd(t *testing.T, name string) *cobra.Command {
 	t.Helper()
 	for _, c := range rootCmd.Commands() {
