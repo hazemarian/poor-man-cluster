@@ -37,9 +37,16 @@ the leader, and a leader cannot install a systemd unit on another host. Measured
 install on `nxt-sw-4-m` never ran, and the unit never came back until the daemon did it.
 
 `EnsureBackupAgent` is self-policing — on a node that is not a storage node it removes the units —
-so calling it unconditionally is a converge, not a guess. The leader also still ensures its own
-agent during `cluster update` (injected as `UpdateDeps.EnsureBackupAgent`, since nodeunits imports
-cluster); a nil installer is reported, never silently skipped.
+so calling it unconditionally is a converge, not a guess. Three entry points, all ending in an
+installed agent:
+
+| when | who installs it |
+| --- | --- |
+| binary install / upgrade (daemon restarts) | the daemon's own converge, at startup |
+| `pmcluster cluster update` on the LEADER | its reconcile, through `UpdateDeps.EnsureBackupAgent` (injected — nodeunits imports cluster) |
+| `pmcluster join --storage-node` | the join command, right after it records the role |
+
+A nil installer is reported, never silently skipped.
 
 **2. The agent's absence is a finding, on the leader.** `doctor`'s `backup agents` check fails when
 a designated storage node has not reported a run in seven days, reading the node id out of the
@@ -63,6 +70,11 @@ which is why the artifact carries both.
 - The drill runs wherever the archive is available — the leader holds the local archive dir, so the
   weekly timer can run it there without pulling from S3. Drilling the *offsite* copy is still a
   separate act (download, then drill), which is honest about what has been proven.
-- The console still does not show any of this: `internal/api/doctor.go` claims to be "reachable from
-  the console" and nothing calls it. That comment is now false and marked as such; wiring a Health
-  page remains open work.
+- **The console now shows the checks.** The overview already rendered version skew from the version
+  configs; it now also renders every failing or warning check from `/api/doctor` in a banner, and
+  prints nothing for a check that passes (seventeen green lines hide the red one). That is the
+  surface the audit needed: a storage node with no agent, or 1,908 unbacked files, was invisible on
+  the page an operator actually opens.
+- The banner is the *same* measurement as `pmcluster doctor`, taken by the daemon on the node serving
+  the page. On a follower that means checks which decline to answer there (`backup agents`, because
+  the run history is not mirrored) say so rather than reporting a false green.

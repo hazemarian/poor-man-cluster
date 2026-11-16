@@ -59,6 +59,15 @@ type overviewData struct {
 	// version this console's daemon runs.
 	Skew      []versionModel
 	SkewKnown bool
+	// Health is what `pmcluster doctor` answers, minus the checks that pass — the console should
+	// say what is WRONG, not print seventeen green lines. It exists because every finding of the
+	// 2026-11-16 audit (a storage node with no backup agent, 1908 unbacked files) was invisible
+	// except to someone who typed the command on the right node.
+	Health      []healthModel
+	HealthKnown bool
+	// HealthTone is the banner tone: "bad" when a check failed, "warn" when only warnings remain
+	// (a template cannot call `if` as an argument, so the model carries the answer).
+	HealthTone string
 
 	InfoKnown  bool
 	NodesKnown bool
@@ -103,15 +112,18 @@ func (c Overview) Fragment(g *gin.Context) {
 		errN     error
 		stat     []pmapi.NodeStat
 		errS     error
+		checks   []pmapi.DoctorCheck
+		errD     error
 	)
 	var wg sync.WaitGroup
-	wg.Add(6)
+	wg.Add(7)
 	go func() { defer wg.Done(); me, err = c.API.Me(ctx) }()
 	go func() { defer wg.Done(); info, errI = c.API.ClusterInfo(ctx) }()
 	go func() { defer wg.Done(); versions, errV = c.API.Versions(ctx) }()
 	go func() { defer wg.Done(); rec, errA = c.API.ApplyRecord(ctx) }()
 	go func() { defer wg.Done(); nodes, errN = c.API.Nodes(ctx) }()
 	go func() { defer wg.Done(); stat, errS = c.API.NodeStats(ctx) }()
+	go func() { defer wg.Done(); checks, errD = c.API.Doctor(ctx) }()
 	wg.Wait()
 
 	if err == nil && me != nil {
@@ -124,6 +136,23 @@ func (c Overview) Fragment(g *gin.Context) {
 			OS: info.OS, Arch: info.Arch, CPUs: info.CPUs, MemoryBytes: info.MemoryBytes,
 			SwarmState: info.Swarm.State, SwarmManagers: info.Swarm.Managers,
 			SwarmNodes: info.Swarm.Nodes, ControlAvailable: info.Swarm.ControlAvailable,
+		}
+	}
+	if errD == nil && checks != nil {
+		d.HealthKnown = true
+		for _, ch := range checks {
+			// fail and warn only: an "ok" line is not news, and a "skip" is a check declining to
+			// answer on this node (the run history is not mirrored, for instance).
+			if ch.Status != "fail" && ch.Status != "warn" {
+				continue
+			}
+			d.Health = append(d.Health, healthModel{Name: ch.Name, Detail: ch.Detail, Failed: ch.Status == "fail"})
+			if ch.Status == "fail" {
+				d.HealthTone = "bad"
+			}
+		}
+		if len(d.Health) > 0 && d.HealthTone == "" {
+			d.HealthTone = "warn"
 		}
 	}
 	if errV == nil && versions != nil {
@@ -173,6 +202,14 @@ func (c Overview) Fragment(g *gin.Context) {
 type versionModel struct {
 	Hostname string
 	Version  string
+}
+
+// healthModel is one failing or warning platform check.
+type healthModel struct {
+	Name   string
+	Detail string
+	// Failed is a fail; false is a warn. Both are shown, the banner tone follows the worst.
+	Failed bool
 }
 
 // applyModel is the last platform apply as the overview renders it.

@@ -301,6 +301,25 @@ type PlatformExportResult struct {
 	OffsiteKey string `json:"offsite_key"`
 }
 
+// DoctorCheck is one platform health check as the daemon reports it.
+type DoctorCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"` // ok | warn | fail | skip
+	Detail string `json:"detail,omitempty"`
+}
+
+// Doctor asks the daemon for its platform health checks — the same measurement
+// `pmcluster doctor` makes, so the console can show what a human would otherwise have to type.
+func (c *Client) Doctor(ctx context.Context) ([]DoctorCheck, error) {
+	var body struct {
+		Checks []DoctorCheck `json:"checks"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/doctor", nil, &body); err != nil {
+		return nil, err
+	}
+	return body.Checks, nil
+}
+
 // ExportPlatform asks the daemon to export the control plane offsite. The daemon refuses
 // (409) on a node that is not the swarm leader, and that reason reaches the page verbatim.
 func (c *Client) ExportPlatform(ctx context.Context) (*PlatformExportResult, error) {

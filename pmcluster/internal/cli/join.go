@@ -325,6 +325,13 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 		if err := markStorageNodeEnv(); err != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "  (could not record the storage-node role: %v)\n", err)
 		}
+		// Install the hourly agent NOW, not at the next daemon start (ADR 0008). The daemon's
+		// converge would get there on its own, but a node that joined as storage is a node whose
+		// data is unarchived until it does — and the operator is standing right here, root, with
+		// the role freshly recorded.
+		if aerr := nodeunits.EnsureBackupAgent(cmd.OutOrStdout(), configPath); aerr != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "  ⚠ the backup agent could not be installed: %v — run `pmcluster backup-agent install` once this node is up\n", aerr)
+		}
 		// A storage node must be able to take atomic snapshots before it accepts
 		// work, because converting it afterwards means moving every stack off it
 		// first. Best-effort on purpose: a join that fails because a loop device

@@ -3,6 +3,26 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.356 — the agent on join, and the checks on the page
+
+- **`pmcluster join --storage-node` installs the agent immediately**, not at the next daemon start:
+  a node that joined as storage has unarchived data until that happens, and the operator is standing
+  there with root. The leader's `cluster update` keeps ensuring its own — ADR 0008 now lists all
+  three entry points (daemon start, leader update, join).
+- **The overview shows what `pmcluster doctor` finds.** A banner lists every failing or warning
+  check and prints nothing for a pass. The console already rendered version skew from the version
+  configs; this extends that same surface to the rest of the health model — which is where the two
+  real findings of the 2026-11-16 audit should have appeared and did not.
+- The overview test asserts both halves: findings appear, and a passing check does NOT.
+
+## v0.2.355 — the daemon installs its own backup agent, because the leader cannot
+
+The first attempt put the installer in the leader's storage-node reconcile and it never ran:
+`cluster update` is refused on a follower manager, so that reconcile only executes on the leader —
+and a leader cannot install a systemd unit on another host. `convergeStorage` runs on every node at
+start and every two minutes, so the daemon now ensures its own agent there; it re-checks when the
+node's storage membership changes, so the console toggle takes effect within a tick.
+
 ## v0.2.354 — becoming a storage node installs the agent; the export is drilled
 
 **Why:** the audit found a storage node with a live stack and no backup agent at all, and it was
