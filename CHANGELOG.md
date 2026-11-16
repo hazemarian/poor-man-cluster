@@ -3,6 +3,18 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.348 — the rollout finds the binary the release actually ships
+
+**Why:** the first rollout of v0.2.347 stopped on the worker with "no pmcluster binary in the
+archive". The release archive holds ONE file named after the asset with `.tar.gz` dropped
+(`pmcluster-v0.2.347-linux-amd64`); an older release tarred a directory containing `pmcluster`,
+so the layout changed shape between two tags and the installer looked for a name neither tag
+uses. It now takes the expected name from the asset and falls back to any executable starting
+with `pmcluster` — a rollout should not break because the release layout changed between tags.
+
+The failure is also the gate working: it stopped on the WORKER, before touching a manager, and
+said so.
+
 ## v0.2.347 — the upgrade is a workflow, with a gate and a rollback
 
 **Why:** replacing the binary across a swarm was the one operation that runs unattended, can take
