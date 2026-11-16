@@ -102,7 +102,28 @@ var topLevelScopes = map[string]commandScope{
 // archive directory: it has no cluster-wide answer, and gating it on leadership
 // would leave a worker's disk unable to clean itself up.
 var nodeLocalSubcommands = map[string]map[string]bool{
-	"backup": {"prune": true},
+	"backup": {
+		"prune": true,
+		// `backup platform-verify` unpacks and checks an archive that is on THIS disk. It reads no
+		// cluster state, and the weekly drill runs it on every storage node — refusing it on a
+		// follower would make the drill's third step print a leadership error instead of verifying.
+		"platform-verify": true,
+	},
+}
+
+// selfGuardedPlatform reports whether this is `backup platform --if-leader`: the form whose
+// WHOLE PURPOSE is to answer "this node is a follower, nothing to do" and exit 0.
+//
+// It is checked on flags rather than on the command name because the plain form must stay
+// leader-scoped — running it on a follower by hand is a mistake worth refusing. Without this the
+// guard refused before the command could read its own flag, which is exactly how the first
+// scheduled run failed on two of the three managers.
+func selfGuardedPlatform(cmd *cobra.Command) bool {
+	if cmd.Name() != "platform" || cmd.Parent() == nil || cmd.Parent().Name() != "backup" {
+		return false
+	}
+	on, err := cmd.Flags().GetBool("if-leader")
+	return err == nil && on
 }
 
 // bootstrapClusterSubcommands are the `cluster` subcommands that must work
@@ -116,6 +137,33 @@ var bootstrapClusterSubcommands = map[string]bool{
 	"up":     true, // creates the swarm and elects the first leader
 	"reset":  true, // the escape hatch for a node that cannot reach the control plane
 	"leader": true, // move leadership deliberately; needs a manager, not the leader
+}
+
+// nodeLocalClusterSubcommands are `cluster` subcommands that describe THIS node and answer
+// anywhere. `mirror` is one: it reports the cluster state this node has mirrored, which is
+// exactly the question "would a promotion from here work" — asking it only on the leader
+// would be asking the node that needs no proof. The value is the set of subcommands
+// allowed; `true` for the whole family.
+var nodeLocalClusterSubcommands = map[string]bool{
+	"mirror": true,
+	// `upgrade` is the rollout of the BINARY across the fleet: it drives ssh to every node, so
+	// it neither needs nor may require local leadership. Refusing it on a follower would mean
+	// an operator had to be logged into the leader to upgrade the leader.
+	"upgrade": true,
+}
+
+// mirrorReadable reports whether this invocation reads state a follower mirrors rather
+// than state only the leader holds. Today that is exactly `cluster settings` with no
+// argument or a `get`: its write form (`set`) is refused below.
+//
+// The check is on ARGS, not on the command, because both forms are the same cobra command:
+// a scope table keyed by command name cannot tell them apart, and treating the whole
+// command as readable would let a follower believe a write succeeded.
+func mirrorReadable(cmd *cobra.Command, args []string) bool {
+	if cmd.Name() != "settings" || cmd.Parent() == nil || cmd.Parent().Name() != "cluster" {
+		return false
+	}
+	return len(args) == 0 || args[0] == "get"
 }
 
 // detectSelf is a seam for tests; production reads the local docker socket.
@@ -135,10 +183,16 @@ func scopeOf(cmd *cobra.Command) commandScope {
 		if bootstrapClusterSubcommands[cmd.Name()] {
 			return scopeBootstrap
 		}
+		if nodeLocalClusterSubcommands[clusterChildOf(cmd)] {
+			return scopeNode
+		}
 		return scopeLeader
 	}
 
 	if subs, ok := nodeLocalSubcommands[name]; ok && cmd != top && subs[cmd.Name()] {
+		return scopeNode
+	}
+	if selfGuardedPlatform(cmd) {
 		return scopeNode
 	}
 
@@ -148,11 +202,24 @@ func scopeOf(cmd *cobra.Command) commandScope {
 	return scopeLeader
 }
 
+// clusterChildOf names the `cluster` subcommand a command belongs to (`cluster mirror
+// verify` → "mirror"), so a family can be classified once instead of per leaf.
+func clusterChildOf(cmd *cobra.Command) string {
+	cur := cmd
+	for cur.HasParent() && cur.Parent().Name() != "cluster" {
+		cur = cur.Parent()
+	}
+	return cur.Name()
+}
+
 // enforceScope is the guard wired into the root command's PersistentPreRunE. It
 // runs BEFORE any command body, so a refusal happens before the store is opened —
 // opening it is itself what seeded an empty database on every worker and made the
 // empty answer look plausible.
-func enforceScope(cmd *cobra.Command) error {
+//
+// args matter for one command: `cluster settings` READS what a follower mirrors, and
+// only its write form needs the leader.
+func enforceScope(cmd *cobra.Command, args []string) error {
 	// Explicit remote mode: the user pointed the CLI at a daemon (usually the
 	// edge, from their own machine). This is the only case where the CLI talks
 	// HTTP, and it is always a deliberate choice.
@@ -162,12 +229,20 @@ func enforceScope(cmd *cobra.Command) error {
 	if scopeOf(cmd) != scopeLeader {
 		return nil
 	}
-	// `doctor` decides for itself: on a non-leader it answers the node-local
-	// subset (daemon, socket proxy, runner assignment, local runner, disk) and
-	// names what it will not answer. It never reads the local store there, so the
-	// refusal this guard exists to enforce — no cluster state from a stale copy —
-	// still holds.
+	// `doctor` decides for itself: on a non-leader it answers the node-local subset
+	// (daemon, socket proxy, runner assignment, local runner, disk, and since slice 3 of
+	// ADR 0003 the MIRROR it holds, labelled with its age) and names what it will not
+	// answer. The age is what keeps the guard's promise — no cluster state presented as
+	// current from a node that does not hold it — while still answering.
 	if cmd.Name() == "doctor" {
+		return nil
+	}
+
+	// Reading cluster settings is the one cluster-state answer a follower can give: its
+	// daemon mirrors the settings table and labels the answer with the leader and an age.
+	// WRITING still needs the leader, because there is exactly one writer — and `set` is
+	// the only form that writes, so the argument decides.
+	if mirrorReadable(cmd, args) {
 		return nil
 	}
 
@@ -204,10 +279,53 @@ func notLeader(cmd *cobra.Command, self docker.SelfNode) error {
 		"nodes or settings. The command is refused rather than answered from an empty or\n" +
 		"stale local store:\n\n")
 	fmt.Fprintf(&b, "  %s\n\n", cmd.CommandPath())
+	if cmd.Name() == "settings" {
+		b.WriteString("Reading is different: `pmcluster cluster settings` answers from this node's\n" +
+			"mirror of the leader's settings, labelled with its age. Only WRITING needs the leader.\n\n")
+	}
 
-	b.WriteString("Run it on the leader, or use the remote CLI from your own machine:\n")
-	fmt.Fprintf(&b, "  %s\n", remoteHint(cmd, leaderURL(self)))
+	// The hint must be TRUE. It used to read "Run it on the leader, or use the remote CLI from
+	// your own machine" for every refused command — including `cluster update`, which has no
+	// remote form at all: it opens the local store and the local docker socket. An operator who
+	// followed that advice got a connection error and reasonably concluded the cluster was broken.
+	if hasRemoteForm(cmd) {
+		b.WriteString("Run it on the leader, or use the remote CLI from your own machine:\n")
+		fmt.Fprintf(&b, "  %s\n", remoteHint(cmd, leaderURL(self)))
+	} else {
+		b.WriteString("This command has no remote form: it reads this cluster's store and drives the\n" +
+			"local docker socket, so there is nothing for your machine to talk to. Run it ON the\n" +
+			"leader (ssh, or `pmcluster node` over ssh), and use `--api-url` only for commands that\n" +
+			"announce it (`pmcluster stack deploy`, `config`, `secret`, `service`, `settings`).\n")
+	}
 	return fmt.Errorf("%s", b.String())
+}
+
+// remoteBackedCommands are the command paths the daemon actually exposes over the API, verified
+// against internal/remote. The list is deliberately an allowlist: a command missing from it loses
+// a helpful hint, while a command wrongly in it makes the CLI LIE about a way out.
+// Each entry mirrors a remote.New* client the CLI actually wires up in backend.go.
+var remoteBackedCommands = map[string]bool{
+	"pmcluster config":         true, // remote.NewConfigs
+	"pmcluster secret":         true, // remote.NewSecrets
+	"pmcluster service":        true, // remote.NewServices
+	"pmcluster settings":       true, // remote.NewClusterSettings / NewUsage
+	"pmcluster stack":          true, // remote.NewStacks / NewDeploy
+	"pmcluster webhook":        true, // remote.NewWebhooks
+	"pmcluster observability":  true, // remote.NewObservability
+	"pmcluster cluster leader": true, // remote.NewTLS (leader move)
+	"pmcluster apikey":         true, // remote.NewAPIKeys
+	"pmcluster backup":         true, // remote.NewBackups
+}
+
+// hasRemoteForm reports whether this command (or its top-level parent) is served by the daemon API.
+func hasRemoteForm(cmd *cobra.Command) bool {
+	path := cmd.CommandPath()
+	for p := path; strings.Contains(p, " "); p = p[:strings.LastIndex(p, " ")] {
+		if remoteBackedCommands[p] {
+			return true
+		}
+	}
+	return remoteBackedCommands[path]
 }
 
 // remoteHint renders a copy-pasteable remote invocation. The URL is the edge when
@@ -270,6 +388,6 @@ func withScopeGuard() {
 				return err
 			}
 		}
-		return enforceScope(cmd)
+		return enforceScope(cmd, args)
 	}
 }

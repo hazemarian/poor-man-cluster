@@ -31,6 +31,11 @@ type terminalPageData struct {
 // Page renders the terminal document.
 func (t Terminal) Page(g *gin.Context) {
 	stack, service := g.Param("name"), g.Query("service")
+	// One line per open. With this and the WS entry line below, "did the request reach the
+	// console at all" stops being a guess: no page line means the gate in front refused it before
+	// us, no WS line with a page line means the browser never opened the socket.
+	t.Log.Info().Str("stack", stack).Str("service", service).Str("host", g.Request.Host).
+		Str("xfp", g.Request.Header.Get("X-Forwarded-Proto")).Msg("terminal: page served")
 	d := terminalPageData{Stack: stack, Service: service, Domain: t.Domain, Version: t.Version}
 	// The page's WS targets this console route; the console bridges to the
 	// daemon. ws(s) follows the /web scheme the browser used.
@@ -56,6 +61,9 @@ func (t Terminal) WS(g *gin.Context) {
 	ctx := g.Request.Context()
 	stack, service := g.Param("name"), g.Query("service")
 	apiURL, token, configured := t.loadParams(ctx)
+	t.Log.Info().Str("stack", stack).Str("service", service).Bool("configured", configured).
+		Str("upgrade", g.GetHeader("Upgrade")).Str("origin", g.GetHeader("Origin")).
+		Msg("terminal: websocket handshake arrived")
 
 	up := websocket.Upgrader{
 		ReadBufferSize:  4096,
@@ -66,25 +74,41 @@ func (t Terminal) WS(g *gin.Context) {
 	}
 	client, err := up.Upgrade(g.Writer, g.Request, nil)
 	if err != nil {
-		return // upgrade already wrote the error
+		// The upgrade already wrote the HTTP error; log it so a browser-side failure that never
+		// becomes a websocket is still visible from the server.
+		t.Log.Warn().Err(err).Str("stack", stack).Str("service", service).
+			Msg("terminal: the browser connection could not be upgraded")
+		return
 	}
 	defer client.Close() //nolint:errcheck // best-effort socket close
 
 	if service == "" || !configured {
+		t.Log.Warn().Str("stack", stack).Str("service", service).Bool("configured", configured).
+			Msg("terminal: no service in the query, or no daemon address/token for this console")
 		writeJSONFrame(client, map[string]any{"type": "error", "error": "terminal: service or daemon not configured"})
 		return
 	}
 
 	daemonURL, err := terminalDaemonWSURL(apiURL, stack, service)
 	if err != nil {
+		t.Log.Warn().Err(err).Str("stack", stack).Msg("terminal: could not build the daemon address")
 		writeJSONFrame(client, map[string]any{"type": "error", "error": err.Error()})
 		return
 	}
 
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+token)
-	daemon, _, err := websocket.DefaultDialer.Dial(daemonURL, header)
+	daemon, resp, err := websocket.DefaultDialer.Dial(daemonURL, header)
 	if err != nil {
+		// This is THE line that was missing. When the daemon refused the exec socket — a token
+		// without the stack in scope, no ExecAttacher on that node, a service that is not running
+		// — the browser saw a one-line status and the server recorded nothing at all.
+		code := 0
+		if resp != nil {
+			code = resp.StatusCode
+		}
+		t.Log.Warn().Err(err).Int("status", code).Str("stack", stack).Str("service", service).
+			Str("daemon", daemonURL).Msg("terminal: the daemon refused the exec socket")
 		writeJSONFrame(client, map[string]any{"type": "error", "error": "daemon exec socket: " + err.Error()})
 		return
 	}
@@ -112,6 +136,13 @@ func (t Terminal) WS(g *gin.Context) {
 	for {
 		mt, data, err := client.ReadMessage()
 		if err != nil {
+			// A close code other than normal is the browser or an intermediary dropping the
+			// socket — worth a line, because it is indistinguishable from "nothing happened"
+			// from the operator's side.
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				t.Log.Warn().Err(err).Str("stack", stack).Str("service", service).
+					Msg("terminal: the browser socket closed unexpectedly")
+			}
 			_ = daemon.Close()
 			return
 		}

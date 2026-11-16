@@ -79,6 +79,17 @@ func (l *Local) discover(ctx context.Context) {
 	if l.S3.Configured() {
 		l.discoverStore(ctx, offsite, offsiteErr)
 	}
+	// Rows recorded before discovery attributed stacks keep the artifact's own
+	// name out of the table. One pass names them; afterwards this is a single
+	// indexed read that finds nothing.
+	if n, nerr := l.Store.AttributeUnnamedBackups(ctx, func(filename string) string {
+		if a, ok := ParseArtifact(filename); ok {
+			return a.Stack
+		}
+		return ""
+	}); nerr == nil && n > 0 && l.Logf != nil {
+		l.Logf("backup discovery: attributed %d previously unnamed archive(s) to their stack", n)
+	}
 }
 
 // offsiteKeys lists the object names present in the configured offsite bucket,
@@ -164,14 +175,19 @@ func (l *Local) discoverLocal(ctx context.Context, offsite map[string]bool, offs
 // whose archive path is the bare object key; restoreSource then resolves it
 // through fetchS3Object (s3ObjectKey of a bare key is the key itself).
 //
-// Only volume archives (`backup-` prefix) are indexed: control-plane archives
-// are restored through a separate path (RestoreControlPlane), never as volume
-// data, so they are deliberately excluded. Nothing is ever deleted from the
-// store.
+// Only volume archives (`backup-` prefix) are indexed. Control-plane archives no
+// longer exist: the control plane reaches every manager through the mirror, so the
+// leader stopped writing them (ADR 0005). Nothing is ever deleted from the store.
 func (l *Local) discoverStore(ctx context.Context, offsite map[string]bool, offsiteErr error) {
 	objects, err := listS3Objects(ctx, l.S3, "backup-")
 	if err != nil {
-		return // an unreachable store must not fail List/ListForStack
+		// An unreachable store must not fail List/ListForStack — but it must not be
+		// silent either: this branch is why a cluster can look fully indexed while
+		// nothing from the object store has ever been recorded.
+		if l.Logf != nil {
+			l.Logf("backup discovery: in-cluster store not indexed: %v", err)
+		}
+		return
 	}
 	for _, o := range objects {
 		base := filepath.Base(o.Key)
@@ -191,7 +207,17 @@ func (l *Local) discoverStore(ctx context.Context, offsite map[string]bool, offs
 			at = o.LastModified.Unix()
 		}
 		status, note := l.offsiteVerdict(base, offsite, offsiteErr)
-		if err := l.Store.RecordDiscoveredBackupStatus(ctx, base, base, at, status, note); err != nil {
+		// Attribute the artifact to its stack, exactly as local discovery does.
+		// Without this every archive taken by a node OTHER than the leader became a
+		// row with an empty stack_name — 1639 of 1770 rows on 2026-11-15 — so the
+		// per-stack backup view, restore-by-stack and any coverage check could not
+		// see a stack's backups at all. The CLI hid it by deriving the stack from
+		// the archive filename when it printed the table.
+		stack := ""
+		if a, ok := ParseArtifact(base); ok {
+			stack = a.Stack
+		}
+		if err := l.Store.RecordDiscoveredBackupArtifact(ctx, base, base, at, status, note, stack); err != nil {
 			continue
 		}
 	}

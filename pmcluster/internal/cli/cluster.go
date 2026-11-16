@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
+
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
@@ -106,7 +108,7 @@ func init() {
 
 	clusterResetCmd.Flags().String("restore", "", "restore a purge-backup tarball into the data dir before rebuilding")
 
-	clusterCmd.AddCommand(clusterUpCmd, clusterUpdateCmd, clusterStatusCmd, clusterDownCmd, clusterResetCmd, clusterKitCmd, clusterOrphansCmd)
+	clusterCmd.AddCommand(clusterUpCmd, clusterUpdateCmd, clusterStatusCmd, clusterDownCmd, clusterResetCmd, clusterMirrorCmd, clusterOrphansCmd)
 }
 
 // clusterState classifies what the local store says about this node.
@@ -161,8 +163,8 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
+	if err := requireInitialised(cfg, "run `pmcluster init` first"); err != nil {
+		return err
 	}
 
 	log, logCloser, err := logger.New(logger.Options{
@@ -177,9 +179,9 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 	log.Info().Msg("cluster update: starting")
 	defer log.Info().Msg("cluster update: finished")
 
-	st, err := store.Open(cfg.DBPath())
+	st, err := openExistingStore(cfg.DBPath())
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
 	defer func() { _ = st.Close() }()
 
@@ -194,7 +196,7 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintln(cmd.OutOrStdout(), "This node is a Swarm manager with no local control-plane state yet (it has not been promoted — the store is restored from the Raft snapshot on promotion). The cluster exists; nothing to update here.")
 			// A standby manager still needs a current daemon + systemd unit so it
 			// can take over cleanly (and so unit changes roll out to it).
-			if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+			if err := nodeunits.EnsureDaemonRunning(cmd.OutOrStdout(), configPath); err != nil {
 				return fmt.Errorf("ensure daemon running: %w", err)
 			}
 			return nil
@@ -225,9 +227,13 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 		// Pulls use the stored read-only PAT: apply it before the first
 		// `docker stack deploy --with-registry-auth` freezes it into a spec.
 		BeforeDeploy: func(ctx context.Context) { loginBeforeDeploy(ctx, st, cfg, log) },
+		// A storage node ends every update with a working backup agent (ADR 0008). Injected from
+		// here because nodeunits owns the units and cluster must not import it.
+		EnsureBackupAgent: nodeunits.EnsureBackupAgent,
 	}, cluster.UpdateInput{
-		ConfigDir: cfg.ConfigDir(),
-		Version:   buildinfo.Version,
+		ConfigDir:  cfg.ConfigDir(),
+		ConfigPath: cfg.ConfigPath(),
+		Version:    buildinfo.Version,
 	})
 	if err != nil {
 		return err
@@ -236,7 +242,7 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 
 	// The daemon is managed by the CLI now (not install.sh): make sure it is
 	// installed + running with the current binary.
-	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+	if err := nodeunits.EnsureDaemonRunning(cmd.OutOrStdout(), configPath); err != nil {
 		return fmt.Errorf("ensure daemon running: %w", err)
 	}
 	return nil
@@ -316,8 +322,8 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "✔ restored store backup %s into %s\n", restore, cfg.DataDir)
 	}
 
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first (or pass --restore <archive>)", cfg.DataDir)
+	if err := requireInitialised(cfg, "run `pmcluster init` first (or pass --restore <archive>)"); err != nil {
+		return err
 	}
 
 	log, logCloser, err := logger.New(logger.Options{
@@ -332,9 +338,9 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 	log.Info().Msg("cluster reset: starting")
 	defer log.Info().Msg("cluster reset: finished")
 
-	st, err := store.Open(cfg.DBPath())
+	st, err := openExistingStore(cfg.DBPath())
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
 	defer func() { _ = st.Close() }()
 
@@ -346,7 +352,7 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 		defer closeProbe()
 		if classifyLocalCluster(ctx, st, probe) == stateStandby {
 			fmt.Fprintln(cmd.OutOrStdout(), "This node is a Swarm manager with no local control-plane state yet (it has not been promoted — the store is restored from the Raft snapshot on promotion). Rebuild from the leader with `pmcluster cluster reset` there, or let this node be promoted.")
-			if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+			if err := nodeunits.EnsureDaemonRunning(cmd.OutOrStdout(), configPath); err != nil {
 				return fmt.Errorf("ensure daemon running: %w", err)
 			}
 			return nil
@@ -377,10 +383,14 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 		// Pulls use the stored read-only PAT: apply it before the first
 		// `docker stack deploy --with-registry-auth` freezes it into a spec.
 		BeforeDeploy: func(ctx context.Context) { loginBeforeDeploy(ctx, st, cfg, log) },
+		// `cluster reset` rebuilds the swarm side from the DB; a storage node's agent is part of
+		// that side, so it is ensured here too.
+		EnsureBackupAgent: nodeunits.EnsureBackupAgent,
 	}, cluster.UpdateInput{
-		ConfigDir: cfg.ConfigDir(),
-		Version:   buildinfo.Version,
-		Force:     true,
+		ConfigDir:  cfg.ConfigDir(),
+		ConfigPath: cfg.ConfigPath(),
+		Version:    buildinfo.Version,
+		Force:      true,
 	})
 	if err != nil {
 		return err
@@ -388,7 +398,7 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 	printResetResult(cmd.OutOrStdout(), res)
 
 	// Rebuild is done — make sure the daemon is installed + running.
-	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+	if err := nodeunits.EnsureDaemonRunning(cmd.OutOrStdout(), configPath); err != nil {
 		return fmt.Errorf("ensure daemon running: %w", err)
 	}
 	return nil
@@ -425,8 +435,8 @@ func runClusterUp(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` first", cfg.DataDir)
+	if err := requireInitialised(cfg, "run `pmcluster init` first"); err != nil {
+		return err
 	}
 
 	in := cluster.UpInput{}
@@ -498,9 +508,9 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 	log.Info().Msg("cluster up: starting")
 	defer log.Info().Msg("cluster up: finished")
 
-	st, err := store.Open(cfg.DBPath())
+	st, err := openExistingStore(cfg.DBPath())
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
 	defer func() { _ = st.Close() }()
 
@@ -567,7 +577,7 @@ func runUp(cmd *cobra.Command, cfg *config.Config, in cluster.UpInput) error {
 
 	// The daemon is managed by the CLI now (not install.sh): make sure it is
 	// installed + running with the current binary.
-	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+	if err := nodeunits.EnsureDaemonRunning(cmd.OutOrStdout(), configPath); err != nil {
 		return fmt.Errorf("ensure daemon running: %w", err)
 	}
 	return nil
@@ -718,7 +728,7 @@ func runClusterDown(cmd *cobra.Command, _ []string) error {
 	// Purge must stop the daemon FIRST (best-effort, systemd-only) so it cannot
 	// resurrect swarm resources while we remove them.
 	if purge {
-		stopDaemon(out)
+		nodeunits.StopDaemon(out)
 	}
 
 	dc, err := docker.New()

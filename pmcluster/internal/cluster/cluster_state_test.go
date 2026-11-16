@@ -74,6 +74,38 @@ func TestMergeTLSState_RefusesModeFlipUnlessForced(t *testing.T) {
 	}
 }
 
+// TestLoadNodeDockerRestartKnown is the regression for a node that disarmed its own
+// docker watchdog. `node_docker_restart` is leader-owned, so a worker's store has no
+// row for it and the plain loader answers "false" — fine as a value, fatal as a value
+// to WRITE over the decision the leader already pushed to the node's policy file
+// (nxt-sw-6-w, 2026-11-13: dockerd dead, daemon restarted, policy rewritten as false,
+// watchdog sat through three failed probes doing nothing).
+func TestLoadNodeDockerRestartKnown(t *testing.T) {
+	s, _ := newTestDeps(t)
+	ctx := context.Background()
+
+	// A store that cannot answer must say so. "false, true" here would be a decision
+	// this node never made.
+	if armed, known := LoadNodeDockerRestartKnown(ctx, s); known || armed {
+		t.Fatalf("empty store: armed=%v known=%v, want false/false", armed, known)
+	}
+
+	if err := s.SetSetting(ctx, settingNodeDockerRestart, "true"); err != nil {
+		t.Fatal(err)
+	}
+	if armed, known := LoadNodeDockerRestartKnown(ctx, s); !known || !armed {
+		t.Fatalf("after set true: armed=%v known=%v, want true/true", armed, known)
+	}
+
+	// The value the console and the CLI write is whatever case the operator typed.
+	if err := s.SetSetting(ctx, settingNodeDockerRestart, " FALSE "); err != nil {
+		t.Fatal(err)
+	}
+	if armed, known := LoadNodeDockerRestartKnown(ctx, s); !known || armed {
+		t.Fatalf("after set FALSE: armed=%v known=%v, want false/true", armed, known)
+	}
+}
+
 // TestLoadObservabilityRetentionDefaults: an untouched store returns the
 // per-stream defaults (30 logs / 14 metrics / 10 traces), matching the
 // provision script's own fallback.

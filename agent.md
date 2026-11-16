@@ -120,7 +120,7 @@ repo root (this dir)
 │   └── test-reports/          # per-test-case field reports (historical)
 ├── harden-host.sh             # one-shot host hardening (ufw, DOCKER-USER, fail2ban)
 ├── install.sh                 # curl|bash installer (binary + systemd + auto cluster up/update)
-├── pmcluster/hack/upgrade-nodes.sh   # multi-node binary upgrade (verify → ssh+cat copy → install → restart → cluster update)
+├── pmcluster/hack/registry-rotate.sh # registry credential rotation
 ├── skills/poor-man-cluster-deploy/SKILL.md   # deployment skill for agents
 ├── .github/workflows/
 │   ├── pmcluster.yml          # build gate: lint + build + unit + fast e2e
@@ -142,6 +142,14 @@ repo root (this dir)
 
 ### cmd/pmcluster + internal/cli — the CLI surface
 `cobra.Command` tree. Every command registers itself in its file's `init()`.
+The CLI is a SURFACE, not a home for behaviour: the loops `serve` starts live in
+`internal/noderuntime/` (assignment channel, snapshot mirror, volume repair, the
+runner reconcile, the docker and swarm watchers) and the systemd units a node
+installs on itself live in `internal/nodeunits/` (the daemon's unit, the health
+watchdog, the backup agent's six units and the policy file they read).
+`internal/cli/boundary_test.go` fails when a name is defined in more than one of
+those three packages, and when one of the runtime entry points reappears in the
+CLI — so a helper belongs where the guard says, not beside the caller.
 Key commands (all in `internal/cli/`):
 - `cluster up|update|reset|status|down` (`cluster.go`) — bootstrap / content-aware
   self-healing reconcile / Swarm rebuild-from-DB (`--restore` extracts a
@@ -759,53 +767,79 @@ wizard; a joined-but-unpromoted standby manager is recognized and skipped.
 
 ### Control plane failover
 `serve` waits for swarm leadership (15s poll; workers/standby managers idle).
-At startup — BEFORE the store opens — `ensureControlPlaneFresh` restores from
-the newest Raft-replicated `pmcluster_state_*` Docker config (key split into
-`pmcluster_state_key_*`). On every follower→leader transition the leadership
-goroutine runs `adoptOnLeadershipGain` → `Kit.AdoptOnLeadership`: the same
-freshness predicate, but the store is already open, so adoption stages the kit in
-`.adopt-*`, closes the handle (`store.Store.Swap`), renames `data.db` last and
-`.encryption_key` in, then reopens — and reloads `credentials.Cipher` when the key
-changed. It runs before `kit.Snapshot` and before the reconcile loop reads
-settings (`internal/cli/leader.go`, `internal/controlplane/adopt.go`). While it
-runs, `adoptionGate` answers 503 + `Retry-After: 1` for every route but
-`/health` (`internal/cli/adoptgate.go`). Alongside the reconcile loop the leader
-runs `kit.Loop` (5-min change-detection snapshot; 500 KiB config ceiling; keeps
-2). Adoption is never part of a tick.
+Cluster state reaches a manager by the swarm-mTLS pull
+(`GET /internal/api/cluster/snapshot`, `internal/clustersnapshot`) and is mirrored
+into its own store every 60 s; the leader never fetches from itself. At startup —
+before the store opens — `noderuntime.ConfirmMirrorAtStartup` states what this node
+holds (leader, version, age) or says plainly that it is waiting for the first
+snapshot; `cli.openServeStore` is the one place `serve` tolerates a missing
+database, so a manager with no data starts and serves `/health` instead of
+crash-looping.
 
-The kit's `data.db` is an EXPORT of the authoritative tables, not the leader's
-file (`internal/controlplane/kitdb.go`, `store.Export`): users, credentials,
-stacks, webhook_sources, registries, cluster_settings, configs, secrets,
-site_certs, stack_failover — plus a short rollback window on the two unbounded
-tables: each stack's newest 5 revisions and the row its `current_revision` points
-at, and the newest 10 versions per config name. `backups`, `webhook_deliveries`,
-`stack_status` and `node_stats` do not cross the fleet; the rest of the history
-stays on the node. The whole file hit 5.2 MB (538 KB gzipped) and every snapshot
-was refused, so the caps are a size decision, not a preference: they live in one
-place in `kitdb.go` and a test packs 500 revisions / 200 versions per group and
-fails if the kit leaves its budget. A promoted leader therefore reconciles each
-stack against its current rendered manifest and can roll a deploy back inside the
-window; a revision older than it still returns `store.ErrRevisionNotFound`, which
-`reconcile` treats as `skipped` (info, once per stack) rather than an error. A
-config rollback further back than ten versions is a leader-side operation, since
-only the leader still has those rows. The payload size is logged at info on every
-publish. A test holds the schema to the table list, so a new migration must be
-classified.
+On every follower→leader transition the leadership goroutine runs
+`noderuntime.AdoptOnLeadershipGain` → `Kit.AdoptOnLeadership`
+(`internal/controlplane/adopt.go`). **Nothing is copied**: the node has been
+mirroring the cluster's state, so it keeps serving that store and becomes the
+writer (ADR 0005). The check decides only whether there is anything to serve — a
+node that has never applied a snapshot AND whose store holds no cluster state
+refuses, loudly, and starts no control loop; a STALE mirror is served and the
+version and age are logged. The encryption key is checked by DECRYPTING what the store
+holds (a bounded sample of secrets) and a key that does not open them is a warning, not a
+refusal: ending up with no leader over a key the operator is about to copy into place is
+the wrong trade. While the
+check runs, `adoptionGate` answers 503 + `Retry-After: 1` for every route but
+`/health` (`internal/noderuntime/adoptgate.go`).
+
+The mirror carries the WHOLE control-plane document — every table except
+`backups`, `node_stats`, `github_runners`, `sync_state` and the two structural
+tables, all of which describe the node they live on (`internal/store/mirror_tables.go`
+lists both sets with a reason per table, and a test fails when a migration adds a
+table neither list mentions). It includes `stack_revisions` and `cluster_version`,
+so a promoted leader reads the manifest behind its live stack pointer and continues
+the version counter instead of restarting it. The steady state is a 304 (no body);
+a changed poll is a few megabytes of JSON, accepted.
+
+The platform writes NO Docker config: the data kit (`pmcluster_state_<ts>`) is retired,
+the control-plane archive is deleted, and the key config (`pmcluster_state_key_<ts>`)
+went with it (ADR 0006). The cipher key is the file `<data dir>/.encryption_key`, minted
+once at `cluster init`, never rotated, copied by the operator today and delivered by the join
+route when it lands. Two consequences worth knowing: a node that already has `data.db` never MINTS a
+key (`credentials.OpenExisting`, so a forgotten copy fails loudly instead of silently
+poisoning new secrets), and `cluster update` no longer has a key publish step to fail.
 
 ### Upgrading the platform
 Push a `v*` tag → `release.yml` cross-compiles 4 tarballs + SHA256SUMS +
 builds/pushes `ghcr.io/hazemarian/pmcluster-edge:<v>` + `:latest`.
 
-To replace the binary on a **multi-node** swarm, use
-`pmcluster/hack/upgrade-nodes.sh <version>`: it verifies the release checksum,
-copies the binary to each node over `ssh … "cat > /tmp/pmcluster.new"` (not
-`scp` — see the script header), installs/restarts units followers-first with the
-leader last, exits non-zero without half-applying if any node fails, and runs
-`cluster update` on the leader only once every node agrees. Pass
-`PMCLUSTER_NODES` (public IPs); discovery returns swarm-internal addresses,
-which are unreachable from outside. `PMCLUSTER_SSH_USER` defaults to `root`;
-wafaa needs `wafaa` (+ passwordless sudo), a disabled-SFTP sshd, and a zsh login
-shell.
+To replace the binary on a **multi-node** swarm, use `pmcluster cluster upgrade <version>`
+(`internal/upgrade`, `internal/cli/cluster_upgrade.go`). It is a workflow, not a script:
+
+1. fetches the release artifact with `gh`, reads its sha256 out of `SHA256SUMS.txt`, and
+   verifies it locally — then copies it to each node over the same authenticated ssh channel
+   and verifies the checksum AGAIN on the node (the release repo is private, so a node cannot
+   fetch it; two checks catch a corrupt transfer, which is what reaches `/usr/local/bin`
+   otherwise);
+2. asks every node what it is (`docker info` → ControlAvailable, because a WORKER cannot run
+   `docker node inspect self`), orders them workers → follower managers → **leader last**, and
+   REFUSES when no node claims leadership rather than guessing;
+3. per node: skip when it already runs the version (idempotent — a failed run resumes), keep the
+   outgoing binary as `.prev`, install, restart, then GATE on `/health` answering with the NEW
+   version in its body. `systemctl is-active` is not a gate: it reads "active" for a binary that
+   crash-loops;
+4. a node that fails the gate is restored to `.prev` and re-gated; if the rollback itself fails
+   the report says so instead of claiming a rollback. Either way the rollout STOPS — the nodes
+   it had not reached are untouched, because continuing past a broken node is how a fleet ends
+   up with mixed versions and a dead leader.
+
+Pass `--nodes` (public IPs) or `PMCLUSTER_NODES`; discovery returns swarm-internal addresses,
+which are unreachable from outside. `--user` defaults to `root`; wafaa needs `wafaa` (+
+passwordless sudo), a disabled-SFTP sshd, and a zsh login shell. `--dry-run` prints the plan and
+touches nothing.
+
+`hack/upgrade-nodes.sh` was deleted once the command covered it: the script ordered nodes and
+verified checksums, but it had no health gate, no rollback, and it read the release archive by a
+fixed layout — the trap that stopped the first real rollout. Anyone still calling it should call
+`pmcluster cluster upgrade` instead.
 
 On a **single node**, `curl -fsSL .../install.sh | VERSION=vX bash` installs the
 new binary, restarts the daemon, and auto-runs `pmcluster cluster update`
@@ -917,6 +951,8 @@ auto-ban → forward to daemon. The console UI is served by the same process.
 | Task | Where |
 |---|---|
 | Add a CLI command | new file in `internal/cli/`, register in `init()` via `rootCmd.AddCommand()`; add OpenAPI row if it has an API twin |
+| Add a per-node loop | `internal/noderuntime/`, started from `cli/serve.go` — a loop in `internal/cli` fails `boundary_test.go` |
+| Add a systemd unit | `internal/nodeunits/`, with the seams (`HostOS`, `Systemctl`, `WriteUnit`) already stubbed for tests |
 | Add a REST endpoint | the domain package's `http.go` (struct + `Mount`), wire in `server.New` (Deps) + `cli/serve.go` |
 | Add a console page | `internal/ui/controllers/<name>.go`, route in `internal/ui/ui.go` Mount (viewer GET / operator POST), template `views/templates/frag_<name>.html`, nav in `app.html`, pmapi method in `internal/ui/pmapi/` |
 | Add a DB table | new `migrations/00NN_*.sql` + `internal/store/<name>.go` repo + tests |

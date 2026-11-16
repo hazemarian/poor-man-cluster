@@ -2,8 +2,10 @@ package runners
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -69,10 +71,6 @@ type Assignment struct {
 	Enabled bool   `json:"enabled"`
 	Org     string `json:"org"`
 	Group   string `json:"group"`
-	// SocketProxy is the exposure decision: true mounts the daemon's filtered
-	// socket at SocketPath, false is the documented raw-socket debug fallback.
-	SocketProxy bool   `json:"socket_proxy"`
-	SocketPath  string `json:"socket_path"`
 	// NodeDockerRestart arms THIS node's watcher to restart docker when its socket
 	// stops answering.
 	//
@@ -82,11 +80,9 @@ type Assignment struct {
 	// nothing on exactly the nodes that need it (measured on nxt-sw-6-w: the setting
 	// said true, the watchdog unit never gained the flag).
 	NodeDockerRestart bool `json:"node_docker_restart"`
-	// DinD asks the node for a private docker daemon instead of either socket.
 	// It travels in this document because the decision is the operator's, made once
 	// on the leader: a worker that chose for itself would make "what does a job
 	// get?" depend on which machine picked up the job.
-	DinD   bool   `json:"dind"`
 	Memory string `json:"memory"`
 	Mode   string `json:"mode"`
 	Labels string `json:"labels"`
@@ -125,14 +121,12 @@ func (a Assignment) Config(node string) Config {
 		node = a.Node
 	}
 	return Config{
-		Enabled:     a.Enabled,
-		Org:         a.Org,
-		Group:       a.Group,
-		SocketProxy: a.SocketProxy,
-		SocketPath:  a.SocketPath,
-		Memory:      a.Memory,
-		Node:        node,
-		Image:       DefaultImage,
+		Enabled: a.Enabled,
+		Org:     a.Org,
+		Group:   a.Group,
+		Memory:  a.Memory,
+		Node:    node,
+		Image:   DefaultImage,
 	}
 }
 
@@ -150,6 +144,13 @@ func (a Assignment) Interval() time.Duration {
 		secs = 3600
 	}
 	return time.Duration(secs) * time.Second
+}
+
+// isManagerNode is the one place that decides what "a manager" means for placement. It
+// is deliberately generous about the leader flag: a node the swarm reports as leader IS a
+// manager, and a name list that says manager without the role flag is one too.
+func isManagerNode(n runtime.Node) bool {
+	return n.IsLeader || strings.EqualFold(n.Role, "manager")
 }
 
 // CheckPlacement refuses a selection that contains a manager, unless the operator
@@ -171,10 +172,10 @@ func CheckPlacement(cfg Config, nodes []runtime.Node) error {
 			if !strings.EqualFold(n.Hostname, sel) {
 				continue
 			}
-			if n.IsLeader && cfg.AllowLeader {
+			if isManagerNode(n) && cfg.AllowManagers {
 				continue
 			}
-			if strings.EqualFold(n.Role, "manager") || n.IsLeader {
+			if isManagerNode(n) {
 				return fmt.Errorf("%w: %q is a %s node", ErrManagerNode, n.Hostname, roleWord(n))
 			}
 		}
@@ -202,10 +203,7 @@ func ResolveAssignment(cfg Config, nodes []runtime.Node, node string) (Assignmen
 		Node:              node,
 		Org:               cfg.Org,
 		Group:             cfg.Group,
-		SocketProxy:       cfg.SocketProxy,
-		DinD:              cfg.DinD,
 		NodeDockerRestart: cfg.NodeDockerRestart,
-		SocketPath:        cfg.SocketPath,
 		// The cap travels RESOLVED FOR THIS NODE: a worker cannot read
 		// github_runner_node_memory (configs are manager-only), so if the
 		// leader sent the cluster default the node would start the container
@@ -214,11 +212,6 @@ func ResolveAssignment(cfg Config, nodes []runtime.Node, node string) (Assignmen
 		Mode:            ModeEphemeral,
 		Labels:          Labels,
 		IntervalSeconds: cfg.IntervalSeconds,
-	}
-	if !a.SocketProxy {
-		// The raw socket is a debugging fallback; say so in the answer so the
-		// node's log and the docs agree with what was mounted.
-		a.Reason = "socket proxy disabled: the runner mounts the host's raw docker socket"
 	}
 	if !cfg.Enabled {
 		a.Enabled = false
@@ -251,6 +244,10 @@ func ResolveAssignment(cfg Config, nodes []runtime.Node, node string) (Assignmen
 // the node is taken from the request's TLS identity (see internal/auth/swarmtls),
 // never from the query string.
 type AssignmentService struct {
+	// CacheReports is where a node's cache measurement lands, so a console served by
+	// the leader can show it for a runner that lives on another machine. Nil means the
+	// leader does not record them, and it says so instead of pretending.
+	CacheReports *CacheReports
 	// Config reads the current runner settings on THIS node (the leader).
 	Config func(ctx context.Context) Config
 	// Nodes reads the live swarm node list.
@@ -304,8 +301,19 @@ func (s *AssignmentService) interval() time.Duration {
 // ignoring it means the endpoint has exactly one identity source and no branch
 // that could later be "helpfully" widened.
 func (s *AssignmentService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// POST is one thing only: the node reporting how big its runner caches are. The
+	// leader cannot measure another machine's volumes — `docker system df` answers for
+	// the daemon it is run against, and a worker's API is loopback-only — so the node
+	// that CAN measure sends the numbers on the channel it already opens every minute.
+	//
+	// It is not a second purpose for the endpoint, it is the only way the console can
+	// show a cache warning for a runner that lives anywhere but the leader.
+	if r.Method == http.MethodPost {
+		s.reportCaches(w, r)
+		return
+	}
 	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed: the assignment channel is read-only"})
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed: GET reads the assignment, POST reports cache sizes"})
 		return
 	}
 	ident, ok := swarmtls.FromContext(r.Context())
@@ -480,4 +488,36 @@ func ensureGroupSelected(ctx context.Context, gh GitHub, org, group string) erro
 		return fmt.Errorf("refusing to run a runner in org %s: runner group %q reported visibility %q", org, group, g.Visibility)
 	}
 	return nil
+}
+
+// reportCaches accepts a node's cache measurement and keeps the last one per node.
+func (s *AssignmentService) reportCaches(w http.ResponseWriter, r *http.Request) {
+	ident, ok := swarmtls.FromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden", "reason": "no authenticated swarm node"})
+		return
+	}
+	node := strings.TrimSpace(ident.Hostname)
+	if node == "" {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "forbidden", "reason": "certificate is not a live swarm node"})
+		return
+	}
+	var body struct {
+		Caches []CacheUsage `json:"caches"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "decode: " + err.Error()})
+		return
+	}
+	if s.CacheReports == nil {
+		// Nothing is stored, and the node is told so rather than left believing it
+		// reported successfully.
+		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "this leader does not record cache reports"})
+		return
+	}
+	// No timestamp from here: the sink stamps the report with ITS clock, so the age the
+	// console checks and the age the report carries can never come from two different
+	// clocks (which is exactly what a test with a fixed service clock exposed).
+	s.CacheReports.Put(node, CacheReport{Caches: body.Caches})
+	writeJSON(w, http.StatusOK, map[string]any{"node": node, "caches": len(body.Caches)})
 }

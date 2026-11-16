@@ -116,77 +116,6 @@ func TestHTTP_PutRejectsUnknownAndBadBody(t *testing.T) {
 	}
 }
 
-// TestHTTP_GetMasksSecretsForNonAdmin is the FIX 5 guard: secret-ish keys
-// (sso_client_secret, backup_s3_access_key/secret_key) are masked for non-admin
-// bearers but kept in full for an admin. The CLI reads full values with the
-// admin token.
-func TestHTTP_GetMasksSecretsForNonAdmin(t *testing.T) {
-	ctx := context.Background()
-	st, err := store.Open(filepath.Join(t.TempDir(), "data.db"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	for k, v := range map[string]string{
-		"sso_client_secret":    "client-secret-value",
-		"backup_s3_access_key": "ak-value",
-		"backup_s3_secret_key": "sk-value",
-		"domain":               "example.com",
-		"volume_root":          "/data",
-	} {
-		if err := st.SetSetting(ctx, k, v); err != nil {
-			t.Fatalf("SetSetting %s: %v", k, err)
-		}
-	}
-
-	lookup := &fakeLookup{users: map[string]*auth.User{
-		"admin-tok":  {ID: 1, Name: "admin", Role: auth.RoleAdmin},
-		"viewer-tok": {ID: 2, Name: "viewer", Role: auth.RoleViewer},
-	}}
-	mux := chi.NewRouter()
-	mux.Use(auth.Bearer(lookup))
-	(&HTTP{Svc: NewLocal(st)}).Mount(mux)
-
-	get := func(token string) map[string]string {
-		req := httptest.NewRequest(http.MethodGet, "/cluster/settings", nil)
-		req.Header.Set("Authorization", "Bearer "+token)
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("GET settings (token %q) code = %d, body=%s", token, rec.Code, rec.Body.String())
-		}
-		var body struct {
-			Settings map[string]string `json:"settings"`
-		}
-		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		return body.Settings
-	}
-
-	admin := get("admin-tok")
-	if admin["sso_client_secret"] != "client-secret-value" {
-		t.Errorf("admin sso_client_secret = %q, want full value", admin["sso_client_secret"])
-	}
-	if admin["backup_s3_access_key"] != "ak-value" {
-		t.Errorf("admin backup_s3_access_key = %q, want full value", admin["backup_s3_access_key"])
-	}
-	if admin["domain"] != "example.com" {
-		t.Errorf("admin domain = %q, want example.com", admin["domain"])
-	}
-
-	viewer := get("viewer-tok")
-	for _, k := range []string{"sso_client_secret", "backup_s3_access_key", "backup_s3_secret_key"} {
-		if viewer[k] != "********" {
-			t.Errorf("viewer %s = %q, want masked", k, viewer[k])
-		}
-	}
-	// Non-secret keys stay unmasked for the viewer.
-	if viewer["domain"] != "example.com" || viewer["volume_root"] != "/data" {
-		t.Errorf("viewer non-secret settings unexpectedly masked: %v", viewer)
-	}
-}
-
 // fakeLookup is an auth.Lookup resolving bearer tokens to fixed roles.
 type fakeLookup struct {
 	users map[string]*auth.User
@@ -194,4 +123,71 @@ type fakeLookup struct {
 
 func (f *fakeLookup) UserByToken(_ context.Context, token string) (*auth.User, error) {
 	return f.users[token], nil
+}
+
+// TestHTTP_GetNeverReturnsSecrets replaces "masked for non-admins, cleartext for admins".
+// The unit of exposure is not the bearer, it is the BROWSER: the console holds the admin
+// token, so an admin-cleartext response puts the S3 secret and the SSO client secret into
+// a page, a devtools panel and the browser's memory. Nobody needs to read back a secret
+// they stored; they need to know whether one is set.
+func TestHTTP_GetNeverReturnsSecrets(t *testing.T) {
+	h, st := newHTTPEnv(t)
+	for k, v := range map[string]string{
+		"log_level":            "info",
+		"sso_client_secret":    "super-secret",
+		"backup_s3_access_key": "AKIAEXAMPLE",
+		"backup_s3_secret_key": "shhh",
+		"backup_s3_bucket":     "backups",
+	} {
+		if err := st.SetSetting(context.Background(), k, v); err != nil {
+			t.Fatalf("seed %s: %v", k, err)
+		}
+	}
+
+	rec, _ := settingsDo(t, h, http.MethodGet, "/cluster/settings", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var body struct {
+		Settings  map[string]string `json:"settings"`
+		SecretSet map[string]bool   `json:"secret_set"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, k := range []string{"sso_client_secret", "backup_s3_access_key", "backup_s3_secret_key"} {
+		if body.Settings[k] != Mask {
+			t.Fatalf("%s = %q, want the mask", k, body.Settings[k])
+		}
+		if !body.SecretSet[k] {
+			t.Fatalf("secret_set[%s] = false, want true: the form must know one is stored", k)
+		}
+	}
+	if body.Settings["backup_s3_bucket"] != "backups" {
+		t.Fatalf("a non-secret value was masked: %q", body.Settings["backup_s3_bucket"])
+	}
+	if strings.Contains(rec.Body.String(), "super-secret") || strings.Contains(rec.Body.String(), "AKIAEXAMPLE") {
+		t.Fatal("a secret value appeared in the response body")
+	}
+}
+
+// TestHTTP_PutLeavesMaskedSecretsAlone: a form rendered from a masked GET submits the mask
+// back. Saving must not erase the secret the page was never shown.
+func TestHTTP_PutLeavesMaskedSecretsAlone(t *testing.T) {
+	h, st := newHTTPEnv(t)
+	ctx := context.Background()
+	if err := st.SetSetting(ctx, "sso_client_secret", "super-secret"); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := settingsDo(t, h, http.MethodPut, "/cluster/settings",
+		`{"settings":{"sso_client_secret":"`+Mask+`","log_level":"debug"}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := st.SettingDefault(ctx, "sso_client_secret", ""); got != "super-secret" {
+		t.Fatalf("the secret was overwritten by the mask: %q", got)
+	}
+	if got := st.SettingDefault(ctx, "log_level", ""); got != "debug" {
+		t.Fatalf("log_level = %q, want debug — a normal setting must still apply", got)
+	}
 }

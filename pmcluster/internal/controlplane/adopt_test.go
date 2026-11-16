@@ -3,481 +3,380 @@ package controlplane
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/rs/zerolog"
 
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
-// clusterKey is the encryption key the fake cluster's kit carries.
+// clusterKey is the encryption key the fake cluster published in its key config.
 const clusterKey = "0123456789abcdef0123456789abcdef"
 
-// countingDocker wraps the in-memory config fake and counts the reads the
-// freshness predicate makes, so a test can assert HOW MANY checks a leadership
-// transition performed — not merely that one happened.
-type countingDocker struct {
-	*fakeClient
-	// stateLists counts ConfigList calls for the state config family: one per
-	// freshness check.
-	stateLists int
-}
-
-func newCountingDocker() *countingDocker { return &countingDocker{fakeClient: newFake()} }
-
-func (c *countingDocker) ConfigList(ctx context.Context, labelKey, labelValue string) ([]string, error) {
-	if labelKey == LabelKind && labelValue == KindState {
-		c.stateLists++
-	}
-	return c.fakeClient.ConfigList(ctx, labelKey, labelValue)
-}
-
-// swapRecorder counts how many times the adopter asked for the store to be
-// swapped (i.e. how many extractions happened) and, optionally, performs the
-// real swap on a live *store.Store.
-type swapRecorder struct {
-	swaps  int
-	dbPath string
-	// atEntry is the data.db content seen when Swap was entered — i.e. before
-	// the promotion ran. It proves the kit was extracted alongside, not in place.
-	atEntry []byte
-	// inner is the real store handle when the test needs the close/reopen.
-	inner StoreSwapper
-	// failWith makes the promotion claim to fail without touching files.
-	failWith error
-}
-
-func (s *swapRecorder) Swap(fn func() error) error {
-	s.swaps++
-	if s.dbPath != "" {
-		s.atEntry, _ = os.ReadFile(s.dbPath)
-	}
-	if s.failWith != nil {
-		return s.failWith
-	}
-	if s.inner != nil {
-		return s.inner.Swap(fn)
-	}
-	return fn()
-}
-
-// clusterWithKit builds a source node with a real SQLite store holding one
-// setting, publishes it as the cluster's newest snapshot, and returns the
-// Docker fake plus the snapshot time.
-func clusterWithKit(t *testing.T, probe string) (*countingDocker, time.Time) {
+// newMirrorStore opens a store and applies a one-setting snapshot, so it looks like a node
+// that has been mirroring the leader. checked rounds it out with a confirmation time — the
+// column an age may be measured from (applied_at only moves when content changes).
+func newMirrorStore(t *testing.T, leader string, version int64, checked time.Time) (*store.Store, string) {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "data.db"))
 	if err != nil {
-		t.Fatalf("open source store: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
-	if err := st.SetSetting(ctx, "probe", probe); err != nil {
-		t.Fatalf("seed source setting: %v", err)
+	t.Cleanup(func() { _ = st.Close() })
+	tables := map[string]store.TableData{
+		"cluster_settings": {Columns: []string{"key", "value"}, Types: []string{"TEXT", "TEXT"}, Rows: [][]any{{"domain", "example.test"}}},
 	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("close source store: %v", err)
+	if err := st.ApplySnapshot(ctx, &store.Snapshot{
+		Version: version, GeneratedAt: checked.Unix() - 60, Tables: tables,
+	}, leader, checked.Unix()-30); err != nil {
+		t.Fatalf("ApplySnapshot: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".encryption_key"), []byte(clusterKey), 0o600); err != nil {
-		t.Fatal(err)
+	if err := st.ConfirmMirrorSync(ctx, checked.Unix()); err != nil {
+		t.Fatalf("ConfirmMirrorSync: %v", err)
 	}
-	dc := newCountingDocker()
-	src := &Kit{Docker: dc, DataDir: dir, Log: zerolog.Nop()}
-	if err := src.Snapshot(ctx); err != nil {
-		t.Fatalf("publish source kit: %v", err)
-	}
-	names, err := dc.ConfigList(ctx, LabelKind, KindState)
-	if err != nil || len(names) != 1 {
-		t.Fatalf("expected exactly one state config, got %v (%v)", names, err)
-	}
-	inspect, err := dc.ConfigInspect(ctx, names[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	at, err := parseSnapshotAt(inspect.Labels)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The Snapshot above was a pre-existing check of its own; reset the counter
-	// so tests measure only the transitions they trigger.
-	dc.stateLists = 0
-	return dc, at
+	return st, dir
 }
 
-// staleNode returns a data dir with a real store, the cluster's key and a
-// revision marker far in the past — the state of a manager promoted while
-// serving its own older database.
-func staleNode(t *testing.T) (string, *store.Store) {
+// pinClock fixes the adoption clock, and restores it when the test ends: a package-level
+// seam left stubbed makes every later test run at a fixed instant.
+func pinClock(t *testing.T, at time.Time) {
+	t.Helper()
+	prev := Now
+	Now = func() time.Time { return at }
+	t.Cleanup(func() { Now = prev })
+}
+
+// writeKeyFile puts a key where a manager expects it: <data dir>/.encryption_key. This is the
+// only place a cluster's key lives now (ADR 0006) — there is no config to publish.
+func writeKeyFile(t *testing.T, dir string, key []byte) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, ".encryption_key"), key, 0o600); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+}
+
+// storeWithSecret writes a secret encrypted under key, so "does this key open this store?"
+// has something real to answer. The clause that matters: a secret's ciphertext is only
+// meaningful next to the key that produced it.
+func storeWithSecret(t *testing.T, dir string, key []byte, value string) *store.Store {
 	t.Helper()
 	ctx := context.Background()
-	dir := t.TempDir()
+	writeKeyFile(t, dir, key)
+	cipher, err := credentials.Open(filepath.Join(dir, ".encryption_key"))
+	if err != nil {
+		t.Fatalf("open cipher: %v", err)
+	}
 	st, err := store.Open(filepath.Join(dir, "data.db"))
 	if err != nil {
-		t.Fatalf("open stale store: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
-	if err := st.SetSetting(ctx, "probe", "local-stale"); err != nil {
-		t.Fatalf("seed stale setting: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ".encryption_key"), []byte(clusterKey), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	k := &Kit{Docker: nil, DataDir: dir, Log: zerolog.Nop()}
-	if err := k.writeRevision(time.Now().Add(-72 * time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	return dir, st
-}
-
-// (a) A stale revision plus leadership gain replaces the store, advances the
-// revision, and leaves the long-lived *store.Store usable on the adopted DB.
-func TestAdoptOnLeadership_StaleRevisionReplacesStore(t *testing.T) {
-	ctx := context.Background()
-	dc, at := clusterWithKit(t, "from-cluster")
-	dir, st := staleNode(t)
-	defer st.Close()
-
-	k := &Kit{Docker: dc, DataDir: dir, Log: zerolog.Nop()}
-	swap := &swapRecorder{dbPath: filepath.Join(dir, "data.db"), inner: st}
-
-	adoption, err := k.AdoptOnLeadership(ctx, swap)
+	t.Cleanup(func() { _ = st.Close() })
+	payload, err := cipher.Encrypt([]byte(value))
 	if err != nil {
-		t.Fatalf("adopt: %v", err)
+		t.Fatalf("encrypt: %v", err)
 	}
-	if !adoption.Adopted {
-		t.Fatal("a node behind the newest snapshot must adopt on leadership gain")
+	if _, err := st.CreateSecret(ctx, "cluster", "", "offsite-key", payload, store.SecretHash(value)); err != nil {
+		t.Fatalf("CreateSecret: %v", err)
 	}
-	if swap.swaps != 1 {
-		t.Fatalf("expected exactly one store swap, got %d", swap.swaps)
-	}
-	if !adoption.Revision.Equal(at) {
-		t.Fatalf("adoption revision = %v, want the snapshot time %v", adoption.Revision, at)
-	}
-	// The marker advanced: the next check is a no-op.
-	if got := k.readRevision(); !got.Equal(at) {
-		t.Fatalf("revision marker = %v, want %v", got, at)
-	}
-	// The store handle every consumer already holds now serves the cluster's DB.
-	probe, err := st.Setting(ctx, "probe")
-	if err != nil {
-		t.Fatalf("read probe through the reopened store: %v", err)
-	}
-	if probe != "from-cluster" {
-		t.Fatalf("probe = %q, want the adopted value", probe)
-	}
-	// The replace happened by rename, not by truncating the live file: at the
-	// moment the store was closed, data.db still held the node's own rows.
-	if !bytes.Contains(swap.atEntry, []byte("local-stale")) {
-		t.Fatalf("data.db did not hold the previous database when the store was closed for the swap (%d bytes)", len(swap.atEntry))
-	}
-	// A write still works through the same handle.
-	if err := st.SetSetting(ctx, "probe2", "written-after-adopt"); err != nil {
-		t.Fatalf("write through the reopened store: %v", err)
-	}
-}
-
-// (b) A current revision does no work at all: no extraction, no store swap, no
-// touched file.
-func TestAdoptOnLeadership_CurrentRevisionDoesNotExtract(t *testing.T) {
-	ctx := context.Background()
-	dc, at := clusterWithKit(t, "from-cluster")
-
-	// A node that already synced: the cluster's key, its own DB and the
-	// snapshot's revision marker.
-	dir, st := staleNode(t)
-	defer st.Close()
-	k := &Kit{Docker: dc, DataDir: dir, Log: zerolog.Nop()}
-	if err := k.writeRevision(at); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(filepath.Join(dir, "data.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	swap := &swapRecorder{dbPath: filepath.Join(dir, "data.db"), inner: st}
-
-	adoption, err := k.AdoptOnLeadership(ctx, swap)
-	if err != nil {
-		t.Fatalf("adopt: %v", err)
-	}
-	if adoption.Adopted {
-		t.Fatal("a node at the newest snapshot must not adopt")
-	}
-	if swap.swaps != 0 {
-		t.Fatalf("expected zero store swaps, got %d", swap.swaps)
-	}
-	after, err := os.ReadFile(filepath.Join(dir, "data.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("a current control plane was re-extracted over")
-	}
-}
-
-// (c) Two transitions in a row: the check runs twice (once per transition), the
-// extraction only once.
-func TestAdoptOnLeadership_ChecksOncePerTransition(t *testing.T) {
-	ctx := context.Background()
-	dc, _ := clusterWithKit(t, "from-cluster")
-	dir, st := staleNode(t)
-	defer st.Close()
-
-	k := &Kit{Docker: dc, DataDir: dir, Log: zerolog.Nop()}
-	swap := &swapRecorder{dbPath: filepath.Join(dir, "data.db"), inner: st}
-
-	first, err := k.AdoptOnLeadership(ctx, swap)
-	if err != nil {
-		t.Fatalf("first transition: %v", err)
-	}
-	second, err := k.AdoptOnLeadership(ctx, swap)
-	if err != nil {
-		t.Fatalf("second transition: %v", err)
-	}
-	if !first.Adopted {
-		t.Fatal("the first transition must adopt (the node was behind)")
-	}
-	if second.Adopted {
-		t.Fatal("the second transition must be a no-op: leadership was lost and regained, nothing changed")
-	}
-	if dc.stateLists != 2 {
-		t.Fatalf("expected exactly two freshness checks (one per transition), got %d", dc.stateLists)
-	}
-	if swap.swaps != 1 {
-		t.Fatalf("expected exactly one extraction across two transitions, got %d", swap.swaps)
-	}
-}
-
-// (d) A state config without its key config is refused: the current database
-// keeps serving and the refusal is logged at error level.
-func TestAdoptOnLeadership_MissingKeyConfigRefuses(t *testing.T) {
-	ctx := context.Background()
-	dc, _ := clusterWithKit(t, "from-cluster")
-	dir, st := staleNode(t)
-	defer st.Close()
-
-	for _, name := range mustList(t, dc, KindKey) {
-		if err := dc.ConfigRemove(ctx, name); err != nil {
-			t.Fatal(err)
-		}
-	}
-	before, err := os.ReadFile(filepath.Join(dir, "data.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var buf bytes.Buffer
-	k := &Kit{Docker: dc, DataDir: dir, Log: zerolog.New(&buf)}
-	swap := &swapRecorder{dbPath: filepath.Join(dir, "data.db"), inner: st}
-
-	adoption, err := k.AdoptOnLeadership(ctx, swap)
-	if err == nil {
-		t.Fatal("adopting a ciphertext without its key must be refused")
-	}
-	if adoption.Adopted {
-		t.Fatal("a refused adoption must not report itself as adopted")
-	}
-	if swap.swaps != 0 {
-		t.Fatalf("the store must not be closed for a refused adoption, got %d swaps", swap.swaps)
-	}
-	after, err := os.ReadFile(filepath.Join(dir, "data.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("the current database must survive a refused adoption")
-	}
-	assertLoggedAtError(t, buf.Bytes())
-	assertNoStagingLeft(t, dir)
-}
-
-// (d2) An unreadable kit is refused the same way — extraction happens beside the
-// data dir, so even a payload that does not untar cannot truncate data.db.
-func TestAdoptOnLeadership_UnreadableKitKeepsDatabase(t *testing.T) {
-	ctx := context.Background()
-	dc, at := clusterWithKit(t, "from-cluster")
-	// Publish a newer state config whose payload is not a tarball, with the key
-	// config it needs so the refusal comes from the extraction, not the split.
-	ts := strconv.FormatInt(at.Add(time.Minute).UnixNano(), 10)
-	name := StateNamePrefix + "_" + ts
-	dc.configs[name] = runtime.ConfigInspectResult{
-		Labels: map[string]string{
-			ManagedLabel:    "true",
-			LabelKind:       KindState,
-			LabelSnapshotAt: at.Add(time.Minute).Format(time.RFC3339Nano),
-			LabelVersion:    "test",
+	if err := st.ApplySnapshot(ctx, &store.Snapshot{
+		Version: 2, GeneratedAt: time.Now().Unix() - 60,
+		Tables: map[string]store.TableData{
+			"cluster_settings": {Columns: []string{"key", "value"}, Types: []string{"TEXT", "TEXT"}, Rows: [][]any{{"domain", "example.test"}}},
 		},
-		Data: []byte("this is not a gzipped tar"),
+	}, "leader-1", time.Now().Unix()-30); err != nil {
+		t.Fatalf("ApplySnapshot: %v", err)
 	}
-	dc.configs[KeyNamePrefix+"_"+ts] = runtime.ConfigInspectResult{
-		Labels: map[string]string{ManagedLabel: "true", LabelKind: KindKey, LabelSnapshotAt: at.Add(time.Minute).Format(time.RFC3339Nano)},
-		Data:   []byte(clusterKey),
+	if err := st.ConfirmMirrorSync(ctx, time.Now().Unix()); err != nil {
+		t.Fatalf("ConfirmMirrorSync: %v", err)
 	}
-
-	dir, st := staleNode(t)
-	defer st.Close()
-	before, err := os.ReadFile(filepath.Join(dir, "data.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var buf bytes.Buffer
-	k := &Kit{Docker: dc, DataDir: dir, Log: zerolog.New(&buf)}
-	swap := &swapRecorder{dbPath: filepath.Join(dir, "data.db"), inner: st}
-	if _, err := k.AdoptOnLeadership(ctx, swap); err == nil {
-		t.Fatal("an unreadable kit must be refused")
-	}
-	if swap.swaps != 0 {
-		t.Fatalf("the store must not be closed for an unreadable kit, got %d swaps", swap.swaps)
-	}
-	after, err := os.ReadFile(filepath.Join(dir, "data.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("an unreadable kit must not touch data.db")
-	}
-	assertLoggedAtError(t, buf.Bytes())
-	assertNoStagingLeft(t, dir)
+	return st
 }
 
-// (e) Tick churn on an up-to-date node never adopts: the leader's periodic
-// snapshot ticks must not close the store or re-extract anything.
-func TestAdoptOnLeadership_TickChurnNeverAdopts(t *testing.T) {
-	ctx := context.Background()
-	dc, at := clusterWithKit(t, "from-cluster")
-	dir, st := staleNode(t)
-	defer st.Close()
-	k := &Kit{Docker: dc, DataDir: dir, Log: zerolog.Nop()}
-	if err := k.writeRevision(at); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(filepath.Join(dir, "data.db"))
+func TestAdoptOnLeadership_StandaloneIsItsOwnSource(t *testing.T) {
+	// Standalone: no swarm, so no peer and no mirror, and it has always served. It is also
+	// the one case where a nil store is allowed — there is nothing to verify against.
+	kit := &Kit{DataDir: t.TempDir(), Standalone: true, Log: zerolog.Nop()}
+	adoption, err := kit.AdoptOnLeadership(context.Background(), nil, false)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("AdoptOnLeadership: %v", err)
 	}
-	swap := &swapRecorder{dbPath: filepath.Join(dir, "data.db"), inner: st}
-
-	// Kit.Loop's tick body, run several times. Adoption is not part of it: the
-	// only caller is the leadership transition.
-	for i := 0; i < 5; i++ {
-		if err := k.Snapshot(ctx); err != nil {
-			t.Fatalf("tick %d: %v", i, err)
-		}
-	}
-	if swap.swaps != 0 {
-		t.Fatalf("tick churn must never swap the store, got %d swaps", swap.swaps)
-	}
-	after, err := os.ReadFile(filepath.Join(dir, "data.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(before, after) {
-		t.Fatal("tick churn re-extracted the database")
+	if !adoption.Ready {
+		t.Errorf("standalone node is not ready: %+v", adoption)
 	}
 }
 
-// (f) A snapshot this node published itself is never adopted, even when its
-// revision marker is gone (a failed marker write must not turn into a pointless
-// self-restore of the state that was just published).
-func TestAdoptOnLeadership_IgnoresOwnPublishedSnapshot(t *testing.T) {
-	ctx := context.Background()
+func TestAdoptOnLeadership_FirstLeaderHasNothingToVouchFor(t *testing.T) {
+	// The first leader of a cluster (or any node that never ran as a follower in this
+	// process) IS the source. Refusing here would make bootstrapping impossible.
+	st, _ := newMirrorStore(t, "leader-1", 1, time.Now())
+	pinClock(t, time.Now())
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
+
+	// Clear the mirror: this node has never applied a snapshot.
+	if _, err := st.DB().Exec(`DELETE FROM sync_state`); err != nil {
+		t.Fatalf("clear sync_state: %v", err)
+	}
+	adoption, err := kit.AdoptOnLeadership(context.Background(), st, false)
+	if err != nil {
+		t.Fatalf("AdoptOnLeadership: %v", err)
+	}
+	if !adoption.Ready || !adoption.Source {
+		t.Errorf("adoption = %+v, want ready and named as the source", adoption)
+	}
+}
+
+// TestAdoptOnLeadership_EmptyStoreRefuses is the ONE hard refusal: never mirrored AND no
+// cluster state at all. That is not a stale copy, it is no copy — a leader answering from it
+// would report a cluster with no users, no stacks and no settings as the truth.
+func TestAdoptOnLeadership_EmptyStoreRefuses(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "data.db"), []byte("own-bytes"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, ".encryption_key"), []byte(clusterKey), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	dc := newCountingDocker()
-	k := &Kit{Docker: dc, DataDir: dir, Log: zerolog.Nop()}
-	if err := k.Snapshot(ctx); err != nil {
-		t.Fatalf("publish: %v", err)
-	}
-	if k.publishedConfig() == "" {
-		t.Fatal("Snapshot must remember the config it published")
-	}
-	if err := os.Remove(k.RevisionPath()); err != nil {
-		t.Fatal(err)
-	}
-	swap := &swapRecorder{dbPath: filepath.Join(dir, "data.db")}
-
-	adoption, err := k.AdoptOnLeadership(ctx, swap)
+	st, err := store.Open(filepath.Join(dir, "data.db"))
 	if err != nil {
-		t.Fatalf("adopt: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
-	if adoption.Adopted {
-		t.Fatal("a node must not adopt the snapshot it published itself")
+	t.Cleanup(func() { _ = st.Close() })
+	pinClock(t, time.Now())
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
+
+	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
+	if err == nil {
+		t.Fatalf("AdoptOnLeadership accepted a node with nothing to serve: %+v", adoption)
 	}
-	if swap.swaps != 0 {
-		t.Fatalf("expected no store swap for its own snapshot, got %d", swap.swaps)
+	var refusal *RefusalError
+	if !errors.As(err, &refusal) {
+		t.Errorf("error = %v (%T), want a RefusalError so the caller can name the refusal", err, err)
+	}
+	if !strings.Contains(err.Error(), "nothing to serve") {
+		t.Errorf("refusal does not say why: %v", err)
 	}
 }
 
-// A swarm that is momentarily unreadable (quorum lost / worker) is not an
-// adoption failure: nothing to adopt, nothing to crash.
-func TestAdoptOnLeadership_SwarmUnavailableIsQuiet(t *testing.T) {
-	dir := t.TempDir()
+// TestAdoptOnLeadership_NeverMirroredButHoldingStateIsTheSource: a store with data and no
+// sync_state is a node that CREATED the cluster (or a standalone box). It adopts itself.
+func TestAdoptOnLeadership_NeverMirroredButHoldingStateIsTheSource(t *testing.T) {
+	st, _ := newMirrorStore(t, "leader-1", 1, time.Now())
+	if _, err := st.DB().Exec(`DELETE FROM sync_state`); err != nil {
+		t.Fatalf("clear sync_state: %v", err)
+	}
+	pinClock(t, time.Now())
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
+
+	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
+	if err != nil {
+		t.Fatalf("AdoptOnLeadership: %v", err)
+	}
+	if !adoption.Ready || !adoption.Source {
+		t.Errorf("adoption = %+v, want ready and named as the source", adoption)
+	}
+}
+
+func TestAdoptOnLeadership_FreshMirrorIsReady(t *testing.T) {
+	now := time.Now()
+	st, _ := newMirrorStore(t, "leader-1", 7, now.Add(-10*time.Second))
+	pinClock(t, now)
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
+
+	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
+	if err != nil {
+		t.Fatalf("AdoptOnLeadership: %v", err)
+	}
+	if !adoption.Ready || adoption.Leader != "leader-1" || adoption.Version != 7 {
+		t.Errorf("adoption = %+v, want ready with leader-1 at version 7", adoption)
+	}
+	if adoption.Age < 9*time.Second || adoption.Age > 12*time.Second {
+		t.Errorf("age = %s, want ~10s from checked_at", adoption.Age)
+	}
+}
+
+// TestAdoptOnLeadership_StaleMirrorIsServedAndSaysSo is the operator's ruling: a 10-minute
+// old mirror is SERVED (a promotion on old data beats no leader), and the cost is made
+// visible — the version and the age are logged, and the reason carries them too.
+func TestAdoptOnLeadership_StaleMirrorIsServedAndSaysSo(t *testing.T) {
+	now := time.Now()
+	st, _ := newMirrorStore(t, "wafaa", 4, now.Add(-10*time.Minute))
+	pinClock(t, now)
 	var buf bytes.Buffer
-	k := &Kit{Docker: leaderlessClient{}, DataDir: dir, Log: zerolog.New(&buf)}
-	swap := &swapRecorder{}
-	adoption, err := k.AdoptOnLeadership(context.Background(), swap)
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.New(&buf)}
+
+	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
 	if err != nil {
-		t.Fatalf("a transient swarm outage must not fail adoption: %v", err)
+		t.Fatalf("AdoptOnLeadership refused a stale mirror: %v", err)
 	}
-	if adoption.Adopted || swap.swaps != 0 {
-		t.Fatal("nothing may be adopted while the Raft configs are unreadable")
+	if !adoption.Ready || adoption.Leader != "wafaa" || adoption.Version != 4 {
+		t.Errorf("adoption = %+v, want ready on wafaa version 4", adoption)
+	}
+	if adoption.Age < 9*time.Minute {
+		t.Errorf("age = %s, want the age of the mirror it is serving", adoption.Age)
+	}
+	if !strings.Contains(adoption.Reason, "4") || !strings.Contains(adoption.Reason, "10m") {
+		t.Errorf("reason %q does not carry the version and the age", adoption.Reason)
+	}
+	if line := buf.String(); !strings.Contains(line, "older than three polls") || !strings.Contains(line, `"level":"warn"`) {
+		t.Fatalf("a stale adoption was not logged as a warning:\n%s", line)
 	}
 }
 
-func mustList(t *testing.T, dc *countingDocker, kind string) []string {
-	t.Helper()
-	names, err := dc.ConfigList(context.Background(), LabelKind, kind)
+// TestAdoptOnLeadership_ServesTheStoreItAlreadyHas is the point of the whole change,
+// measured on the file: adoption must not replace, rename or re-extract data.db. The same
+// inode is still there afterwards, with the same row in it.
+func TestAdoptOnLeadership_ServesTheStoreItAlreadyHas(t *testing.T) {
+	now := time.Now()
+	st, dir := newMirrorStore(t, "leader-1", 3, now.Add(-5*time.Second))
+	pinClock(t, now)
+	dbPath := filepath.Join(dir, "data.db")
+	before, err := os.Stat(dbPath)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("stat: %v", err)
 	}
-	return names
-}
 
-// assertLoggedAtError requires at least one ERROR-level record carrying an
-// error, so a refused adoption is loud rather than silent.
-func assertLoggedAtError(t *testing.T, raw []byte) {
-	t.Helper()
-	var found bool
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		if line == "" {
-			continue
-		}
-		var rec map[string]any
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			t.Fatalf("log line is not JSON (%v): %s", err, line)
-		}
-		if rec["level"] == "error" && rec["error"] != nil && rec["error"] != "" {
-			found = true
-		}
+	kit := &Kit{DataDir: dir, Log: zerolog.Nop()}
+	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
+	if err != nil || !adoption.Ready {
+		t.Fatalf("AdoptOnLeadership = %+v, %v", adoption, err)
 	}
-	if !found {
-		t.Fatalf("a refused adoption must log an error with a reason; log was:\n%s", raw)
-	}
-}
 
-// assertNoStagingLeft proves the staging directory is cleaned up on every path:
-// a leftover would be a half-extracted kit inside the data dir.
-func assertNoStagingLeft(t *testing.T, dir string) {
-	t.Helper()
+	after, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("stat after adoption: %v", err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("adoption replaced data.db — the mirror is supposed to be served in place, not copied over")
+	}
+	if got := after.ModTime(); !got.Equal(before.ModTime()) {
+		t.Errorf("data.db mtime moved from %s to %s: something rewrote the file", before.ModTime(), got)
+	}
+	// And the rows are still readable through the SAME handle: no close/reopen happened.
+	if v, err := st.Setting(context.Background(), "domain"); err != nil || v != "example.test" {
+		t.Errorf("reading through the surviving handle = %q, %v", v, err)
+	}
+	// No staging directory was left behind by the retired extraction path.
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read data dir: %v", err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), stagingPrefix) {
-			t.Fatalf("staging entry %q left behind in the data dir", e.Name())
+		if strings.HasPrefix(e.Name(), ".adopt-") {
+			t.Errorf("adoption created a staging directory %q; nothing is staged any more", e.Name())
 		}
+	}
+}
+
+// The key is proven by decrypting what the store holds. Comparing bytes against a published
+// config — what this used to do — was a proxy; a wrong key and a right one are indistinguishable
+// by name, and only the ciphertext knows.
+func TestAdoptOnLeadership_ForeignKeyIsReported(t *testing.T) {
+	now := time.Now()
+	pinClock(t, now)
+	dir := t.TempDir()
+	st := storeWithSecret(t, dir, []byte(clusterKey), "s3cr3t-offsite")
+	// The node holds a DIFFERENT key: every secret ciphertext it mirrors was written with
+	// the other one.
+	foreign := []byte("ffffffffffffffffffffffffffffffff")
+	writeKeyFile(t, dir, foreign)
+	cipher, err := credentials.OpenExisting(filepath.Join(dir, ".encryption_key"))
+	if err != nil {
+		t.Fatalf("open foreign cipher: %v", err)
+	}
+
+	kit := &Kit{DataDir: dir, Cipher: cipher, Log: zerolog.Nop()}
+	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
+	if err != nil {
+		t.Fatalf("a foreign key must be reported, not turned into a refusal: %v", err)
+	}
+	if adoption.KeyOK || !strings.Contains(adoption.KeyProblem, "do not decrypt") {
+		t.Errorf("adoption = %+v, want KeyProblem naming the secrets that do not decrypt", adoption)
+	}
+	if !strings.Contains(adoption.KeyProblem, ".encryption_key") {
+		t.Errorf("KeyProblem does not name the file to fix: %q", adoption.KeyProblem)
+	}
+}
+
+func TestAdoptOnLeadership_MissingKeyFileIsReported(t *testing.T) {
+	now := time.Now()
+	pinClock(t, now)
+	dir := t.TempDir()
+	st := storeWithSecret(t, dir, []byte(clusterKey), "s3cr3t-offsite")
+	if err := os.Remove(filepath.Join(dir, ".encryption_key")); err != nil {
+		t.Fatalf("remove key: %v", err)
+	}
+
+	kit := &Kit{DataDir: dir, Log: zerolog.Nop()}
+	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
+	if err != nil {
+		t.Fatalf("a missing key must be reported, not turned into a refusal: %v", err)
+	}
+	if adoption.KeyOK || !strings.Contains(adoption.KeyProblem, "no encryption key at") {
+		t.Errorf("adoption = %+v, want KeyProblem about the missing key file", adoption)
+	}
+	if !strings.Contains(adoption.KeyProblem, "copy it") {
+		t.Errorf("KeyProblem does not tell the operator what to do: %q", adoption.KeyProblem)
+	}
+}
+
+func TestAdoptOnLeadership_MatchingKeyIsReady(t *testing.T) {
+	now := time.Now()
+	pinClock(t, now)
+	dir := t.TempDir()
+	st := storeWithSecret(t, dir, []byte(clusterKey), "s3cr3t-offsite")
+	cipher, err := credentials.OpenExisting(filepath.Join(dir, ".encryption_key"))
+	if err != nil {
+		t.Fatalf("open cipher: %v", err)
+	}
+
+	kit := &Kit{DataDir: dir, Cipher: cipher, Log: zerolog.Nop()}
+	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
+	if err != nil || !adoption.Ready || !adoption.KeyOK {
+		t.Fatalf("AdoptOnLeadership = %+v, %v", adoption, err)
+	}
+}
+
+func TestAdoptOnLeadership_StoreWithoutSecretsHasNothingToDisagreeWith(t *testing.T) {
+	// A cluster with no secrets yet has no ciphertext to prove anything against. Reporting a
+	// key problem here would make every bootstrap look broken.
+	now := time.Now()
+	st, dir := newMirrorStore(t, "leader-1", 2, now.Add(-5*time.Second))
+	pinClock(t, now)
+	writeKeyFile(t, dir, []byte(clusterKey))
+	cipher, err := credentials.OpenExisting(filepath.Join(dir, ".encryption_key"))
+	if err != nil {
+		t.Fatalf("open cipher: %v", err)
+	}
+
+	kit := &Kit{DataDir: dir, Cipher: cipher, Log: zerolog.Nop()}
+	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
+	if err != nil || !adoption.Ready || !adoption.KeyOK {
+		t.Fatalf("AdoptOnLeadership = %+v, %v", adoption, err)
+	}
+}
+
+func TestAdoptOnLeadership_NoStoreIsAnError(t *testing.T) {
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
+	if _, err := kit.AdoptOnLeadership(context.Background(), nil, true); err == nil {
+		t.Fatal("AdoptOnLeadership accepted a nil store")
+	}
+}
+
+// TestAdoptOnLeadership_ClockBehindIsNotNegativeAge: a backwards clock must not read as
+// "fresh in the future" and must not flip a healthy mirror into a refusal.
+func TestAdoptOnLeadership_ClockBehindIsNotNegativeAge(t *testing.T) {
+	now := time.Now()
+	st, _ := newMirrorStore(t, "leader-1", 2, now.Add(30*time.Second))
+	pinClock(t, now)
+	kit := &Kit{DataDir: t.TempDir(), Log: zerolog.Nop()}
+
+	adoption, err := kit.AdoptOnLeadership(context.Background(), st, true)
+	if err != nil || !adoption.Ready {
+		t.Fatalf("AdoptOnLeadership = %+v, %v", adoption, err)
+	}
+	if adoption.Age < 0 {
+		t.Errorf("age = %s, want it clamped at zero", adoption.Age)
 	}
 }

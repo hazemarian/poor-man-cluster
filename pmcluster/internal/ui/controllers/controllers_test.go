@@ -86,6 +86,15 @@ var nodeStatsFixture = `{"node_stats":[
 // that wants one assigns its own body first.
 var applyRecordFixture = `{"present":false}`
 
+// doctorFixture is what /api/doctor answers: all green by default. The findings shape was
+// measured on production 2026-11-16, when a storage node held a live stack with no backup agent.
+var doctorFixture = `{"at":"2026-11-16T16:00:00Z","ok":true,"checks":[{"name":"docker engine","status":"ok"}]}`
+
+var doctorFindingsFixture = `{"at":"2026-11-16T16:00:00Z","ok":false,"checks":[
+	{"name":"docker engine","status":"ok"},
+	{"name":"backup agents","status":"fail","detail":"nxt-sw-4-m holds a volume but has never reported a backup run"},
+	{"name":"certificates","status":"warn","detail":"the edge certificate expires in 9 days"}]}`
+
 // ctrlFakeDaemon serves canned /api responses for the controllers under test.
 // Every endpoint requires the Bearer token, mirroring the daemon.
 func ctrlFakeDaemon(t *testing.T) *httptest.Server {
@@ -128,6 +137,16 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 	})
 	mux.HandleFunc("/api/node-stats", func(w http.ResponseWriter, r *http.Request) {
 		write(w, nodeStatsFixture)
+	})
+	// The platform health checks. The default is a HEALTHY cluster: other tests assert that no
+	// error banner appears, and a failing check would be a real reason for one. The health test
+	// swaps in findings, exactly as the node-stats tests swap nodeStatsFixture.
+	mux.HandleFunc("/api/doctor", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		write(w, doctorFixture)
 	})
 	mux.HandleFunc("/api/cluster/apply", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(r) {
@@ -414,6 +433,65 @@ func (h *ctrlHarness) mountWebhooks() {
 }
 func (h *ctrlHarness) mountUsage() { h.engine.GET("/web/usage", (Usage{Controller: h.ctrl}).Page) }
 func (h *ctrlHarness) mountTLS()   { h.engine.GET("/web/tls", (TLS{Controller: h.ctrl}).Page) }
+
+// TestControllers_OverviewShowsTheDoctorFindings is the console's half of ADR 0008: what
+// `pmcluster doctor` finds has to be visible on the page an operator opens, not only in a
+// terminal on the leader. A check that passes must not be printed — seventeen green lines hide
+// the one that is red.
+func TestControllers_OverviewShowsTheDoctorFindings(t *testing.T) {
+	doctorFixture = doctorFindingsFixture
+	t.Cleanup(func() {
+		doctorFixture = `{"at":"2026-11-16T16:00:00Z","ok":true,"checks":[{"name":"docker engine","status":"ok"}]}`
+	})
+	h := newCtrlHarness(t)
+	h.mountOverview()
+	rr := h.get(t, "/web/overview")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /web/overview = %d, want 200", rr.Code)
+	}
+	b := rr.Body.String()
+	for _, want := range []string{
+		"backup agents",
+		"nxt-sw-4-m holds a volume but has never reported a backup run",
+		"certificates",
+		"the edge certificate expires in 9 days",
+		"Platform health",
+	} {
+		if !strings.Contains(b, want) {
+			t.Errorf("the overview does not show %q", want)
+		}
+	}
+	if strings.Contains(b, "docker engine") {
+		t.Error("the overview printed a check that PASSED — the page must only carry what is wrong")
+	}
+}
+
+// TestControllers_BackupsCarriesItsOwnFindings: the backups screen must show the checks about
+// backups, and only those — the certificate check belongs to another subject and would dilute the
+// one line that matters here.
+func TestControllers_BackupsCarriesItsOwnFindings(t *testing.T) {
+	prev := doctorFixture
+	doctorFixture = doctorFindingsFixture
+	t.Cleanup(func() { doctorFixture = prev })
+
+	h := newCtrlHarness(t)
+	h.mountBackups()
+	rr := h.get(t, "/web/backups")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /web/backups = %d, want 200", rr.Code)
+	}
+	b := rr.Body.String()
+	if !strings.Contains(b, "backup agents") ||
+		!strings.Contains(b, "nxt-sw-4-m holds a volume but has never reported a backup run") {
+		t.Error("the backups screen does not carry the failing backup check")
+	}
+	if strings.Contains(b, "certificates") {
+		t.Error("the backups screen shows a check about a different subject")
+	}
+	if !strings.Contains(b, "Backup health") {
+		t.Error("the backups screen has no health banner heading")
+	}
+}
 
 func TestControllers_Overview(t *testing.T) {
 	h := newCtrlHarness(t)

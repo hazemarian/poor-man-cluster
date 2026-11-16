@@ -1,16 +1,20 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
@@ -31,6 +35,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/mcpserver"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodever"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/reconcile"
@@ -89,9 +94,12 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// again after the leadership wait (a promoted worker must stop its loopback
 	// API before the leader API binds the same port).
 	var (
-		socketPath   *socketPathSource
 		localAPIStop func()
 		localAPIDone <-chan struct{}
+		// mirrorRan records that THIS process ran the snapshot mirror before it became
+		// leader. It separates "never a follower" (nothing to vouch for) from "a follower
+		// whose polls never landed" (a refusal) at the leadership-gain check.
+		mirrorRan bool
 	)
 
 	dc, dockerErr := docker.New()
@@ -99,7 +107,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// promotion the restored control plane has to be what gets opened. The
 	// per-node loops below take this handle, so they can start before the
 	// leadership wait without pre-empting that ordering.
-	served := &lateStore{}
+	served := &noderuntime.LateStore{}
 	hostname, _ := os.Hostname()
 
 	// Self-telemetry is SUPERVISED, not decided once at startup. The collector
@@ -109,16 +117,47 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// reconsidered, leaving a five-node cluster showing one row in the console.
 	// Started here (docker client in hand) and still well before the leadership
 	// wait, so a standby manager and a worker both keep reporting.
-	telemetryCtl := newTelemetrySupervisor(log, func() {
-		startNodeStatSampler(cmd.Context(), dc, log)
+	// The sampler starts HERE, not from the telemetry supervisor's first-endpoint hook:
+	// gating it on an exporter is how four nodes vanished from the panel when the exporter
+	// was leader-only, and its report half (node → leader over mTLS) needs no collector at
+	// all. Its OTLP half is a no-op until the probe finds one.
+	go func() {
+		if dc != nil {
+			noderuntime.StartNodeStatSampler(cmd.Context(), dc, log)
+		}
+	}()
+	telemetryCtl := noderuntime.NewTelemetrySupervisor(log, hostname, func() {
 	})
-	go telemetryCtl.Loop(cmd.Context(), cfg.OTLPEndpoint, docker.NodeSelfAddr)
-	defer telemetryCtl.stop(context.Background())
+	go telemetryCtl.Loop(cmd.Context(), cfg.OTLPEndpoint, func(ctx context.Context) bool {
+		// dc is nil when the client could not be built (a malformed DOCKER_HOST is
+		// enough) — the daemon deliberately keeps serving without it: /api/cluster/info
+		// is disabled and everything else carries on. This closure ran anyway and
+		// dereferenced the nil interface, so a daemon that had degraded correctly
+		// PANICKED on the supervisor's first probe. The two neighbouring closures
+		// already guard; this one is the one that was missed.
+		if dc == nil {
+			return false
+		}
+		leader, _, err := noderuntime.IsSwarmLeader(ctx, dc, hostname)
+		return err == nil && leader
+	}, func(ctx context.Context) string {
+		// A follower answers where the leader is, and it finds it the way the mTLS
+		// channel does: every manager address, the first that answers on the collector
+		// port wins. Re-probed every minute, so a leadership change re-points the
+		// exporter without a restart.
+		if dc == nil {
+			return ""
+		}
+		return collectorEndpointFor(ctx, func(c context.Context) ([]string, error) {
+			return noderuntime.ManagerHosts(c, dc)
+		}, dialCollector)
+	})
+	defer telemetryCtl.Stop(context.Background())
 	// worker decides which runner path this node takes: a swarm WORKER cannot read
 	// cluster settings (Docker configs are manager-only), so it learns its runner
 	// decision from the leader instead. Cheap and best-effort: any doubt (no
 	// docker, no swarm) keeps the settings-based path.
-	worker := dockerErr == nil && isSwarmWorker(cmd.Context(), dc)
+	worker := dockerErr == nil && noderuntime.IsSwarmWorker(cmd.Context(), dc)
 	// standby says this node is not the leader right now (a worker, or a follower
 	// manager), so its API must answer on loopback only until it is elected. A
 	// standby that bound all interfaces would be a second, stale control plane.
@@ -127,15 +166,15 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		if worker {
 			standby = true
 		} else {
-			leader, found, err := isSwarmLeader(cmd.Context(), dc, hostname)
-			standby = isStandby(worker, leader, found, err)
+			leader, found, err := noderuntime.IsSwarmLeader(cmd.Context(), dc, hostname)
+			standby = noderuntime.IsStandby(worker, leader, found, err)
 		}
 	}
 
-	// One Kit per daemon: it is the object that remembers which snapshot this
-	// node published, so a leadership gain cannot re-extract this node's own
-	// state. Created even when Docker is unavailable (the Kit then no-ops).
-	kit := &controlplane.Kit{Docker: dc, DataDir: cfg.DataDir, Log: log}
+	// One Kit per daemon: it answers the leadership-gain question about this node's
+	// own store. Docker being unavailable is what "standalone" means here — a box with
+	// no swarm has no peers and no mirror, so it is its own source.
+	kit := &controlplane.Kit{DataDir: cfg.DataDir, Standalone: dc == nil, Log: log}
 
 	// Every daemon describes its OWN node: the OTel collector is a single
 	// leader-pinned task and hostmetrics can only read its own host, so the only
@@ -151,11 +190,21 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 		// Every daemon — leader or not — keeps the volume directories of the
 		// stateful services the Swarm placed on this node. A standby manager
-		// blocks in waitForSwarmLeadership below, so the loop starts here and
+		// blocks in noderuntime.WaitForSwarmLeadership below, so the loop starts here and
 		// touches the runtime client only, never the store.
-		startVolumeRepairLoop(cmd.Context(), dc, cluster.NewDockerCLIDeployer(os.Stderr), func() string {
-			s, _ := storageRoot.Load().(string)
-			return s
+		noderuntime.StartVolumeRepairLoop(cmd.Context(), dc, cluster.NewDockerCLIDeployer(os.Stderr), func() string {
+			if s, _ := storageRoot.Load().(string); s != "" {
+				return s
+			}
+			// storageRoot is only published once the local store is open, which
+			// only the leader does — so on a follower this used to be "". An
+			// empty root makes every bind path fall outside the managed layout,
+			// which silently turned off the bind half of the repair exactly on
+			// the nodes that do not have a store to read the setting from.
+			if v := os.Getenv("PMCLUSTER_VOLUME_ROOT"); v != "" {
+				return v
+			}
+			return manifest.DefaultVolumeRoot
 		}, log)
 
 		// Publish this node's backup plan: the hourly agent archives directories,
@@ -165,7 +214,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// read the service list, and every storage node needs its own plan for the
 		// volumes it actually holds — publishing only on the leader left the other
 		// managers archiving directories of stacks that no longer exist.
-		go publishBackupPlan(cmd.Context(), dc, func(format string, args ...any) {
+		go noderuntime.PublishBackupPlan(cmd.Context(), dc, func(format string, args ...any) {
 			log.Warn().Msgf(format, args...)
 		})
 
@@ -181,17 +230,24 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// the local store, which on a worker is always absent, so the feature silently
 		// did nothing on exactly the nodes it was written for (measured on
 		// nxt-sw-6-w: setting true, unit never gained the flag).
-		sock := defaultDockerSocket
-		if _, statErr := os.Stat(cfg.DBPath()); statErr == nil {
-			if st, err := store.Open(cfg.DBPath()); err == nil {
-				if werr := runners.WriteNodePolicy(cfg.DataDir,
-					runners.NodePolicy{DockerRestart: cluster.LoadNodeDockerRestart(cmd.Context(), st)}); werr != nil {
-					log.Warn().Err(werr).Msg("could not write the node policy; the watchdog keeps its previous setting")
-				}
-				_ = st.Close()
-			}
-		}
-		go convergeSystemd(func(f string, a ...any) { log.Info().Msgf(f, a...) }, sock, cfg.DataDir)
+		sock := noderuntime.DefaultDockerSocket
+		// Only a store that HOLDS the decision may write the node policy. A worker's
+		// store cannot answer a leader-owned setting, and writing its default there
+		// disarmed the docker watchdog at the worst possible moment (nxt-sw-6-w,
+		// 2026-11-13: dockerd dead, the daemon restarted, the policy was rewritten as
+		// false, and the watchdog then sat through three failed probes doing nothing).
+		// On a worker the assignment carries the leader's answer — runners.Agent
+		// writes it, and that write is allowed to overwrite this file.
+		// Written once here AND then kept current by nodePolicyLoop below: this
+		// one call happens at startup, and the node that OWNS the setting has no
+		// runner agent to push a new assignment at it. Measured on the leader
+		// (2026-11-14): `settings set node_docker_restart=true` reached a follower
+		// within 50s through its agent while the leader's own policy still said
+		// false, because its only write had been at boot — the armed state landed
+		// everywhere except the node that decided it.
+		applyNodePolicyOnce(cmd.Context(), cfg, log)
+		go nodePolicyLoop(cmd.Context(), cfg, log)
+		go nodeunits.ConvergeSystemd(func(f string, a ...any) { log.Info().Msgf(f, a...) }, sock, cfg.DataDir)
 
 		// The console's storage toggle sets INTENT; provisioning is local work (loop
 		// file, LVM, mkfs, mounts), so the node that the intent names has to do it —
@@ -199,7 +255,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// never delay serving; best effort because a node that cannot provision must
 		// still run.
 		go func() {
-			st, err := store.Open(cfg.DBPath())
+			st, err := openExistingStore(cfg.DBPath())
 			if err != nil {
 				return // no store on this node: not a manager, cannot hold storage either
 			}
@@ -215,6 +271,49 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			// restart — the toggle would look broken for hours. The check is cheap
 			// (findmnt + one readdir) and only provisions when the answer changed.
 			convergeStorage(cmd.Context(), st, host, logf)
+			// Being a storage node INCLUDES having the agent that archives it (ADR 0008).
+			//
+			// It lives here, not in the leader's reconcile, because a leader cannot install a
+			// systemd unit on another host and `cluster update` is refused on a follower manager
+			// — measured on nxt-sw-4-m, which held a live stack with no unit, no timer and no
+			// policy for weeks. The daemon restart that a binary upgrade performs is exactly the
+			// moment this runs, so "install or update" is when the agent converges.
+			//
+			// EnsureBackupAgent is idempotent and self-policing: on a node that is NOT a storage
+			// node it removes the units (a worker must not snapshot an empty directory), so
+			// calling it unconditionally is the correct converge rather than a guess.
+			ensureAgent := func() {
+				var buf bytes.Buffer
+				if err := nodeunits.EnsureBackupAgent(&buf, cfg.ConfigPath()); err != nil {
+					log.Warn().Err(err).Msg("backup agent: could not be ensured on this node")
+					return
+				}
+				if s := strings.TrimSpace(buf.String()); s != "" {
+					log.Info().Msg("backup agent: " + s)
+				}
+			}
+			// The control-plane export is a MANAGER's job, not a storage node's: the leader holds
+			// the authoritative store. Gating it on the storage role — the obvious shortcut — would
+			// leave a manager that hosts no volumes with no restore point at all.
+			ensureExport := func(isManager bool) {
+				var buf bytes.Buffer
+				if err := nodeunits.EnsurePlatformExport(&buf, isManager); err != nil {
+					log.Warn().Err(err).Msg("platform export timer: could not be ensured on this node")
+					return
+				}
+				if s := strings.TrimSpace(buf.String()); s != "" {
+					log.Info().Msg("platform export: " + s)
+				}
+			}
+			ensureAgent()
+			// A manager's own daily export. docker info's ControlAvailable is the only honest
+			// answer to "am I a manager" — `docker node inspect self` fails on a worker.
+			if info, ierr := dc.Info(cmd.Context()); ierr == nil {
+				ensureExport(info.SwarmControlAvailable)
+			}
+			// Re-check when the membership actually changes (an operator flips the toggle), not
+			// every tick: writing units and running systemctl every two minutes is noise.
+			wasMember := storageNodeFor(st, host)
 			tick := time.NewTicker(2 * time.Minute)
 			defer tick.Stop()
 			for {
@@ -223,6 +322,10 @@ func runServe(cmd *cobra.Command, _ []string) error {
 					return
 				case <-tick.C:
 					convergeStorage(cmd.Context(), st, host, logf)
+					if now := storageNodeFor(st, host); now != wasMember {
+						wasMember = now
+						ensureAgent()
+					}
 				}
 			}
 		}()
@@ -252,21 +355,18 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// inert: the only nodes allowed to host a runner are the ones that never
 		// got past the wait.
 		//
-		//   - the socket proxy needs only the local docker socket and a path, so it
-		//     binds now on every node;
 		//   - a WORKER runs runners.Agent against the leader's assignment (its
 		//     settings are unreadable here, see internal/runners/assignment.go);
 		//   - a manager keeps the store-based reconcile, which starts as soon as
 		//     the store and the App exist (further down) — it cannot start before
 		//     them, and a standby manager is refused as a runner host anyway.
-		socketPath = &socketPathSource{Store: served.get}
-		startPerNodeLoops(cmd.Context(), perNodeDeps{
+		noderuntime.StartPerNodeLoops(cmd.Context(), noderuntime.PerNodeDeps{
 			Worker:     worker,
 			Hostname:   hostname,
 			Container:  &runners.CLIDocker{},
-			Assignment: assignmentClientFor(dc, worker),
-			StatePath:  agentStatePath(cfg.DataDir),
-			SocketPath: socketPath,
+			Assignment: noderuntime.AssignmentClientFor(dc),
+			Client:     dc,
+			StatePath:  noderuntime.AgentStatePath(cfg.DataDir),
 			Log:        log,
 		})
 
@@ -276,7 +376,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// instead of failing because the daemon never bound at all. The leader
 		// keeps binding what the operator configured (all interfaces), below.
 		if standby {
-			localAPIStop, localAPIDone = startWorkerAPI(cmd.Context(), dc, apiAddr(cfg.ListenAddr, true), log)
+			localAPIStop, localAPIDone = noderuntime.StartWorkerAPI(cmd.Context(), dc, noderuntime.APIAddr(cfg.ListenAddr, true), log)
 			defer func() {
 				if localAPIStop != nil {
 					localAPIStop()
@@ -288,25 +388,48 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// ONLY on the current Swarm leader; other managers stand by until
 		// Swarm elects them leader (failover). Standalone/local mode returns
 		// immediately.
-		// Control-plane freshness for EVERY manager at startup, BEFORE the
-		// leadership wait, not only on promotion. A follower manager that never
-		// leads still needs the current credential and settings rows to answer
-		// reads (the observability reader, the console) — restoring only on
-		// promotion is why two managers sat on a two-week-old credential table
-		// while reporting themselves current.
+		// What this node's cluster state is, stated at boot, before anything opens the
+		// store. The old path restored data.db from a Raft config here; the store is
+		// seeded by the mirror now, so there is nothing to restore and nothing to copy —
+		// only a state to report. A manager with no data yet starts, serves /health and
+		// says it is waiting for the first snapshot.
+		noderuntime.ConfirmMirrorAtStartup(cmd.Context(), cfg, log)
+
+		// The follower's mirror (docs/adr/0003-cluster-state-by-pull.md): a manager that is
+		// NOT the leader pulls the leader's snapshot into its own store. Two ordering rules,
+		// both load-bearing:
 		//
-		// This is the safe window: nothing has the store open yet, so replacing
-		// data.db cannot truncate it under a live sqlite connection. Best-effort:
-		// a worker, or a swarm without a readable Raft config, must still serve.
-		// The mid-run twin of this check is adoptOnLeadershipGain: a node that
-		// BECOMES leader later adopts through the open store (close, replace,
-		// reopen) on the same predicate.
-		if _, err := ensureControlPlaneFresh(cmd.Context(), cfg, dc, log); err != nil {
-			log.Warn().Err(err).Msg("control-plane restore at startup had issues (continuing)")
+		//   * it starts BEFORE the leadership wait, because a follower manager blocks there
+		//     forever (the runner assignment loop has the same shape for the same reason);
+		//   * it is joined (not merely cancelled) before this node serves as the writer, so
+		//     there is one writer to a row at a time.
+		//
+		// A WORKER does not mirror: it has no store, and opening one would seed an empty
+		// database whose answers look plausible.
+		var mirrorStop func()
+		var mirrorDone <-chan struct{}
+		if standby && !worker {
+			mirrorStop, mirrorDone = noderuntime.StartSnapshotMirror(cmd.Context(), noderuntime.SnapshotMirrorFor(cfg, dc, hostname, log))
+			mirrorRan = true
+			defer func() {
+				if mirrorStop != nil {
+					mirrorStop()
+					<-mirrorDone
+				}
+			}()
 		}
 
-		if err := waitForSwarmLeadership(cmd.Context(), dc, log); err != nil {
+		if err := noderuntime.WaitForSwarmLeadership(cmd.Context(), dc, log); err != nil {
 			return fmt.Errorf("standby: %w", err)
+		}
+
+		// This node is the leader now, so the mirror has to be gone — finished its last
+		// tick, handle closed — BEFORE the leader's own store is opened below. Two
+		// writers to one row is a race whose winner nobody can predict.
+		if mirrorStop != nil {
+			mirrorStop()
+			<-mirrorDone
+			mirrorStop = nil
 		}
 
 		// This node now leads (or Docker went away and it serves standalone). If
@@ -319,26 +442,13 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			localAPIStop = nil
 		}
 
-		// Control-plane freshness: when this node was a standby and just
-		// became leader, adopt the newest control-plane snapshot if the
-		// local DB is missing or older than it. The leader snapshots the
-		// survivor kit into Raft-replicated Docker configs (L2); pre-L2
-		// clusters fall back to the tarball archive. Shared/replicated
-		// storage (LINSTOR) keeps the DB current on every manager — never
-		// clobber a fresh DB.
-		if _, err := ensureControlPlaneFresh(cmd.Context(), cfg, dc, log); err != nil {
-			return fmt.Errorf("control-plane restore: %w", err)
-		}
+		// Nothing is restored or adopted here: this node serves the store it has been
+		// mirroring, and the leadership watcher below decides — with the mirror's age in
+		// hand — whether it may vouch for it before it becomes the writer.
 
-		// First snapshot as leader: publish the current (possibly just
-		// restored) control plane so the other managers have a fresh kit
-		// before any mutation happens. Published through the same Kit the
-		// leadership loop uses, so that loop recognises this snapshot as its
-		// own and does not adopt it back.
-		if err := kit.Snapshot(cmd.Context()); err != nil {
-			log.Warn().Err(err).Msg("initial control-plane snapshot had issues")
-		}
-
+		// Nothing is published here any more. The data kit went with ADR 0005 and the
+		// key config with ADR 0006: the key is a file, delivered by the join route or
+		// copied by the operator. This daemon writes no platform config at all.
 		checkConfigVersions(cmd.Context(), dc, log)
 	}
 
@@ -356,17 +466,19 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		log.Warn().Err(err).Msg("ensure local storage roots")
 	}
 
-	if _, err := os.Stat(cfg.DBPath()); os.IsNotExist(err) {
-		return fmt.Errorf("data directory not initialised at %s — run `pmcluster init` (or `pmcluster join` on a joining node)", cfg.DataDir)
-	}
-	st, err := store.Open(cfg.DBPath())
+	// The store is seeded by the MIRROR, so a manager that holds no data yet still has
+	// to start: it answers /health, serves empty tables with the mirror's state attached,
+	// and says plainly that it is waiting for the first snapshot. Refusing to start (the
+	// old behaviour) turned a node whose data directory was lost, or one that has not
+	// polled yet, into a crash loop — and a crash loop is not an explanation.
+	st, err := openServeStore(cfg, log)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
 	defer func() { _ = st.Close() }()
 	// Now the per-node loops can see the settings they were started without.
-	served.set(st)
-	storageRoot.Store(localVolumeRoot(cmd.Context(), st))
+	served.Set(st)
+	storageRoot.Store(noderuntime.LocalVolumeRoot(cmd.Context(), st))
 
 	// The persisted log_level cluster setting overrides the config-file
 	// default, so a console change survives daemon restarts. Invalid values
@@ -381,10 +493,14 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	deployer := cluster.NewDockerCLIDeployer(cmd.OutOrStdout())
 
-	cipher, cipherErr := credentials.Open(cfg.EncryptionKeyPath())
+	// A node that already has a database must not MINT a key: it would encrypt every new
+	// secret with a key no other manager holds, and the mirrored ciphertext would be
+	// undecryptable here forever (ADR 0006). Only a genuinely fresh node creates one.
+	cipher, cipherErr := openNodeCipher(cfg)
 	if cipherErr != nil {
-		log.Warn().Err(cipherErr).Msg("encryption key not available; /webhook/* disabled")
+		log.Warn().Err(cipherErr).Msg("encryption key not available; /webhook/* disabled and the leadership gate will report a key problem")
 	}
+	kit.Cipher = cipher
 
 	// The in-cluster SeaweedFS store, when enabled (seaweedfs_admin credential
 	// present), holds the newest backup copies, so reads — failover restore,
@@ -398,7 +514,30 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}, SetStackPin: func(ctx context.Context, stackName, node string) error {
 		return st.SetSetting(ctx, stacks.StackPinKey(stackName), node)
-	}}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3, AppLogLevel: cluster.LoadAppLogLevel(cmd.Context(), st),
+	},
+		// A pin outlives the node it names: the constraint stays spelled
+		// correctly, the rendered hash stops changing, and the service waits
+		// forever on a host that left the swarm. The resolver asks what is live so
+		// it can move a platform-made pin off a node that is gone.
+		LiveNodes: func(ctx context.Context) (map[string]bool, error) {
+			nodes, err := dc.NodeList(ctx)
+			if err != nil {
+				return nil, err
+			}
+			live := make(map[string]bool, len(nodes))
+			for _, n := range nodes {
+				live[n.Hostname] = true
+			}
+			return live, nil
+		},
+		// The platform's own stacks hold volumes deliberately outside the storage
+		// set (the object store lives on a worker); customer stacks may not.
+		Exempt: platformStackSet(),
+		OnRelocate: func(ctx context.Context, stackName, from, to string) {
+			log.Warn().Str("stack", stackName).Str("from", from).Str("to", to).
+				Msg("placement — pinned to a node that is not in the swarm; moved to a live storage node (the data did not follow: restore it from the stack's archive)")
+		},
+	}, Log: log, BackupDir: cluster.BackupRootDir(), S3: backupS3, AppLogLevel: cluster.LoadAppLogLevel(cmd.Context(), st),
 		// Pulls authenticate with the stored read-only PAT, applied once per
 		// deploy — before `--with-registry-auth` freezes it into each spec.
 		// The App covers clone/build/broker; it is not a pull credential.
@@ -433,6 +572,39 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		DeployService: deploySvc,
 		Cipher:        cipher,
 		Backups:       backupSvc,
+		// The console's "export the control plane" button: the same exporter the CLI drives,
+		// refusing on a follower instead of exporting a mirror (ADR 0007).
+		PlatformExport: func(ctx context.Context) (backups.PlatformExportResult, error) {
+			return backups.PlatformExporter{
+				DataDir:  cfg.DataDir,
+				OutDir:   envOr("PMCLUSTER_BACKUP_DIR", backups.DefaultArchiveDir),
+				Hostname: hostname,
+				Version:  buildinfo.Version,
+				Commit:   buildinfo.Commit,
+				Leader: func(ctx context.Context) (bool, error) {
+					if dc == nil {
+						return true, nil // no docker: a standalone node is its own leader
+					}
+					leader, found, err := noderuntime.IsSwarmLeader(ctx, dc, hostname)
+					if err != nil {
+						return false, err
+					}
+					if !found {
+						return true, nil
+					}
+					return leader, nil
+				},
+				S3: func(ctx context.Context) backups.S3Config {
+					return backups.S3Config{
+						Endpoint:  st.SettingDefault(ctx, cluster.SettingBackupS3Endpoint(), ""),
+						Bucket:    st.SettingDefault(ctx, cluster.SettingBackupS3Bucket(), ""),
+						AccessKey: st.SettingDefault(ctx, cluster.SettingBackupS3AccessKey(), ""),
+						SecretKey: st.SettingDefault(ctx, cluster.SettingBackupS3SecretKey(), ""),
+						Region:    st.SettingDefault(ctx, cluster.SettingBackupS3Region(), "auto"),
+					}
+				},
+			}.Run(ctx)
+		},
 		Settings: func() *settings.Local {
 			l := settings.NewLocal(st)
 			l.ApplyLogLevel = logger.SetLevel
@@ -489,6 +661,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// The runner manager is built before the HTTP handler: the console's
 	// Runners panel calls this same manager through /api/github/runners, and a
 	// second instance would keep a second copy of the kill holds.
+	// One sink, two users: the assignment listener writes what nodes report, the
+	// manager reads it for the console. The console is served by the LEADER and the
+	// volumes belong to the node that runs the runner, so without this the page could
+	// only ever warn about a runner living on the leader itself.
+	cacheReports := runners.NewCacheReports()
 	runnerMgr := &runners.Manager{
 		Store:  st,
 		Docker: &runners.CLIDocker{},
@@ -507,6 +684,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		// second credential exist for this feature.
 		runnerMgr.GitHub = deps.GitHubApp
 	}
+	runnerMgr.CacheReports = cacheReports
 	deps.GitHubRunners = runnerMgr
 
 	// The CI board reads Actions with the SAME installation token the runner
@@ -540,8 +718,8 @@ func runServe(cmd *cobra.Command, _ []string) error {
 
 	// The gate answers 503 while a leadership-gain adoption is swapping the
 	// store, so no request is answered from the revision being replaced.
-	gate := &adoptionGate{}
-	handler = gate.wrap(handler)
+	gate := &noderuntime.AdoptionGate{}
+	handler = gate.Wrap(handler)
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -558,12 +736,13 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// else is a deliberate widening of the cluster's attack surface — review it
 	// as one.
 	if !worker {
-		startAssignmentListener(ctx, assignmentListenerOptions{
-			Store:      st,
-			Hostname:   hostname,
-			Docker:     dc,
-			GitHub:     runnerMgr.GitHub,
-			Deregister: runnerMgr.DeregisterName,
+		noderuntime.StartAssignmentListener(ctx, noderuntime.AssignmentListenerOptions{
+			Store:        st,
+			Hostname:     hostname,
+			CacheReports: cacheReports,
+			Docker:       dc,
+			GitHub:       runnerMgr.GitHub,
+			Deregister:   runnerMgr.DeregisterName,
 			Held: func(name string) bool {
 				return runnerMgr.HeldName(ctx, name)
 			},
@@ -572,11 +751,11 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Leader-only control loop: on becoming Swarm leader the daemon adopts the
-	// newest control-plane kit (when this node is behind it), runs the reconcile
-	// loop (platform configs + app-stack drift + health snapshot) and the
-	// control-plane Raft snapshot loop; on losing leadership the loops stop.
+	// state it has been mirroring (a check, never a copy), runs the reconcile
+	// loop (platform configs + app-stack drift + health snapshot) and the key
+	// publish loop; on losing leadership the loops stop.
 	// Non-manager/standalone nodes serve without the loops.
-	leadership := WatchSwarmLeadership(ctx, dc, log)
+	leadership := noderuntime.WatchSwarmLeadership(ctx, dc, log)
 	reconciler := &reconcile.Reconciler{
 		Store:         st,
 		Docker:        dc,
@@ -611,56 +790,35 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			}
 			if isLeader {
 				log.Info().Msg("control loop: starting reconcile loop (leader)")
-				// Name this node as the leader BEFORE the reconcile pass: the
-				// collector's placement CONSTRAINT reads this label, so a
-				// missing label means an unschedulable collector, not a
-				// slightly misplaced one. This also covers a daemon that starts
-				// while already holding leadership — the watch emits its
-				// initial state, so this runs on that first pass too.
-				if syncLeaderLabel(ctx, dc, true, log) {
-					replaceNodeStatCollector(ctx, dc, log)
-				}
-				// This node just gained leadership. Its data.db may be older
-				// than the newest Raft-replicated kit (the previous leader
-				// snapshotted credentials/settings this node never adopted), so
-				// adopt BEFORE the reconcile loop reads settings, before this
-				// node answers control-plane reads, and before publishing:
-				// adopting after a publish would overwrite the deployed state
-				// with a stale snapshot.
+				// Nothing to label: the collector follows the leader by NAME at
+				// render time, and nothing else reads pmcluster.leader.
+				// This node just gained leadership. It is ALREADY holding the cluster's
+				// state (it has been mirroring it), so there is nothing to adopt: the check
+				// is whether there is anything to serve. A stale mirror is SERVED (the
+				// operator's decision) and its age is logged; a node that has never mirrored
+				// and holds nothing refuses, loudly, and starts no loop.
 				//
-				// Exactly once per transition: the leadership channel emits only
-				// on a state change, so a node that stays leader never re-runs
-				// this — a per-tick check would close and reopen the store under
-				// every request, for nothing.
-				adoptOnLeadershipGain(ctx, kit, st, cipher, cfg, gate, log)
-
-				if err := kit.Snapshot(ctx); err != nil {
-					log.Warn().Err(err).Msg("control-plane snapshot on leadership gain had issues")
+				// Exactly once per transition: the leadership channel emits only on a
+				// state change, so a node that stays leader never re-runs this.
+				if !noderuntime.AdoptOnLeadershipGain(ctx, kit, st, gate, mirrorRan, log) {
+					log.Error().Msg("control loop NOT started: this node has no cluster state to serve; reads keep answering with the mirror's age, and restarting pmcluster makes it re-enter standby and mirror again")
+					continue
 				}
+
 				var loopCtx context.Context
 				loopCtx, loopCancel = context.WithCancel(ctx)
 				go reconciler.Loop(loopCtx)
-				go kit.Loop(loopCtx, controlPlaneSnapshotInterval())
-				// The collector writes its node-stats JSONL on the leader's
-				// disk; only this daemon can turn it into rows for the console.
-				go runNodeStatTailer(loopCtx, st, dc, log)
-				// Keep the label true for as long as this node is leader. One
-				// write per election is not enough now that placement is a
-				// constraint: a write that failed during the election leaves the
-				// collector with no matching node at all.
-				go keepLeaderLabel(loopCtx, dc, log)
 			} else {
 				log.Info().Msg("control loop: stopped (not the swarm leader)")
-				syncLeaderLabel(ctx, dc, false, log)
 			}
 		}
 	}()
 
 	// The leader binds what the operator configured (all interfaces by default:
 	// the edge container reaches it through host.docker.internal, and Traefik
-	// routes pmcluster.<domain> here). apiAddr states the rule in one place and
+	// routes pmcluster.<domain> here). noderuntime.APIAddr states the rule in one place and
 	// leaves the value untouched for a non-worker.
-	listenAddr := apiAddr(cfg.ListenAddr, false)
+	listenAddr := noderuntime.APIAddr(cfg.ListenAddr, false)
 	log.Info().Str("addr", listenAddr).Msg("pmcluster serve listening")
 	if err := server.Run(ctx, listenAddr, handler); err != nil {
 		return fmt.Errorf("server: %w", err)
@@ -725,31 +883,34 @@ func checkConfigVersions(ctx context.Context, dc runtime.Client, log zerolog.Log
 	}
 }
 
-// serviceName returns the OTel resource service.name. It prefers the
-// OTEL_SERVICE_NAME env var so deployments can override it, falling back to
-// "pmcluster" for local runs.
-func serviceName() string {
-	if n := strings.TrimSpace(os.Getenv("OTEL_SERVICE_NAME")); n != "" {
-		return n
+// storageNodeFor reports whether this host is currently designated a storage node, read from the
+// mirrored settings — the same source the reconcile uses, so the daemon and the leader agree.
+func storageNodeFor(st *store.Store, host string) bool {
+	if st == nil || host == "" {
+		return false
 	}
-	return "pmcluster"
+	for _, h := range stacks.ParseStorageNodes(st.SettingDefault(context.Background(), cluster.SettingStorageNodes(), "")) {
+		if h == host {
+			return true
+		}
+	}
+	return false
 }
 
-// controlPlaneSnapshotInterval returns how often the leader re-checks the
-// control-plane survivor kit for changes and snapshots it into Raft-replicated
-// Docker configs. Defaults to controlplane.DefaultSnapshotInterval; the
-// PMCLUSTER_CONTROLPLANE_SNAPSHOT_INTERVAL env var (seconds) overrides it
-// (tests use 1 to converge in seconds; 0 or negative falls back to default).
-func controlPlaneSnapshotInterval() time.Duration {
-	raw := os.Getenv("PMCLUSTER_CONTROLPLANE_SNAPSHOT_INTERVAL")
-	if raw == "" {
-		return controlplane.DefaultSnapshotInterval
+// openNodeCipher opens this node's encryption key, minting one ONLY when the node has no
+// database yet.
+//
+// The distinction is the whole point of ADR 0006. `credentials.Open` creates a key when the
+// file is missing, which is right exactly once in a cluster's life: at `cluster init`, and
+// on a fresh node joining with nothing to serve. On a node that already holds data.db it is
+// catastrophic and silent — a new key would encrypt the secrets written from then on with
+// material no other manager has, and the check that could have caught it (comparing against
+// the published key config) is what this release deleted.
+func openNodeCipher(cfg *config.Config) (*credentials.Cipher, error) {
+	if _, err := os.Stat(filepath.Join(cfg.DataDir, "data.db")); err == nil {
+		return credentials.OpenExisting(cfg.EncryptionKeyPath())
 	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n <= 0 {
-		return controlplane.DefaultSnapshotInterval
-	}
-	return time.Duration(n) * time.Second
+	return credentials.Open(cfg.EncryptionKeyPath())
 }
 
 // reconcileIntervalSeconds reads the persisted reconcile_interval setting
@@ -782,8 +943,8 @@ func ensureLocalStorageRoots(ctx context.Context, cfg *config.Config, log zerolo
 	// otherwise create an empty data.db and defeat the "run pmcluster init"
 	// guard below.
 	if _, statErr := os.Stat(cfg.DBPath()); statErr == nil {
-		if st, err := store.Open(cfg.DBPath()); err == nil {
-			root = localVolumeRoot(ctx, st)
+		if st, err := openExistingStore(cfg.DBPath()); err == nil {
+			root = noderuntime.LocalVolumeRoot(ctx, st)
 			_ = st.Close()
 		}
 	}
@@ -879,5 +1040,67 @@ func runRunnerLoop(ctx context.Context, mgr *runners.Manager, st *store.Store, l
 		case <-t.C:
 			tick()
 		}
+	}
+}
+
+// nodePolicyInterval is how often a node re-reads the watchdog decision. A
+// minute matches the watchdog timer: a setting turned on is armed before the
+// second probe that could act on it.
+const nodePolicyInterval = time.Minute
+
+// applyNodePolicyOnce writes this node's watchdog policy from its store when the
+// store holds the decision, and reports whether the file changed. A store that
+// cannot answer (a worker's, which has no leader-owned settings, or a follower
+// that has not mirrored the row) is left alone: writing the default there is
+// what once disarmed a node's docker watchdog during the very outage it existed
+// for.
+func applyNodePolicyOnce(ctx context.Context, cfg *config.Config, log zerolog.Logger) bool {
+	if _, statErr := os.Stat(cfg.DBPath()); statErr != nil {
+		return false
+	}
+	st, err := openExistingStore(cfg.DBPath())
+	if err != nil {
+		return false
+	}
+	defer func() { _ = st.Close() }()
+	armed, known := cluster.LoadNodeDockerRestartKnown(ctx, st)
+	if !known {
+		return false
+	}
+	want := runners.NodePolicy{DockerRestart: armed}
+	if current := runners.ReadNodePolicy(cfg.DataDir); current == want {
+		return false
+	}
+	if werr := runners.WriteNodePolicy(cfg.DataDir, want); werr != nil {
+		log.Warn().Err(werr).Msg("could not write the node policy; the watchdog keeps its previous setting")
+		return false
+	}
+	log.Info().Bool("docker_restart", armed).
+		Msg("node policy applied — the watchdog's docker restart follows the cluster setting")
+	return true
+}
+
+// nodePolicyLoop keeps the policy current for the life of the daemon, so a
+// setting change reaches a running node without waiting for its next restart.
+func nodePolicyLoop(ctx context.Context, cfg *config.Config, log zerolog.Logger) {
+	tick := time.NewTicker(nodePolicyInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			applyNodePolicyOnce(ctx, cfg, log)
+		}
+	}
+}
+
+// platformStackSet is the set of stacks the platform deploys itself: their volumes
+// are infrastructure, not customer data, so the storage-node rule does not apply.
+func platformStackSet() map[string]bool {
+	return map[string]bool{
+		string(cluster.StackInfra): true, string(cluster.StackEdge): true,
+		string(cluster.StackObservability): true, string(cluster.StackBackup): true,
+		string(cluster.StackSSO): true,
 	}
 }

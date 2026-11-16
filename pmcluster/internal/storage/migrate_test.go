@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -125,5 +126,54 @@ func TestMigrateOnAnEmptyRootIsJustProvisioning(t *testing.T) {
 	}
 	if !h.ran("pvcreate") {
 		t.Fatalf("nothing was provisioned: %v", h.calls)
+	}
+}
+
+// TestCopyTreePreservesOwnership is the regression test for the saturation
+// incident on 4-m: adoption copies stack data as root, and without uid/gid the
+// destination becomes root-owned, so an app running as a non-root user can no
+// longer write the database it has been writing for days. Needs root to chown a
+// source file away from itself, so it skips otherwise.
+func TestCopyTreePreservesOwnership(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to create a file owned by another uid")
+	}
+	src := t.TempDir()
+	dst := t.TempDir()
+	sub := filepath.Join(src, "app")
+	if err := os.MkdirAll(sub, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(sub, "app.db")
+	if err := os.WriteFile(db, []byte("data"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	const uid, gid = 10001, 10001
+	for _, p := range []string{sub, db} {
+		if err := os.Chown(p, uid, gid); err != nil {
+			t.Fatalf("chown %s: %v", p, err)
+		}
+	}
+	if _, _, err := copyTree(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"app", "app/app.db"} {
+		fi, err := os.Stat(filepath.Join(dst, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			t.Skip("no ownership in FileInfo on this platform")
+		}
+		if int(st.Uid) != uid || int(st.Gid) != gid {
+			t.Errorf("%s copied as %d:%d, want %d:%d — adoption would leave it unwritable for the app",
+				rel, st.Uid, st.Gid, uid, gid)
+		}
+	}
+	// The mode must survive too, or an app can read what it must not.
+	fi, _ := os.Stat(filepath.Join(dst, "app/app.db"))
+	if fi.Mode().Perm() != 0o640 {
+		t.Errorf("mode = %v, want 0640", fi.Mode().Perm())
 	}
 }

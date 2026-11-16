@@ -14,16 +14,21 @@ type stackPort struct {
 	Mode      string `json:"mode"`
 }
 
-// TestObservabilityOTLPIsPublishedOnTheMesh pins the publish mode of the
+// TestObservabilityOTLPIsPublishedOnTheLeaderOnly pins the publish mode of the
 // collector's OTLP/HTTP port in the RENDERED stack, not in the template text.
 //
-// The daemon is a host process that dials this node's swarm address on 4318. In
-// host mode that port exists only on the node running the collector task, so
-// every other node's daemon exported into a closed port — the 2026-11-08 journal
-// storm that took nxt-sw-4-m out of the swarm. Ingress makes the routing mesh
-// bind 4318 on every node from a single task, which is the only shape where a
-// daemon's endpoint does not depend on where the task happens to land.
-func TestObservabilityOTLPIsPublishedOnTheMesh(t *testing.T) {
+// The mode flipped back to `host` — and it is the guard around it that had to change,
+// not the mode. Host mode shipped once with no daemon-side guard: every non-leader daemon
+// dialled a port nothing bound locally, the OTel SDK logged each failure, and on
+// 2026-11-08 one node wrote 261,617 journal lines from a single boot until journald
+// starved docker's heartbeat and the swarm marked it Down. Ingress "fixed" it by binding
+// 4318 on every node and forwarding to the one task.
+//
+// The flood is now fixed at the source — telemetry.SetErrorHandler is bounded and the
+// supervisor stops an exporter whose endpoint stops answering — so the port goes back to
+// the narrow shape: host mode, on the leader, where the daemon that dials it lives.
+// If this test ever fails in the other direction, check the error handler first.
+func TestObservabilityOTLPIsPublishedOnTheLeaderOnly(t *testing.T) {
 	body, err := LoadComposeFile(StackObservability, RenderInput{
 		Domain:                     "example.com",
 		ObservabilityAdminEmail:    "admin@example.com",
@@ -57,8 +62,8 @@ func TestObservabilityOTLPIsPublishedOnTheMesh(t *testing.T) {
 	if p.Target != 4318 || p.Published != 4318 {
 		t.Errorf("published port = %d->%d, want 4318->4318", p.Published, p.Target)
 	}
-	if p.Mode != "ingress" {
-		t.Errorf("OTLP publish mode = %q, want \"ingress\": host mode binds 4318 only where the task runs, which is the closed port every other daemon used to export to", p.Mode)
+	if p.Mode != "host" {
+		t.Errorf("OTLP publish mode = %q, want \"host\": ingress binds 4318 on EVERY node and forwards to one task, which is exposure nobody needs now that nodes report over mTLS", p.Mode)
 	}
 	if p.Protocol != "tcp" {
 		t.Errorf("OTLP publish protocol = %q, want tcp", p.Protocol)

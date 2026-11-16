@@ -144,7 +144,7 @@ func TestE2EFilelogAttributionAndSkip(t *testing.T) {
 		"-v", configPath+":/etc/otel-config.yaml:ro",
 		"-v", "/var/run/docker.sock:/var/run/docker.sock",
 		"-v", "/var/lib/docker/containers:/var/lib/docker/containers:ro",
-		"otel/opentelemetry-collector-contrib:0.157.0",
+		"otel/opentelemetry-collector-contrib:0.165.0",
 		"--config=/etc/otel-config.yaml")
 	if err != nil {
 		t.Fatalf("docker run collector: %v\n%s", err, collectorOut)

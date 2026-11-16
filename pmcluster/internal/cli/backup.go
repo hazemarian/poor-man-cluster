@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,14 +16,70 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
+
+var backupPlatformCmd = &cobra.Command{
+	Use:   "platform",
+	Short: "Export the control plane (data.db + encryption key) to the offsite bucket",
+	Long: `Writes one archive of the LEADER's control plane and ships it to the offsite bucket.
+
+This is the restore point for losing every manager at once. The mTLS mirror covers losing
+one — a follower already holds the document — but not all three disks dying, or an upgrade
+corrupting data.db everywhere, because then the mirror dies with the source.
+
+It carries data.db AND .encryption_key in the same archive on purpose: a control-plane
+export without its key cannot decrypt a single stored secret, so it would look like a backup
+and restore into a cluster nobody can read (ADR 0007). Nothing reads this archive back
+automatically; it exists for a human with a bucket.
+
+Run it on the leader — that is the node holding the store being exported. Use --local-only to
+write the archive without uploading (the button in the console always uploads).`,
+	RunE: runBackupPlatform,
+}
+
+// platformIfLeader makes the daily timer a no-op on a follower instead of a failed unit: only the
+// leader holds the authoritative store, and two of three managers are followers.
+var platformIfLeader bool
+
+// platformVerifyIfPresent lets the weekly drill include this step on a node that has never
+// exported (a follower) without failing the drill for it.
+var platformVerifyIfPresent bool
+
+var backupPlatformVerifyCmd = &cobra.Command{
+	Use:   "platform-verify [archive]",
+	Short: "Prove a platform export restores: manifest, integrity_check, and the key",
+	Long: `Unpacks a control-plane export into a scratch dir and checks it the way a restore would:
+
+  1. every member matches the sha256 in its MANIFEST.json,
+  2. data.db opens and SQLite reports integrity_check ok,
+  3. the archived key DECRYPTS a secret from that database — the step that proves the key
+     belongs to the ciphertext it shipped with, which is why the export carries both.
+
+Presence in the bucket is not proof of anything: ` + "`S3ObjectExists`" + ` says an object was written,
+and this says it can be read back. Run it after a manual export, or from a timer.
+
+With no argument it drills the NEWEST pmcluster-platform-*.tar.gz in the local archive dir.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runBackupPlatformVerify,
+}
+
+func init() {
+	backupPlatformCmd.Flags().BoolVar(&platformIfLeader, "if-leader", false,
+		"exit 0 with a note on a follower (for the daily timer)")
+	backupPlatformVerifyCmd.Flags().BoolVar(&platformVerifyIfPresent, "if-present", false,
+		"exit 0 when there is no export on this node (for the weekly drill)")
+}
 
 var backupCmd = &cobra.Command{
 	Use:   "backup",
@@ -37,6 +95,8 @@ hour-by-hour plus one artifact per day to the end of backup_retention_days
   pmcluster backup list       what exists, per stack
   pmcluster backup restore    put a stack's artifact back
   pmcluster backup prune      apply retention now
+  pmcluster backup platform   export the control plane (db + key) offsite, from the leader
+  pmcluster backup platform-verify   prove the newest export actually restores
   pmcluster backup create     run the agent on THIS node (needs root)`,
 }
 
@@ -140,7 +200,7 @@ fleet mid-cutover those are the only backups that exist.
 		// The same resolution the hourly agent uses, so an operator pruning by
 		// hand cannot delete history the agent was told to keep (or keep what it
 		// would have deleted). The flags override it for this run only.
-		policy := localRetentionPolicy(cmd.Context())
+		policy := nodeunits.LocalRetentionPolicy(cmd.Context(), configPath)
 		flags := cmd.Flags()
 		if flags.Changed("keep-hours") {
 			policy.KeepHours, _ = flags.GetInt("keep-hours")
@@ -204,8 +264,11 @@ func init() {
 	backupRestoreCmd.Flags().Bool("drain", true, "pause the stack's services while restoring (a live database writes into files the restore unlinks)")
 	backupRestoreCmd.Flags().Bool("no-drain", false, "do not pause the stack — only when it is already down, or you accept a restore under a live database")
 
+	backupPlatformCmd.Flags().Bool("local-only", false, "write the archive without uploading it offsite")
+	backupPlatformCmd.Flags().Bool("json", false, "machine-readable result")
+
 	backupCmd.AddCommand(backupCreateCmd, backupListCmd, backupBrowseCmd, backupRestoreCmd, backupPruneCmd,
-		backupEnableCmd, backupDisableCmd, backupScheduleCmd)
+		backupEnableCmd, backupDisableCmd, backupScheduleCmd, backupPlatformCmd, backupPlatformVerifyCmd)
 	rootCmd.AddCommand(backupCmd)
 }
 
@@ -586,6 +649,164 @@ func attachScaler(cmd *cobra.Command, svc backups.Service, drain bool) {
 	local.Logf = func(format string, args ...any) {
 		fmt.Fprintf(out, format+"\n", args...)
 	}
+}
+
+// runBackupPlatform exports the control plane offsite, from the leader.
+//
+// Leader-only because the archive is the store THIS node is serving: a follower's data.db is
+// a mirror of the leader's, and exporting it would produce a restore point whose provenance
+// nobody can name. The check is the same one the daemon uses for telemetry placement, so a
+// cluster whose leadership just moved refuses here instead of writing a stale export.
+func runBackupPlatform(cmd *cobra.Command, _ []string) error {
+	defer initCLITelemetry()()
+
+	cfg := loadConfig(cmd)
+	ctx := cmd.Context()
+	out := cmd.OutOrStdout()
+	hostname := localHostname()
+
+	st, err := openStoreForPlatformExport(cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+
+	localOnly, _ := cmd.Flags().GetBool("local-only")
+	asJSON, _ := cmd.Flags().GetBool("json")
+
+	res, err := backups.PlatformExporter{
+		DataDir:   cfg.DataDir,
+		OutDir:    envOr("PMCLUSTER_BACKUP_DIR", backups.DefaultArchiveDir),
+		Hostname:  hostname,
+		Version:   buildinfo.Version,
+		Commit:    buildinfo.Commit,
+		LocalOnly: localOnly,
+		Leader: func(ctx context.Context) (bool, error) {
+			dc, dcErr := docker.New()
+			if dcErr != nil || dc == nil {
+				// No docker on this box: a standalone node is its own leader.
+				return true, nil
+			}
+			leader, found, lerr := noderuntime.IsSwarmLeader(ctx, dc, hostname)
+			if lerr != nil {
+				return false, lerr
+			}
+			if !found {
+				return true, nil
+			}
+			return leader, nil
+		},
+		S3: func(ctx context.Context) backups.S3Config { return backupS3FromSettings(ctx, st) },
+	}.Run(ctx)
+	if err != nil {
+		// The daily timer runs on every manager; only the leader has an authoritative store. A
+		// follower is not a failure — it is the expected answer two mornings out of three, and a
+		// unit that fails there gets ignored on the day it means something.
+		if platformIfLeader && errors.Is(err, backups.ErrNotLeader) {
+			fmt.Fprintf(out, "platform export: this node is a follower — %s\n", err)
+			return nil
+		}
+		return err
+	}
+
+	offsiteKey := res.OffsiteKey
+	var uploadErr error
+	if !localOnly && offsiteKey == "" {
+		uploadErr = fmt.Errorf("no offsite destination is configured (backup_s3_endpoint/bucket/keys): the archive is local only")
+	}
+
+	if asJSON {
+		body, _ := json.MarshalIndent(map[string]any{
+			"archive":     res.Archive,
+			"name":        res.Name,
+			"bytes":       res.Bytes,
+			"offsite_key": offsiteKey,
+			"members":     res.Members,
+			"error":       errString(uploadErr),
+		}, "", "  ")
+		fmt.Fprintln(out, string(body))
+	} else {
+		fmt.Fprintf(out, "platform export: %s (%s, %d member(s))\n", res.Archive, humanBytes(res.Bytes), len(res.Members))
+		for _, m := range res.Members {
+			short := m.SHA256
+			if len(short) > 16 {
+				short = short[:16]
+			}
+			fmt.Fprintf(out, "  %-22s %8s  sha256:%s\n", m.Name, humanBytes(m.Bytes), short)
+		}
+		if offsiteKey != "" {
+			fmt.Fprintf(out, "  offsite: %s\n", offsiteKey)
+		}
+	}
+	if uploadErr != nil {
+		return uploadErr
+	}
+	return nil
+}
+
+// runBackupPlatformVerify drills a control-plane export.
+func runBackupPlatformVerify(cmd *cobra.Command, args []string) error {
+	defer initCLITelemetry()()
+	out := cmd.OutOrStdout()
+
+	path := ""
+	if len(args) == 1 {
+		path = args[0]
+	} else {
+		dir := envOr("PMCLUSTER_BACKUP_DIR", backups.DefaultArchiveDir)
+		p, err := backups.NewestPlatformExport(dir)
+		if err != nil {
+			// The weekly drill carries this step on every storage node, and a follower has never
+			// exported anything. Saying "nothing to drill here" is the honest answer; failing the
+			// drill for it would hide a real failure in the same red line.
+			if platformVerifyIfPresent {
+				fmt.Fprintf(out, "platform drill: nothing to drill on this node (%v)\n", err)
+				return nil
+			}
+			return err
+		}
+		path = p
+	}
+
+	rep, err := backups.DrillPlatformExport(path)
+	if err != nil {
+		fmt.Fprintf(out, "platform drill: FAILED\n  archive: %s\n  ✖ %v\n", path, err)
+		return fmt.Errorf("the platform export is not restorable")
+	}
+
+	fmt.Fprintf(out, "platform drill: %s\n", filepath.Base(rep.Archive))
+	fmt.Fprintf(out, "  written      : %s by %s (%s)\n", rep.ManifestAt, rep.Hostname, rep.Version)
+	fmt.Fprintf(out, "  members      : %d, all matching the manifest\n", rep.Members)
+	fmt.Fprintf(out, "  integrity    : %s\n", rep.IntegrityCheck)
+	if rep.SecretsChecked == 0 {
+		fmt.Fprintf(out, "  key          : not proven — the archive carries no secrets yet\n")
+	} else {
+		fmt.Fprintf(out, "  key          : decrypts %d/%d sampled secret(s)\n", rep.SecretsDecrypted, rep.SecretsChecked)
+	}
+	fmt.Fprintf(out, "  took         : %s\n", rep.Duration.Round(time.Millisecond))
+	if !rep.OK() {
+		return fmt.Errorf("the platform export is not restorable")
+	}
+	fmt.Fprintf(out, "  ✔ this archive restores\n")
+	return nil
+}
+
+// openStoreForPlatformExport opens the store read-only in spirit (nothing is written) but
+// through the same opener the daemon uses, so a missing database is an error naming the path
+// rather than an empty export.
+func openStoreForPlatformExport(cfg *config.Config) (*store.Store, error) {
+	st, err := openExistingStore(cfg.DBPath())
+	if err != nil {
+		return nil, fmt.Errorf("open the control-plane database: %w (this node has never served the cluster's state)", err)
+	}
+	return st, nil
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 // localHostname returns this node's hostname, or "local" when os.Hostname

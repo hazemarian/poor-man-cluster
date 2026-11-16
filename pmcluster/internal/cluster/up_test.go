@@ -18,10 +18,15 @@ import (
 func newUpDeps(t *testing.T) (UpDeps, *fakeDocker, *recordingDeployer) {
 	t.Helper()
 	dir := t.TempDir()
+	// Both seams are package-level: leaving them stubbed would hand a no-op
+	// ensurePlatformHostDirs to every test that runs AFTER this helper, which is
+	// how a later test "passes" while nothing was created. Restore them.
+	origStorageDirs, origHostDirs := ensureStorageDirs, ensurePlatformHostDirs
+	t.Cleanup(func() { ensureStorageDirs, ensurePlatformHostDirs = origStorageDirs, origHostDirs })
 	ensureStorageDirs = func(string) error { return nil }
 	// The host-directory step is the same kind of host mutation: keep it
 	// out of the real filesystem (the real helper is covered by hostpaths_test).
-	ensurePlatformHostDirs = func() error { return nil }
+	ensurePlatformHostDirs = func(string) error { return nil }
 
 	s, err := store.Open(filepath.Join(dir, "test.db"))
 	if err != nil {
@@ -261,12 +266,15 @@ func TestUp_DefaultStorageNodeIsLeader(t *testing.T) {
 	if got != "nextrum-sy-1" {
 		t.Errorf("default storage_nodes = %q, want the leader hostname nextrum-sy-1", got)
 	}
-	if len(f.nodeLabels) != 2 ||
-		f.nodeLabels[0] != runtime.StorageNodeLabel+"=true" ||
-		f.nodeLabels[1] != runtime.LeaderNodeLabel+"=true" {
-		t.Errorf("expected the default storage node labelled %s=true and the leader labelled %s=true, got %v",
-			runtime.StorageNodeLabel, runtime.LeaderNodeLabel, f.nodeLabels)
+	// `cluster up` no longer stamps pmcluster.leader: the collector is placed by the
+	// leader's NAME at render time, so the label had no reader left. The storage label
+	// is still written because placement of storage is a label by design.
+	if len(f.nodeLabels) != 1 ||
+		f.nodeLabels[0] != runtime.StorageNodeLabel+"=true" {
+		t.Errorf("expected only the default storage node labelled %s=true, got %v",
+			runtime.StorageNodeLabel, f.nodeLabels)
 	}
+
 }
 
 // TestUp_BackupRendersGlobalWhenStorageNodeDefaulted asserts the storage node

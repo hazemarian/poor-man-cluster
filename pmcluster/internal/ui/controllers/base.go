@@ -8,6 +8,8 @@ package controllers
 import (
 	"context"
 
+	"github.com/rs/zerolog"
+
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/observability"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/pmapi"
@@ -40,6 +42,9 @@ type Controller struct {
 	Domain   string
 	EnvAPI   string
 	EnvToken string
+	// Log reports the console's own failures — terminal dials, upstream errors that leave no
+	// request log. No-op unless the caller installs a logger.
+	Log zerolog.Logger
 	// Telemetry is nil when the daemon reports no telemetry source, or when the
 	// console cannot reach it. The page still renders daemon-derived health.
 	Telemetry observability.Source

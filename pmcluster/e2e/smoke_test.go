@@ -204,6 +204,13 @@ func runCmd(t *testing.T, homeDir string, args ...string) (stdout, stderr string
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
+			// A command that fails with NOTHING to say used to produce "exited 1:" followed by
+			// two blank lines, and the operator was left guessing whether it was a rejection, a
+			// crash or the OOM killer. The process state names a signal; silence is otherwise
+			// reported as silence.
+			if stdout == "" && stderr == "" {
+				stderr = fmt.Sprintf("(the command wrote nothing; process state: %v)", cmd.ProcessState)
+			}
 		} else {
 			t.Fatalf("cmd %v: unexpected error %v", args, err)
 		}

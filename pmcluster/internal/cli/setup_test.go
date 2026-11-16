@@ -139,42 +139,28 @@ func TestRunnerSettingsPersistSocketPathAndInterval(t *testing.T) {
 	ctx := context.Background()
 
 	a := setupAnswers{
-		GitHubRunnerSocketPath:         "/run/pmcluster/docker.sock",
 		GitHubRunnerAssignmentInterval: "30",
 		GitHubRunnerOrg:                "acme",
 		GitHubRunnerNodes:              "worker-1",
 		GitHubRunnerGroup:              "pmcluster",
-		GitHubRunnerSocketProxy:        true,
 	}
 	if err := persistSetupSecretsOnly(ctx, st, a); err != nil {
 		t.Fatalf("persistSetupSecretsOnly: %v", err)
-	}
-	if got := st.SettingDefault(ctx, cluster.SettingGitHubRunnerSocketPath(), ""); got != a.GitHubRunnerSocketPath {
-		t.Errorf("github_runner_socket_path = %q, want %q", got, a.GitHubRunnerSocketPath)
 	}
 	if got := st.SettingDefault(ctx, cluster.SettingGitHubRunnerAssignmentInterval(), ""); got != "30" {
 		t.Errorf("github_runner_assignment_interval = %q, want 30", got)
 	}
 }
 
-// TestValidateRunnerSetupRefusesBadSocketPathAndInterval: setup writes settings
-// directly, so it cannot rely on the settings surface to reject a relative
-// socket path or a poll interval that would hammer the leader.
-func TestValidateRunnerSetupRefusesBadSocketPathAndInterval(t *testing.T) {
+// TestValidateRunnerSetupRefusesABadInterval: setup writes settings directly, so it
+// cannot rely on the settings surface to reject a poll interval that would hammer the
+// leader.
+func TestValidateRunnerSetupRefusesABadInterval(t *testing.T) {
 	cases := []struct {
 		name string
 		a    setupAnswers
 		want string
 	}{
-		{
-			name: "relative socket path",
-			a: setupAnswers{
-				GitHubRunnersEnabled: true, GitHubRunnerOrg: "acme",
-				GitHubRunnerNodes: "worker-1", GitHubRunnerGroup: "pmcluster",
-				GitHubRunnerSocketPath: "docker.sock",
-			},
-			want: "github-runner-socket-path must be an absolute path",
-		},
 		{
 			name: "interval below the floor",
 			a: setupAnswers{

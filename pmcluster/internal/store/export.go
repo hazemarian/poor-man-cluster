@@ -54,6 +54,16 @@ const (
 	// config (highest version-row id first), so config rollback keeps a short
 	// window on a promoted leader instead of no history at all.
 	CopyNewestConfigVersions
+	// CopyReplace copies every row with INSERT OR REPLACE, for a table whose
+	// DESTINATION is already seeded by the migrations: the source must win on a
+	// primary-key clash instead of failing the whole export.
+	//
+	// It is how cluster_version crosses — the migration seeds one row (id = 1), so a
+	// plain CopyAll would abort with a UNIQUE violation and the kit would stop
+	// publishing entirely. Carrying the counter is what keeps a promoted leader's
+	// version describing the data it actually holds, instead of restarting at 1 and
+	// making every follower re-fetch content it already has.
+	CopyReplace
 )
 
 // CopyPlan names one table to carry into an export, and how much of it.
@@ -101,6 +111,13 @@ func Export(srcPath, dstPath string, plans []CopyPlan) (map[string]int64, error)
 			}
 			if p.Keep < 1 {
 				return nil, fmt.Errorf("export DB: newest-config-version cap must be positive, got %d", p.Keep)
+			}
+		case CopyReplace:
+			// Only for a table the destination migrations pre-seed. Allowing it
+			// generally would let an export silently overwrite the destination's own
+			// rows for any table someone felt like naming.
+			if p.Table != "cluster_version" {
+				return nil, fmt.Errorf("export DB: replace-copy is for the pre-seeded cluster_version table, not %q", p.Table)
 			}
 		default:
 			return nil, fmt.Errorf("export DB: unknown selector %d for table %q", p.Selector, p.Table)
@@ -248,6 +265,14 @@ func copyTable(tx *sql.Tx, p CopyPlan) (int64, error) {
 			                                  ORDER BY c.id DESC) AS rn
 			          FROM src.config_versions c)
 			 WHERE rn <= ?`, p.Keep)
+
+	case CopyReplace:
+		// SELECT * on both sides for the same reason as CopyAll: the destination
+		// schema came from the same migrations, so the columns line up by position and
+		// a mismatch fails loudly. OR REPLACE is the whole point: the destination row
+		// is the migration's seed, and the source's counter is the truth.
+		return execCount(tx, p.Table,
+			`INSERT OR REPLACE INTO main.`+p.Table+` SELECT * FROM src.`+p.Table)
 	}
 	return 0, fmt.Errorf("export DB: unknown selector %d for table %q", p.Selector, p.Table)
 }

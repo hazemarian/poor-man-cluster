@@ -28,7 +28,7 @@ func TestLogsPageSQLNewestFirstWithFilters(t *testing.T) {
 	}
 	for _, want := range []string{
 		"`service.name` = 'demo_web'",
-		"regexp_like(SUBSTR(body, 1, 200)",
+		"severity_text",
 		") = 'error'",
 		`body ILIKE '%50\%\_off \\ it''s%' ESCAPE '\'`,
 		"ORDER BY p_timestamp DESC LIMIT 3 OFFSET 40",

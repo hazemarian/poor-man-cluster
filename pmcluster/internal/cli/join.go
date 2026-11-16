@@ -18,9 +18,9 @@ import (
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/storage"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // nodeNameRe mirrors the manifest placement-pin validation: a Docker node
@@ -325,6 +325,13 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 		if err := markStorageNodeEnv(); err != nil {
 			fmt.Fprintf(cmd.OutOrStdout(), "  (could not record the storage-node role: %v)\n", err)
 		}
+		// Install the hourly agent NOW, not at the next daemon start (ADR 0008). The daemon's
+		// converge would get there on its own, but a node that joined as storage is a node whose
+		// data is unarchived until it does — and the operator is standing right here, root, with
+		// the role freshly recorded.
+		if aerr := nodeunits.EnsureBackupAgent(cmd.OutOrStdout(), configPath); aerr != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "  ⚠ the backup agent could not be installed: %v — run `pmcluster backup-agent install` once this node is up\n", aerr)
+		}
 		// A storage node must be able to take atomic snapshots before it accepts
 		// work, because converting it afterwards means moving every stack off it
 		// first. Best-effort on purpose: a join that fails because a loop device
@@ -337,7 +344,7 @@ func runJoin(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Install + start the daemon (systemd on Linux, hint otherwise).
-	if err := ensureDaemonRunning(cmd.OutOrStdout()); err != nil {
+	if err := nodeunits.EnsureDaemonRunning(cmd.OutOrStdout(), configPath); err != nil {
 		return err
 	}
 
@@ -604,7 +611,9 @@ func prepareJoinState(ctx context.Context, out io.Writer, cfg *config.Config) er
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("stat db path: %w", err)
 		}
-		st, err := store.Open(cfg.DBPath())
+		// The other bootstrap exception: a joining node has no local database until
+		// this line, and it never mirrors a manager's (a worker has none).
+		st, err := openOrCreateStore(cfg)
 		if err != nil {
 			return fmt.Errorf("open store (migrations): %w", err)
 		}
@@ -747,17 +756,17 @@ func manualStorageNodeHint(out io.Writer, sshHost, nodeHostname, merged string) 
 // whether this host should be snapshotting anything.
 func markStorageNodeEnv() error {
 	const line = "PMCLUSTER_STORAGE_NODE=1\n"
-	b, err := os.ReadFile(backupEnvFile)
+	b, err := os.ReadFile(nodeunits.BackupEnvFile)
 	if err == nil && strings.Contains(string(b), "PMCLUSTER_STORAGE_NODE=1") {
 		return nil
 	}
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(backupEnvFile), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(nodeunits.BackupEnvFile), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(backupEnvFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(nodeunits.BackupEnvFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return err
 	}

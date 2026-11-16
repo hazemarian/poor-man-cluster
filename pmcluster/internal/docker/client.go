@@ -462,6 +462,16 @@ func (r *realClient) ServiceInspect(ctx context.Context, name string) (runtime.S
 		labels = map[string]string{}
 	}
 	image := ""
+	var constraints []string
+	if pl := svc.Spec.TaskTemplate.Placement; pl != nil {
+		constraints = append(constraints, pl.Constraints...)
+	}
+	var ports []runtime.ServicePort
+	for _, p := range svc.Endpoint.Ports {
+		ports = append(ports, runtime.ServicePort{
+			Target: p.TargetPort, Published: p.PublishedPort, Mode: string(p.PublishMode),
+		})
+	}
 	var mounts []runtime.Mount
 	if c := svc.Spec.TaskTemplate.ContainerSpec; c != nil {
 		image = c.Image
@@ -470,11 +480,13 @@ func (r *realClient) ServiceInspect(ctx context.Context, name string) (runtime.S
 		}
 	}
 	return runtime.ServiceInspectResult{
-		ID:     svc.ID,
-		Name:   svc.Spec.Name,
-		Image:  image,
-		Labels: labels,
-		Mounts: mounts,
+		ID:          svc.ID,
+		Name:        svc.Spec.Name,
+		Image:       image,
+		Labels:      labels,
+		Mounts:      mounts,
+		Constraints: constraints,
+		Ports:       ports,
 	}, nil
 }
 
@@ -984,25 +996,61 @@ func (r *realClient) SwarmID(ctx context.Context) (string, error) {
 // a label that exists with an empty value still matches `node.labels.x == ""`
 // in a placement preference — the opposite of what clearing is for.
 func (r *realClient) SetNodeLabel(ctx context.Context, nodeID, key, value string) error {
-	info, _, err := r.c.NodeInspectWithRaw(ctx, nodeID)
-	if err != nil {
-		return fmt.Errorf("node inspect: %w", err)
-	}
-	if value == "" {
-		if _, ok := info.Spec.Labels[key]; !ok {
+	// "update out of sequence" is Swarm's optimistic-concurrency refusal: the node
+	// changed between this inspect and this update. Measured on a live cluster — the
+	// reconcile reported "could not label storage node nxt-sw-4-m (node update: rpc
+	// error: code = Unknown desc = update out of sequence)" and left the platform
+	// running a step short. It is a RACE, not a bad label: two writers (a reconcile
+	// pass, an adoption draining the node, an operator's `docker node update`), and the
+	// loser has to re-read. Retrying is the whole fix, and the same one stacks.go
+	// already applies to service updates.
+	var lastErr error
+	for attempt := 0; attempt < nodeUpdateAttempts; attempt++ {
+		info, _, err := r.c.NodeInspectWithRaw(ctx, nodeID)
+		if err != nil {
+			return fmt.Errorf("node inspect: %w", err)
+		}
+		if value == "" {
+			if _, ok := info.Spec.Labels[key]; !ok {
+				return nil
+			}
+			delete(info.Spec.Labels, key)
+		} else {
+			if info.Spec.Labels == nil {
+				info.Spec.Labels = map[string]string{}
+			}
+			info.Spec.Labels[key] = value
+		}
+		err = r.c.NodeUpdate(ctx, nodeID, info.Version, info.Spec)
+		if err == nil {
 			return nil
 		}
-		delete(info.Spec.Labels, key)
-	} else {
-		if info.Spec.Labels == nil {
-			info.Spec.Labels = map[string]string{}
+		lastErr = err
+		if !isNodeUpdateRace(err) {
+			return fmt.Errorf("node update: %w", err)
 		}
-		info.Spec.Labels[key] = value
+		// Give the winner a moment to finish writing before re-reading; without this
+		// the retry can collide with the same write again.
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("node update: %w", ctx.Err())
+		case <-time.After(nodeUpdateRetryDelay):
+		}
 	}
-	if err := r.c.NodeUpdate(ctx, nodeID, info.Version, info.Spec); err != nil {
-		return fmt.Errorf("node update: %w", err)
-	}
-	return nil
+	return fmt.Errorf("node update: %w", lastErr)
+}
+
+// nodeUpdateAttempts is 3: the loss is a race with one other writer, so a second
+// attempt almost always wins, and a third covers a reconcile pass and an operator
+// click landing together. More than that is a loop, not a retry.
+const nodeUpdateAttempts = 3
+
+var nodeUpdateRetryDelay = 150 * time.Millisecond
+
+// isNodeUpdateRace reports whether an update was refused because someone else wrote
+// the node first. Anything else is a real error and must surface immediately.
+func isNodeUpdateRace(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "update out of sequence")
 }
 
 // SetNodeRole promotes a node to manager or demotes it to worker. It inspects
@@ -1023,18 +1071,34 @@ func (r *realClient) SetNodeRole(ctx context.Context, nodeID, role string) error
 	default:
 		return fmt.Errorf("node role %q: must be \"manager\" or \"worker\"", role)
 	}
-	info, _, err := r.c.NodeInspectWithRaw(ctx, nodeID)
-	if err != nil {
-		return fmt.Errorf("node inspect: %w", err)
+	// Same optimistic-concurrency race as SetNodeLabel, and worse when lost: a refused
+	// demotion leaves the quorum as it was while the caller believes it changed. Retry
+	// by re-inspecting, which is the only way to get a version Swarm will accept.
+	var lastErr error
+	for attempt := 0; attempt < nodeUpdateAttempts; attempt++ {
+		info, _, err := r.c.NodeInspectWithRaw(ctx, nodeID)
+		if err != nil {
+			return fmt.Errorf("node inspect: %w", err)
+		}
+		if info.Spec.Role == want {
+			return nil
+		}
+		info.Spec.Role = want
+		err = r.c.NodeUpdate(ctx, nodeID, info.Version, info.Spec)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !isNodeUpdateRace(err) {
+			return fmt.Errorf("node update: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("node update: %w", ctx.Err())
+		case <-time.After(nodeUpdateRetryDelay):
+		}
 	}
-	if info.Spec.Role == want {
-		return nil
-	}
-	info.Spec.Role = want
-	if err := r.c.NodeUpdate(ctx, nodeID, info.Version, info.Spec); err != nil {
-		return fmt.Errorf("node update: %w", err)
-	}
-	return nil
+	return fmt.Errorf("node update: %w", lastErr)
 }
 
 func (r *realClient) SecretList(ctx context.Context, labelKey, labelValue string) ([]string, error) {
@@ -1121,6 +1185,16 @@ func (r *realClient) Events(ctx context.Context, since time.Time) (<-chan runtim
 				if !ok {
 					return
 				}
+				// Healthchecks and execs are not changes to what anything
+				// converges to, and docker emits three events per healthcheck
+				// probe (exec_create, exec_start, exec_die) for every container
+				// that has one. Measured on the live cluster: without this drop,
+				// the leader ran a full reconcile pass — re-rendering 18 stacks
+				// — every ~3.1 s, and the same stream is what made the OTel
+				// collector rebuild a filelog receiver roughly once a second.
+				if isEventNoise(msg) {
+					continue
+				}
 				ev := eventFromMessage(msg)
 				select {
 				case evCh <- ev:
@@ -1155,6 +1229,29 @@ func (r *realClient) Events(ctx context.Context, since time.Time) (<-chan runtim
 	}()
 
 	return evCh, outErrs
+}
+
+// isEventNoise reports the events that cannot change what the reconcile pass
+// converges. A healthcheck is an exec inside a running container: it changes no
+// image, no config, no replica count, no health of the SWARM — only the
+// container's health field, which docker reports as `health_status: …`.
+//
+// Kept to the exact prefixes rather than "anything container-ish" so a real task
+// death (die, oom, kill) still wakes the loop.
+func isEventNoise(msg events.Message) bool {
+	a := string(msg.Action)
+	if strings.HasPrefix(a, "exec_") || strings.HasPrefix(a, "health_status") {
+		return true
+	}
+	// Swarm refreshes every node's record continuously (measured: 11 `node update`
+	// events in 8 seconds on a four-node cluster), and that is the rest of what kept
+	// a pass running every ~3s. The pass lists and inspects the nodes itself, so a
+	// node update carries nothing it would not read anyway; a node that genuinely
+	// goes Down is picked up by the safety-net tick within a minute.
+	if msg.Type == "node" && a == "update" {
+		return true
+	}
+	return false
 }
 
 // isNotFoundString is a fallback for older daemons whose error doesn't

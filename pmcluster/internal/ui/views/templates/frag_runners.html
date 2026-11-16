@@ -22,6 +22,17 @@
 
 {{if .MsgKey}}{{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (TF .MsgKey .MsgArg))}}{{end}}
 
+{{/* Loud on purpose. These volumes are the ONLY thing the platform never removes, so
+     they are the one part of a runner that grows with nobody deleting anything. Without
+     this the first symptom is a job failing with "no space left on device" in a
+     repository that has nothing to do with the cache. The body names the volume and both
+     numbers, because "the cache is large" is not something an operator can act on. */}}
+{{if .CacheWarnings}}
+{{template "banner" (dict "Tone" "warn" "Icon" "alert" "Role" "alert"
+  "Title" (T "runners.cache_over_title") "Body" .CacheWarningText "Muted" (T "runners.cache_over_hint")
+  "Retry" "/web/runners")}}
+{{end}}
+
 {{if not .Configured}}
 <div class="panel mt-24">
   <div class="panel-body tight">
@@ -152,6 +163,10 @@
             <td>
               <span class="pill {{.StateClass}}"><i class="dot"></i>{{T (printf "runners.state_%s" .State)}}</span>
               {{if .Reason}}<div class="muted" dir="auto">{{.Reason}}</div>{{end}}
+              {{/* The cache total is what the banner is about, in the row it belongs to:
+                   a warning at the top of the page with no way to tell WHICH runner is
+                   holding the bytes is only half a warning. */}}
+              {{if .CacheTotal}}<div class="muted" dir="ltr">{{T "runners.cache_row"}} {{.CacheTotal}}</div>{{end}}
             </td>
             <td class="muted">{{T (printf "runners.mode_%s" .Mode)}}</td>
             <td class="muted num"><bdi dir="ltr">{{if .RegisteredAt}}{{.Age}}{{else}}—{{end}}</bdi></td>

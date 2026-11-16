@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,13 @@ type backupsData struct {
 	Checked         int64
 	StackCount      int64
 	Unchecked       int64
+
+	// Health is the doctor checks about backups, quoting the checks themselves. This screen is
+	// where an operator looks when backup state is in doubt; the overview's banner was one nav
+	// click away from the page that could act on it.
+	Health      []healthModel
+	HealthKnown bool
+	HealthTone  string
 
 	LastVerifiedDays int64
 	HasLastVerified  bool
@@ -194,6 +202,9 @@ type backupBrowseData struct {
 	MsgKey   string
 	MsgCount int64
 	MsgPath  string
+	// MsgA carries a value into a message that names it (the offsite object key of a
+	// platform export), so the operator can see WHAT was written without opening the bucket.
+	MsgA string
 }
 
 // Browse renders the archive listing of one run.
@@ -313,6 +324,12 @@ func (c Backups) List(g *gin.Context) {
 // load reads the run window and the per-stack coverage into d.
 func (c Backups) load(g *gin.Context, d *backupsData) {
 	ctx := g.Request.Context()
+	// The checks about backups, quoting themselves. They belong here rather than only on the
+	// overview: this is the page an operator opens when backup state is in doubt, and it used to
+	// show a clean coverage table while doctor failed "backup agents" one nav click away.
+	if h := loadHealth(ctx, c.API, "backup", "unbacked", "restore drill", "offsite", "platform"); h.Known {
+		d.Health, d.HealthKnown, d.HealthTone = h.Rows, h.Known, h.Tone
+	}
 
 	if rows, err := c.API.ListBackups(ctx, backupsListLimit); err != nil {
 		if d.ErrKey == "" {
@@ -426,6 +443,31 @@ func (c Backups) coverage(g *gin.Context, d *backupsData) {
 }
 
 // Create triggers a backup and re-renders the page.
+// Platform is the manual control-plane export (ADR 0007): the leader's data.db AND its
+// encryption key, written once and shipped to the offsite bucket.
+//
+// It is not `backup create`. That runs the volume agent for stack data; this exports the
+// platform's own state, which no schedule produces any more precisely because a scheduled
+// object moving platform state around is what ADR 0005/0006 removed.
+func (c Backups) Platform(g *gin.Context) {
+	d := backupsData{Limit: backupsListLimit, WarnDays: backupStaleDays}
+	res, err := c.API.ExportPlatform(g.Request.Context())
+	switch {
+	case err != nil:
+		d.ErrKey, d.ErrRaw = humanErr("err.backup_platform", err)
+	case res.OffsiteKey == "":
+		// It wrote the archive but had nowhere to send it. Saying "done" here would be the
+		// exact failure the artifact exists to prevent: a restore point on the host it is
+		// meant to survive.
+		d.ErrKey, d.ErrRaw = humanErr("err.backup_platform_offsite", fmt.Errorf("no offsite destination configured"))
+	default:
+		d.MsgKey = "backups.msg_platform"
+		d.MsgA = res.OffsiteKey
+	}
+	c.load(g, &d)
+	c.Views.Fragment(g, "backups", d)
+}
+
 func (c Backups) Create(g *gin.Context) {
 	d := backupsData{Limit: backupsListLimit, WarnDays: backupStaleDays}
 	if _, _, configured := c.loadParams(g.Request.Context()); !configured {

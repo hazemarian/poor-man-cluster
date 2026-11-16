@@ -63,17 +63,23 @@ func TestScopeOf(t *testing.T) {
 		}
 	}
 
-	// cluster: subcommands that bootstrap are allowed anywhere, the rest are not.
+	// cluster: subcommands that bootstrap or describe THIS NODE are allowed anywhere,
+	// the rest are not. `mirror` is node-local on purpose: it answers "would a
+	// promotion from here work", which only a follower can usefully be asked.
 	cluster := find("cluster")
 	if cluster == nil {
 		t.Fatal("cluster command is not registered")
 	}
-	bootstrapSeen := 0
+	bootstrapSeen, nodeLocalSeen := 0, 0
 	for _, sub := range cluster.Commands() {
 		want := scopeLeader
-		if bootstrapClusterSubcommands[sub.Name()] {
+		switch {
+		case bootstrapClusterSubcommands[sub.Name()]:
 			want = scopeBootstrap
 			bootstrapSeen++
+		case nodeLocalClusterSubcommands[sub.Name()]:
+			want = scopeNode
+			nodeLocalSeen++
 		}
 		if got := scopeOf(sub); got != want {
 			t.Errorf("scopeOf(cluster %s) = %v, want %v", sub.Name(), got, want)
@@ -82,6 +88,83 @@ func TestScopeOf(t *testing.T) {
 	if bootstrapSeen == 0 {
 		t.Error("no cluster subcommand was classified as bootstrap — the carve-outs are gone")
 	}
+	if nodeLocalSeen == 0 {
+		t.Error("no cluster subcommand is node-local — `cluster mirror verify` must answer on a follower, or the drill is refused everywhere but the leader")
+	}
+}
+
+// TestBackupPlatformScope pins the two forms apart, because they differ by a FLAG and the first
+// scheduled run failed on two managers out of three: the plain form is leader-only (running it on
+// a follower by hand is a mistake worth refusing), while --if-leader is the form whose entire job
+// is to answer "this node is a follower" and exit 0. `platform-verify` is node-local: it drills a
+// file on this disk, and the weekly drill runs it on every storage node.
+func TestBackupPlatformScope(t *testing.T) {
+	backup := findCmd(t, "backup")
+	platform := findSub(t, backup, "platform")
+	verify := findSub(t, backup, "platform-verify")
+
+	if got := scopeOf(platform); got != scopeLeader {
+		t.Errorf("scopeOf(backup platform) = %v, want leader (a hand-run export on a follower is a mistake)", got)
+	}
+	if err := platform.Flags().Set("if-leader", "true"); err != nil {
+		t.Fatalf("the platform command has no --if-leader flag: %v", err)
+	}
+	if got := scopeOf(platform); got != scopeNode {
+		t.Errorf("scopeOf(backup platform --if-leader) = %v, want node — the daily timer runs on every manager, and a follower must be allowed to say so", got)
+	}
+	if got := scopeOf(verify); got != scopeNode {
+		t.Errorf("scopeOf(backup platform-verify) = %v, want node — it drills an archive on this disk, and the drill runs on every storage node", got)
+	}
+}
+
+// TestRemoteHintIsOnlyOfferedWhereItExists: the guard used to tell every refused command to
+// "use the remote CLI from your own machine" — including `cluster update`, which has no remote
+// form (it opens the local store and the local docker socket). An operator who followed that
+// advice got a connection error and thought the cluster was broken.
+func TestRemoteHintIsOnlyOfferedWhereItExists(t *testing.T) {
+	if !hasRemoteForm(findSub(t, findCmd(t, "secret"), "create")) {
+		t.Error("`secret create` is served by remote.NewSecrets but the guard offers no remote hint")
+	}
+	if !hasRemoteForm(findSub(t, findCmd(t, "config"), "list")) {
+		t.Error("`config list` is served by remote.NewConfigs but the guard offers no remote hint")
+	}
+	cluster := findCmd(t, "cluster")
+	for _, name := range []string{"update", "upgrade", "reset", "up"} {
+		if sub := findOptionalSub(cluster, name); sub != nil && hasRemoteForm(sub) {
+			t.Errorf("`cluster %s` has no remote form, but the guard would suggest --api-url for it", name)
+		}
+	}
+}
+
+func findOptionalSub(parent *cobra.Command, name string) *cobra.Command {
+	for _, c := range parent.Commands() {
+		if c.Name() == name {
+			return c
+		}
+	}
+	return nil
+}
+
+func findCmd(t *testing.T, name string) *cobra.Command {
+	t.Helper()
+	for _, c := range rootCmd.Commands() {
+		if c.Name() == name {
+			return c
+		}
+	}
+	t.Fatalf("command %q is not registered", name)
+	return nil
+}
+
+func findSub(t *testing.T, parent *cobra.Command, name string) *cobra.Command {
+	t.Helper()
+	for _, c := range parent.Commands() {
+		if c.Name() == name {
+			return c
+		}
+	}
+	t.Fatalf("command %q has no subcommand %q", parent.Name(), name)
+	return nil
 }
 
 // A follower must refuse cluster state, and say where to go instead.
@@ -90,7 +173,7 @@ func TestEnforceScope_RefusesOnNonLeader(t *testing.T) {
 	apiURL = ""
 	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-3-w", Role: "worker", SwarmActive: true}, nil)
 
-	err := enforceScope(stackListCmd)
+	err := enforceScope(stackListCmd, nil)
 	if err == nil {
 		t.Fatal("a worker must not answer stack state")
 	}
@@ -107,7 +190,7 @@ func TestEnforceScope_NamesTheLeader(t *testing.T) {
 	apiURL = ""
 	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-4-m", Role: "manager", SwarmActive: true, IsManager: true, LeaderHostname: "nxt-sw-1-m"}, nil)
 
-	err := enforceScope(stackListCmd)
+	err := enforceScope(stackListCmd, nil)
 	if err == nil {
 		t.Fatal("a follower must not answer stack state")
 	}
@@ -120,7 +203,7 @@ func TestEnforceScope_LeaderIsAllowed(t *testing.T) {
 	apiURL = ""
 	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-1-m", Role: "manager", SwarmActive: true, IsManager: true, IsLeader: true}, nil)
 
-	if err := enforceScope(stackListCmd); err != nil {
+	if err := enforceScope(stackListCmd, nil); err != nil {
 		t.Errorf("the leader must be allowed: %v", err)
 	}
 }
@@ -132,11 +215,11 @@ func TestEnforceScope_NodeAndBootstrapScopesSkipTheProbe(t *testing.T) {
 	stubSelf(t, docker.SelfNode{}, errors.New("docker is not installed"))
 
 	for _, cmd := range []*cobra.Command{versionCmd, initCmd, joinCmd} {
-		if err := enforceScope(cmd); err != nil {
+		if err := enforceScope(cmd, nil); err != nil {
 			t.Errorf("%s should not be leader-gated: %v", cmd.Name(), err)
 		}
 	}
-	if err := enforceScope(clusterUpCmd); err != nil {
+	if err := enforceScope(clusterUpCmd, nil); err != nil {
 		t.Errorf("cluster up is bootstrap and must run anywhere: %v", err)
 	}
 }
@@ -148,7 +231,7 @@ func TestEnforceScope_RemoteModeSkipsTheGuard(t *testing.T) {
 	t.Cleanup(func() { apiURL = "" })
 	stubSelf(t, docker.SelfNode{Hostname: "laptop", Role: "worker", SwarmActive: true}, nil)
 
-	if err := enforceScope(stackListCmd); err != nil {
+	if err := enforceScope(stackListCmd, nil); err != nil {
 		t.Errorf("remote mode must not be leader-gated: %v", err)
 	}
 }
@@ -158,7 +241,7 @@ func TestEnforceScope_ProbeFailureIsActionable(t *testing.T) {
 	apiURL = ""
 	stubSelf(t, docker.SelfNode{}, errors.New("Cannot connect to the Docker daemon"))
 
-	err := enforceScope(stackListCmd)
+	err := enforceScope(stackListCmd, nil)
 	if err == nil {
 		t.Fatal("expected a refusal when leadership cannot be determined")
 	}
@@ -178,7 +261,7 @@ func TestEnforceScope_StandaloneNodeIsNotGated(t *testing.T) {
 	stubSelf(t, docker.SelfNode{Name: "fresh-host", Hostname: "fresh-host"}, nil)
 
 	for _, cmd := range []*cobra.Command{stackListCmd, clusterUpdateCmd} {
-		if err := enforceScope(cmd); err != nil {
+		if err := enforceScope(cmd, nil); err != nil {
 			t.Errorf("%s must run on a node with no swarm: %v", cmd.Name(), err)
 		}
 	}
@@ -189,7 +272,7 @@ func TestEnforceScope_SwarmMemberWithoutLeadershipRefuses(t *testing.T) {
 	apiURL = ""
 	stubSelf(t, docker.SelfNode{Hostname: "nxt-sw-5-m", Role: "manager", SwarmActive: true, IsManager: true}, nil)
 
-	err := enforceScope(stackListCmd)
+	err := enforceScope(stackListCmd, nil)
 	if err == nil {
 		t.Fatal("a swarm member that is not the leader must refuse cluster state")
 	}

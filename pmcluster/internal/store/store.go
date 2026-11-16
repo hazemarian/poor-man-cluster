@@ -53,6 +53,21 @@ type Store struct {
 	Log zerolog.Logger
 }
 
+// OpenExisting opens the SQLite DB at dbPath and REFUSES when the file is not
+// there, where Open would create it.
+//
+// The distinction matters on a node that was never initialised: an empty database
+// makes every "run pmcluster init first" guard pass, so `doctor` reports a healthy
+// store and a manager with no stacks reads as a manager with no stacks. Every
+// caller that only wants to READ a setting should use this one; Open is for init
+// and join, which are the two places a database is meant to come into being.
+func OpenExisting(dbPath string) (*Store, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("no control-plane database at %s yet: %w", dbPath, err)
+	}
+	return Open(dbPath)
+}
+
 // Open opens (or creates) the SQLite DB, applies migrations, and returns
 // a ready *Store. Parent directories get mode 0700.
 func Open(dbPath string) (*Store, error) {
@@ -122,53 +137,6 @@ func (s *Store) Close() error {
 	err := s.db.Close()
 	s.closed = true
 	return err
-}
-
-// Swap closes the live SQLite handle, runs fn with no open connection, then
-// reopens the database from the same path.
-//
-// It exists for control-plane adoption on leadership gain: replacing data.db
-// under a live connection would leave the daemon serving stale page-cache rows
-// while fresh readers see the new file (split-brain, the reason adoption used
-// to be confined to before store.Open). The *Store pointer every consumer
-// already holds stays valid — only the handle behind it changes.
-//
-// fn must be atomic from the caller's point of view: if it returns an error the
-// handle is still reopened, so the daemon keeps serving whatever is on disk.
-// (*sql.DB).Close waits for in-flight queries to finish, so a query that was
-// already running completes against the old file; a query issued after the swap
-// began gets an error instead of touching the replaced file. A query that ignores
-// cancellation therefore delays the swap — the HTTP request timeout bounds that,
-// which is why adoption is only ever done once per leadership change.
-func (s *Store) Swap(fn func() error) error {
-	if s == nil {
-		return ErrClosed
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.db == nil || s.closed {
-		return ErrClosed
-	}
-	if err := s.db.Close(); err != nil {
-		// Leave the (closed) handle in place: queries then fail with
-		// sql.ErrConnDone rather than a nil dereference.
-		s.closed = true
-		return fmt.Errorf("close store for swap: %w", err)
-	}
-	s.closed = true
-
-	swapErr := fn()
-
-	db, reopenErr := openDB(s.path)
-	if reopenErr != nil {
-		// The database cannot be reopened: report both, the reopen failure
-		// first because it is the one that stops service. The store stays
-		// marked closed, so callers get errors instead of a panic.
-		return errors.Join(fmt.Errorf("reopen store after swap: %w", reopenErr), swapErr)
-	}
-	s.db = db
-	s.closed = false
-	return swapErr
 }
 
 // WALCheckpoint keeps the BackupTrigger contract but is a no-op: the store

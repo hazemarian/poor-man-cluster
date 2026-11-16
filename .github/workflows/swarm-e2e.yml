@@ -1,26 +1,21 @@
 # Real-cluster e2e — runs SEPARATELY from the main build gate.
 #
 # These tests boot a full Docker Swarm (cluster up, deploy pipeline, webhook,
-# secrets/configs) and are slow + resource-heavy. They run on every push/PR
-# that touches pmcluster code, but their result never blocks anything:
-# deployments (release.yml on tags) and the main CI gate (pmcluster.yml:
-# lint + build + unit tests + fast e2e) are completely independent of this
-# workflow.
+# secrets/configs) and are slow + resource-heavy. They run on EVERY push to main
+# and on every PR, and their result never blocks anything: deployments
+# (release.yml on tags) and the main CI gate (pmcluster.yml: lint + build + unit
+# tests + fast e2e) are independent of this workflow.
+#
+# Every push, not "every push that touched pmcluster/**": the path filter was
+# there to save runner minutes, and it bought the wrong thing — a change to the
+# workflow, a docs-only commit that also carried a code fix, or a rebase could
+# leave the last green swarm run pointing at a tree nobody had run. A suite that
+# is not always on is a suite whose failures are always a surprise.
 name: swarm-e2e
 
 on:
   push:
     branches: [main]
-    paths:
-      - "pmcluster/**"
-      # Documentation under pmcluster/ is not code. Without these exclusions a
-      # README or design-doc edit runs the Go unit/smoke suite and the real-swarm
-      # e2e, because `pmcluster/**` matches `pmcluster/README.md`,
-      # `pmcluster/docs/*.md` and `internal/ARCHITECTURE.md` too. The docs
-      # workflow covers those changes; this one is for behaviour.
-      - "!pmcluster/*.md"
-      - "!pmcluster/**/*.md"
-      - ".github/workflows/swarm-e2e.yml"
   pull_request:
     paths:
       - "pmcluster/**"
@@ -32,6 +27,9 @@ on:
       - "!pmcluster/*.md"
       - "!pmcluster/**/*.md"
       - ".github/workflows/swarm-e2e.yml"
+
+# PRs still filter by path: a PR that touches nothing but docs does not need a
+# swarm, and the merge to main runs the full suite anyway.
 
 jobs:
   swarm-e2e:
@@ -77,12 +75,17 @@ jobs:
       - name: Map observ.example.test to localhost
         run: echo "127.0.0.1 observ.example.test" | sudo tee -a /etc/hosts
 
-      # cluster up creates the storage root dirs (/var/stack/data + /var/stack/backup)
-      # via ensureStorageDirs — the runner is not root, so pre-create them.
+      # cluster up creates its own paths via ensureStorageDirs and
+      # ensurePlatformHostDirs — the runner is not root, so pre-create the ones a
+      # test that uses the DEFAULT root would need. Tests that pass a temp
+      # --volume-root create their own tree, including /var/stack/nodestat's
+      # equivalent beside it: the node-stat bind source follows the volume root
+      # (NodeStatHostDirFor), precisely so a non-root host never has to make
+      # /var/stack. Both halves are here because a default-root test still can't.
       - name: Create storage root dirs
         run: |
-          sudo mkdir -p /var/stack/data /var/stack/backup
-          sudo chmod 0777 /var/stack/data /var/stack/backup
+          sudo mkdir -p /var/stack/data /var/stack/backup /var/stack/nodestat
+          sudo chmod 0777 /var/stack/data /var/stack/backup /var/stack/nodestat
 
       - name: swarm e2e
         env:

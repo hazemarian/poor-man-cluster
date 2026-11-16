@@ -19,6 +19,9 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/backups"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // Defaults for a host-side run. They match the paths the platform already
@@ -222,7 +225,7 @@ before retiring that node's volume-backup agent.`,
 			if os.Geteuid() != 0 {
 				return fmt.Errorf("installing the hourly unit needs root — re-run with sudo")
 			}
-			return ensureBackupAgentInstalled(cmd.OutOrStdout())
+			return nodeunits.EnsureBackupAgent(cmd.OutOrStdout(), configPath)
 		},
 	}
 	backupAgentCmd.AddCommand(backupAgentRunCmd, backupAgentDrillCmd, backupAgentDrillStatusCmd, backupStorePruneCmd,
@@ -346,7 +349,7 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	// deciding on the flag VALUES let their defaults overwrite the cluster
 	// setting, so a cluster configured for three days pruned at fifteen and the
 	// setting read as decoration.
-	policy := localRetentionPolicy(ctx)
+	policy := nodeunits.LocalRetentionPolicy(ctx, configPath)
 	flags := cmd.Flags()
 	if flags.Changed("keep-hours") {
 		policy.KeepHours = agentKeepHours
@@ -363,7 +366,7 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 	retention := &policy
 	a := &backupagent.Agent{
 		Retention:     retention,
-		KeepLocalMode: keepLocalMode(),
+		KeepLocalMode: nodeunits.KeepLocalMode(),
 		Node:          node,
 		VolumeRoot:    root,
 		ArchiveDir:    agentArchiveDir,
@@ -372,6 +375,10 @@ func runBackupAgent(cmd *cobra.Command, _ []string) error {
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(cmd.ErrOrStderr(), format+"\n", args...)
 		},
+		// Report each archived stack to the leader the moment it is confirmed on
+		// every destination. Same swarm mTLS channel the node's own stats use: no
+		// token, no published port, and the leader is the only writer of the row.
+		Report: backupReportSender(),
 	}
 	// One stack on request: the operator asked for THIS stack, so the run is
 	// narrowed before anything is frozen. An unknown name is an error, not an
@@ -669,8 +676,8 @@ func runBackupAgentDrillStatus(cmd *cobra.Command, _ []string) error {
 // a schedule setting and the wrong latency for an emergency stop — for that,
 // stop the unit on the node.
 func localBackupDecision(ctx context.Context) (cluster.BackupDecision, error) {
-	if pol, ok := readBackupPolicy(backupPolicyFile); ok {
-		return decisionFromPolicy(pol, time.Now()), nil
+	if pol, ok := nodeunits.ReadPolicy(nodeunits.PolicyFile); ok {
+		return nodeunits.DecisionFromPolicy(pol, time.Now()), nil
 	}
 	st, _, err := openStore()
 	if err != nil {
@@ -715,8 +722,8 @@ type shipTarget struct {
 func backupShipTargets() []shipTarget {
 	var targets []shipTarget
 
-	pol, havePol := readBackupPolicy(backupPolicyFile)
-	storeOff := havePol && pol.Store != "" && isOff(pol.Store)
+	pol, havePol := nodeunits.ReadPolicy(nodeunits.PolicyFile)
+	storeOff := havePol && pol.Store != "" && nodeunits.IsOff(pol.Store)
 
 	// The in-cluster store, as an S3 target in its own right.
 	if !storeOff {
@@ -728,7 +735,7 @@ func backupShipTargets() []shipTarget {
 			Region:    envOr("PMCLUSTER_BACKUP_STORE_S3_REGION", ""),
 		}
 		if havePol && pol.StoreS3.Endpoint != "" {
-			store = pol.StoreS3.config()
+			store = pol.StoreS3.Config()
 		}
 		if store.Configured() {
 			targets = append(targets, shipTarget{Label: "store", S3: store})
@@ -744,7 +751,7 @@ func backupShipTargets() []shipTarget {
 		Region:    envOr("PMCLUSTER_BACKUP_S3_REGION", ""),
 	}
 	if havePol && pol.S3.Endpoint != "" {
-		s3 = pol.S3.config()
+		s3 = pol.S3.Config()
 	}
 	if s3.Configured() {
 		targets = append(targets, shipTarget{Label: "s3", S3: s3})
@@ -816,13 +823,26 @@ func pruneRemoteLegs(ctx context.Context, out io.Writer, policy backups.Retentio
 			fmt.Fprintf(out, "%s retention: deleted %d, kept %d, failed %d\n",
 				t.Label, len(res.Deleted), res.Kept, len(res.Failed))
 		}
-		// The control-plane family has its own producer and its own age-out.
-		// Nothing pruned it, so it grew without bound (40 GB on the live
-		// store, on a node with 6 GB free).
-		if del, kept, cerr := backups.PruneControlPlaneArchives(ctx, t.S3, now, false); cerr != nil {
-			fmt.Fprintf(out, "%s control-plane retention skipped: %v\n", t.Label, cerr)
-		} else if del > 0 {
-			fmt.Fprintf(out, "%s control-plane retention: deleted %d, kept %d\n", t.Label, del, kept)
+	}
+}
+
+// backupReportSender posts an artifact record to the leader over the swarm mTLS
+// node channel. Nil when no docker client can be opened: a node that cannot talk
+// to the leader still backs up, and its sidecars remain the fallback record.
+func backupReportSender() func(ctx context.Context, rec store.ArtifactRecord) error {
+	dc, err := docker.New()
+	if err != nil {
+		return nil
+	}
+	sender := noderuntime.NodeReportSender(dc)
+	if sender == nil {
+		return nil
+	}
+	return func(ctx context.Context, rec store.ArtifactRecord) error {
+		body, merr := json.Marshal(rec)
+		if merr != nil {
+			return merr
 		}
+		return sender.PostJSON(ctx, backups.RecordPath, body)
 	}
 }

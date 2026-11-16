@@ -271,33 +271,46 @@ endpoint produced O(retries) journal lines for as long as the condition lasted,
 on a box with one core. Three separate bounds now sit on that path — the
 endpoint, the log, and the restart policy.
 
-### The endpoint is this node's swarm address, or there is no exporter
+### The endpoint is the collector's: loopback on the leader, the leader's address everywhere else
 
-`otlp_endpoint` defaults to `auto`: read this node's swarm-advertised address
-(`Status.Addr`), build `http://<address>:4318`, dial it, and use it only if
-something answers (`internal/config/selftelemetry.go`,
-`internal/docker/selfaddr.go`). That dial is repeated every minute — see
-*resolution is supervised* below — so a collector that appears after this node
-booted is picked up without a restart.
-An explicit URL is used verbatim — that is the operator's decision and it is never
-second-guessed. An empty value disables self-telemetry, from any source, including a
-deliberately empty `PMCLUSTER_OTLP_ENDPOINT=`.
+`otlp_endpoint` defaults to `auto`, and `auto` means "the one collector, wherever it is":
 
-Each of the obvious alternatives fails in its own way, which is why the list is
-worth writing down once:
+| this node | endpoint |
+| --- | --- |
+| the leader | `http://127.0.0.1:4318` — the collector runs beside it |
+| any other node | `http://<a manager that answers on 4318>:4318` — that answer *is* the leader |
+
+Every daemon in the cluster exports its own logs, metrics and traces
+(`internal/config/selftelemetry.go`). The only difference between nodes is where the
+collector is: the leader dials loopback, and everyone else dials the leader.
+
+A manager can read the swarm and see which node leads; a **worker cannot** — `docker node
+list` and `node inspect` are manager-only, and the swarm API never reports the leader to a
+worker. So a follower asks the same question the mTLS assignment channel asks, in the same
+way: take every manager address the swarm knows (`docker info`, `RemoteManagers`) and use
+the first that **answers** on 4318 (`internal/cli/telemetry_leader.go`). Only the leader
+has the collector published, so the first answer is the leader: there is no second
+election to keep in sync, and the next probe (a minute later) corrects it after leadership
+moves.
+
+The dial is what makes that address safe to hand an exporter. A follower **never** dials a
+port nobody has answered on: with no answer it stays disabled and says it is being
+re-probed. A missing trace is acceptable; an exporter aimed at a closed port is not — the
+arithmetic below is why.
+
+An explicit URL is used verbatim — the operator's decision, never second-guessed. An empty
+value disables self-telemetry, from any source, including a deliberately empty
+`PMCLUSTER_OTLP_ENDPOINT=`.
+
+Each of the obvious alternatives fails in its own way, which is why the list is worth
+writing down once:
 
 | Candidate | Why it is not used |
 | --- | --- |
-| `127.0.0.1:4318` (the previous default) | correct only while a collector task is serving on this node; on a node whose task is restarting or absent it is a closed port — the arithmetic above |
 | the overlay service name (`observability_otel-collector:4318`) | the name exists only inside the overlay's DNS. `serve` is a host process and has no overlay DNS, so for it this is a name-resolution failure instead of a refused connection — the same storm behind a different error |
 | an address derived from the route or the egress interface (`hostname -I`, a UDP "connect" trick, the default-route address) | yields *an* address of this host, not the address the swarm knows it by. On a node with several interfaces that is a private address nothing listens on: the same closed port, reached by a different route |
-| `docker node inspect self` on every node | the node-inspect API is manager-only; a worker answers "This node is not a swarm manager". The daemon reads `Status.Addr` from `docker info` there (the same value, from the daemon's own view of itself) and reads its own node record on a manager, where that record is what the swarm places tasks against. Both report the same address, which is why the two paths cannot disagree |
-
-`auto` never guesses an address it cannot confirm: a node that is not in a swarm,
-an empty or non-IP `Status.Addr`, a loopback or unspecified address, and an
-address that does not answer the dial all end the same way — no exporter, and
-one journal line naming the reason. A missing trace is acceptable; an exporter
-aimed at a closed port is not.
+| disabling the exporter everywhere but the leader (what shipped in v0.2.323) | four daemons of five exported nothing. Their samples still reached the leader over mTLS and stopped in `node_stats`, so the console showed one node in a five-node cluster and "quiet" became indistinguishable from "not collected" |
+| a collector per node (`mode: global`) | it would collect each node's own container logs and stats, which is a real gain — but it multiplies the collector, its Parseable exporter and its memory on every node to solve a problem that is about the *daemon's* telemetry. Left as a future decision, not smuggled in here |
 
 Resolution is **supervised, not decided once**. A startup-only decision was the
 shape of the original bug in a second disguise: a node that booted while the
@@ -308,7 +321,7 @@ hours after that port had started answering `200`. The console then showed one
 node in a five-node cluster, which reads as a broken panel rather than as four
 daemons that opted out at boot.
 
-So the daemon re-probes **every minute** (`internal/cli/telemetry_supervisor.go`)
+So the daemon re-probes **every minute** (`internal/noderuntime/telemetry_supervisor.go`)
 and reconciles the exporter with the answer: start it when something answers,
 leave it alone while the same endpoint answers, shut the old one down and start a
 new one when the address changes (one node never exports under two addresses),
@@ -327,14 +340,18 @@ and works normally. That is deliberate: `pmcluster` must run anywhere, and the
 CLI children were part of the same incident (238,951 and 213,808 of the lines
 above came from single incarnations).
 
-### Why 4318 is published with the routing mesh
+### Why 4318 is published host-mode on the leader
 
-The collector is one task on the leader; `filelog` and `docker_stats` therefore
-describe the leader's containers only. What every OTHER node's daemon needs is not
-a task beside it, but *something answering at its own address*: tasks restart, and
-a node can exist before the observability stack reaches it. `4318` is published
-`mode: ingress`, so the routing mesh binds the port on every node and forwards to
-that single task, wherever leadership puts it.
+The collector is one task on the leader; `filelog` and `docker_stats` therefore describe
+the leader's containers only. What every *other* node's daemon needs is not a task beside
+it, but a reachable collector: `4318` is published with `mode: host`, so it is bound on the
+node that runs the task, and a follower reaches it over the swarm data path at the leader's
+own address — the address the routing mesh and every peer already use.
+
+`mode: ingress` was tried and rejected: it binds the port on **every** node and forwards to
+one task, so "does anything answer here" stops being a property of the role and becomes a
+question about the mesh's health — and `doctor` treats an ingress-published 4318 as a
+finding, because every node would then accept OTLP it may never deliver.
 
 - **What it buys:** the daemon dials this node's own address and something answers
   there regardless of where the collector task is or whether the one on this node
@@ -680,10 +697,14 @@ node_stats table ── ONE row per node, upserted in place
 console /web/overview ── hostname, role, load, memory, top processes, sample age
 ```
 
-- **The daemon samples, not the collector.** `hostmetrics` can only read its own
-  host, and the collector is now a single leader-pinned task. A node's own daemon
-  is the only process that can describe that node. It exports over the same
-  ingress-published OTLP port applications use; it never talks to Parseable.
+- **The daemon samples, not the collector.** The collector is a single leader-pinned task,
+  so a receiver inside it can only describe the leader — which is why `hostmetrics` is gone
+  rather than kept: each node's daemon samples its own `/proc` and publishes
+  `system.cpu.utilization{state=idle}`, `system.memory.utilization{state=used}` and
+  `system.cpu.load_average.1m` for itself, straight to the collector over the same OTLP port
+  applications use. One producer per node, on every node, and the collector never
+  re-collects what a node already measured about itself. The daemon never talks to
+  Parseable.
   **The leader exports too** — the file exporter is a sink, not a loop, so there
   is nothing for the leader to avoid by staying silent. A swarm that records the
   leader's own address as `0.0.0.0` is dialled on loopback, which is where the
@@ -749,10 +770,9 @@ pmcluster cluster status
 - "Error rate" is the share of error log records, not failed HTTP requests.
 - Traces from different applications are not joined into a distributed trace
   unless the applications propagate trace context.
-- `hostmetrics` covers CPU, memory and load for the node running the collector
-  (the leader). Disk and network are not part of this version.
-- Per-node CPU, memory and the top five processes come from each node's daemon
-  (see "Per-node resources"), not from `hostmetrics`; the top lists are capped at
-  five per axis by design.
+- Node CPU, memory and load come from each node's own daemon (see "Per-node resources");
+  there is no `hostmetrics` in the collector any more, so nothing is scraped from the
+  leader's host. Disk, network and per-state CPU are not part of this version.
+- The top five processes per node are capped at five per axis by design.
 - Historical rows written before a collector identity change may not carry the
   current `service.name`.

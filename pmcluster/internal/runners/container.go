@@ -2,7 +2,6 @@ package runners
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 )
 
@@ -24,28 +23,55 @@ type Spec struct {
 	DinDImage string
 	Memory    string
 	Token     string
-	// SocketProxy mounts the platform's filtered docker socket and points
-	// DOCKER_HOST at it. False is the documented debug fallback that mounts the
-	// host's raw socket instead.
-	SocketProxy bool
-	SocketPath  string
-	// DinD runs the job against a docker daemon of its OWN, inside a privileged
-	// sibling container, sharing only a volume that holds the inner socket.
-	//
-	// This is the mode that makes CI ordinary: the job gets a real, unfiltered
-	// docker API, so `docker compose up`, testcontainers, exec, networks and
-	// volumes all work — none of which the filtered socket supports. The host
-	// socket is never mounted, so a job still cannot touch the node's daemon, the
-	// swarm, or another job's containers.
-	//
-	// It also closes a hole the memory work left open: the runner's cap bounded the
-	// runner CONTAINER, while the daemon created build and test containers as its
-	// SIBLINGS, outside that cgroup — so a `docker build` could still OOM the host
-	// (measured: a 1839 MB node died repeatedly regardless of the 1200m cap). With
-	// DinD every container the job creates lives INSIDE the capped container, so
-	// one number finally bounds the whole tree.
-	DinD bool
 }
+
+// CacheStores are the package caches a job is allowed to keep. They live in docker
+// volumes that survive the job, because everything else about a runner does not: the
+// container is ephemeral, and so is its daemon. Without them a Go build re-downloads
+// ~150 MB of modules and an npm install re-fetches its tree on every single run — which
+// is most of the difference between a three-minute job and an eight-minute one.
+var CacheStores = []struct {
+	Name string // volume suffix, and the mount point's name
+	Path string // where it appears inside the runner
+	Env  []string
+}{
+	{
+		Name: "go",
+		Path: "/go-cache",
+		Env: []string{
+			"GOMODCACHE=/go-cache/mod",
+			"GOCACHE=/go-cache/build",
+			"GOTOOLCHAIN=local",
+		},
+	},
+	{
+		Name: "npm",
+		Path: "/npm-cache",
+		Env: []string{
+			"npm_config_cache=/npm-cache/npm",
+			"YARN_CACHE_FOLDER=/npm-cache/yarn",
+			"PNPM_HOME=/npm-cache/pnpm",
+			"PNPM_STORE_DIR=/npm-cache/pnpm-store",
+		},
+	},
+}
+
+// CacheVolume is the volume that holds one cache store for one runner. Named after the
+// runner, which already carries the node name, so two runners on two nodes cannot share
+// a cache volume by accident.
+func (s Spec) CacheVolume(store string) string {
+	return s.RunnerName + "-cache-" + store
+}
+
+// DinDVolume is the volume the runner and its daemon share. It holds the inner socket
+// and NOTHING else: it is removed with the job, so the next job cannot inherit a socket
+// path whose owner is gone.
+func (s Spec) DinDVolume() string { return s.RunnerName + "-docker" }
+
+// DataVolume is the inner daemon's /var/lib/docker. It DOES survive the job — that is
+// what makes image layers and the build cache reusable — and it is cleaned at every
+// start rather than thrown away.
+func (s Spec) DataVolume() string { return s.RunnerName + "-dind-data" }
 
 // ContainerName is the local docker container name: the GitHub runner name, so
 // `docker ps` and GitHub's runner list agree.
@@ -120,38 +146,20 @@ func (s Spec) Argv() ([]string, error) {
 	for _, kv := range s.EnvFixups() {
 		args = append(args, "-e", kv)
 	}
-	switch {
-	case s.DinD:
-		// The runner shares the DinD container's socket volume: a real docker API
-		// with nothing of the host in it. The host socket is NOT mounted, so the
-		// swarm, the platform's own services and other jobs' containers stay out of
-		// reach, and every container the job starts dies with this volume.
-		args = append(args,
-			"-e", "DOCKER_HOST=unix:///var/run/docker.sock",
-			"-v", s.DinDVolume()+":/var/run",
-		)
-	case s.SocketProxy:
-		path := s.SocketPath
-		if strings.TrimSpace(path) == "" {
-			path = "/run/pmcluster/docker.sock"
+	// A runner always gets a docker daemon of its own. There is no socket mode to
+	// choose any more: the filtered proxy supported `docker build` and refused nearly
+	// everything else, so every repository paid for its holes again in its own workflow
+	// (compose, testcontainers, exec, networks). The host socket is never mounted.
+	args = append(args,
+		"-e", "DOCKER_HOST=unix:///var/run/docker.sock",
+		"-v", s.DinDVolume()+":/var/run",
+	)
+	// Caches outlive the job; nothing else does.
+	for _, c := range CacheStores {
+		args = append(args, "-v", s.CacheVolume(c.Name)+":"+c.Path)
+		for _, kv := range c.Env {
+			args = append(args, "-e", kv)
 		}
-		// Mount the DIRECTORY, not the socket file. The daemon recreates the
-		// socket on every restart and a file bind-mount pins the OLD inode, so a
-		// running runner loses the daemon the moment pmcluster restarts —
-		// measured on a live runner: "Cannot connect to the Docker daemon at
-		// unix:///run/pmcluster/docker.sock" after an upgrade, with the socket
-		// present on the host. Same path inside and out keeps DOCKER_HOST a plain
-		// unix path that also reads correctly in `docker inspect`.
-		dir := filepath.Dir(path)
-		args = append(args,
-			"-e", "DOCKER_HOST=unix://"+path,
-			"-v", dir+":"+dir,
-		)
-	default:
-		args = append(args,
-			"-e", "DOCKER_HOST=unix:///var/run/docker.sock",
-			"-v", "/var/run/docker.sock:/var/run/docker.sock",
-		)
 	}
 	args = append(args, image)
 	return args, nil
@@ -174,10 +182,6 @@ func (s Spec) EnvFixups() []string {
 	return []string{"BUILDX_CONFIG=/tmp/pmcluster-buildx"}
 }
 
-// UsesRawSocket reports whether the spec mounts the host's docker socket.
-// The doctor and the tests use it to state the exposure explicitly.
-func (s Spec) UsesRawSocket() bool { return !s.SocketProxy && !s.DinD }
-
 // DefaultDinDImage is pinned like every other image this platform runs: a node
 // must not silently change daemon version under a job written against another.
 const DefaultDinDImage = "docker:27-dind"
@@ -185,12 +189,6 @@ const DefaultDinDImage = "docker:27-dind"
 // DinDName is the privileged docker:dind container that hosts this runner's own
 // daemon. It is removed together with the runner, so nothing it created survives.
 func (s Spec) DinDName() string { return s.RunnerName + "-dind" }
-
-// DinDVolume is the volume holding the inner daemon's socket, shared by the two
-// containers and by nothing else. A volume rather than a bind mount: the socket
-// must live somewhere the HOST filesystem does not own, and it must disappear with
-// the job instead of lingering in /var/lib/docker/volumes forever.
-func (s Spec) DinDVolume() string { return s.RunnerName + "-docker" }
 
 // DinDArgv is the argument vector for the privileged docker:dind container that
 // gives the job its own daemon.
@@ -200,9 +198,6 @@ func (s Spec) DinDVolume() string { return s.RunnerName + "-docker" }
 // through a CI workflow that never asked for any of this. The socket is reachable
 // only through a volume mounted into the runner container beside it.
 func (s Spec) DinDArgv() ([]string, error) {
-	if !s.DinD {
-		return nil, fmt.Errorf("dind argv requested for %s, which is not a dind runner", s.RunnerName)
-	}
 	// The dind container runs a DAEMON, not a runner: it must never inherit
 	// Spec.Image, which is the runner image. That mistake shipped once and cost a
 	// deploy — the privileged container booted a runner with no token, exited
@@ -225,7 +220,11 @@ func (s Spec) DinDArgv() ([]string, error) {
 		// container must hold nothing else.
 		"--privileged",
 		"-e", "DOCKER_TLS_CERTDIR=",
+		// The socket volume is per-job; the DATA directory is per-node. Keeping
+		// /var/lib/docker means the next job reuses the layers it just built and the
+		// build cache that came with them, instead of pulling its base image again.
 		"-v", s.DinDVolume() + ":/var/run",
+		"-v", s.DataVolume() + ":/var/lib/docker",
 	}
 	if mem := strings.TrimSpace(s.Memory); mem != "" {
 		// Bounds the WHOLE tree: dockerd, the runner's containers, builds and test

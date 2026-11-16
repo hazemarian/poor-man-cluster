@@ -17,7 +17,6 @@ func testSpec() Spec {
 		Image:      DefaultImage,
 		Memory:     "2560m",
 		Token:      "tok",
-		DinD:       true,
 	}
 }
 
@@ -79,9 +78,6 @@ func TestDinDRunnerUsesItsOwnSocketNotTheHosts(t *testing.T) {
 	}
 	if strings.Contains(joined, "/run/pmcluster") {
 		t.Fatalf("a dind runner still mounts the platform socket proxy:\n%s", joined)
-	}
-	if s.UsesRawSocket() {
-		t.Fatal("a dind runner reported itself as using the host socket")
 	}
 }
 
@@ -167,22 +163,21 @@ func TestStopRunnerIsIdempotent(t *testing.T) {
 	}
 }
 
-// TestNonDinDRunnersAreUnchanged: the proxy and raw-socket paths must not gain a
-// second container or a volume.
-func TestNonDinDRunnersAreUnchanged(t *testing.T) {
+// TestThereIsNoNonDinDPath: the socket modes were removed, not disabled. A spec must
+// always produce the pair, and nothing may mount the platform's old filtered socket.
+func TestThereIsNoNonDinDPath(t *testing.T) {
 	s := testSpec()
-	s.DinD = false
-	s.SocketProxy = true
-	s.SocketPath = "/run/pmcluster/docker.sock"
 	d := newFakeDocker()
 	if err := StartRunner(context.Background(), d, s); err != nil {
-		t.Fatalf("StartRunner (non-dind): %v", err)
+		t.Fatalf("StartRunner: %v", err)
 	}
-	if len(d.runCalls) != 1 {
-		t.Fatalf("a non-dind runner started %d containers, want 1", len(d.runCalls))
+	if len(d.runCalls) != 2 {
+		t.Fatalf("a runner started %d containers, want 2 (the daemon and the runner)", len(d.runCalls))
 	}
-	if !strings.Contains(strings.Join(d.runCalls[0], " "), "/run/pmcluster") {
-		t.Fatalf("the proxy path is no longer mounted: %v", d.runCalls[0])
+	for _, argv := range d.runCalls {
+		if strings.Contains(strings.Join(argv, " "), "/run/pmcluster") {
+			t.Fatalf("a container still mounts the removed filtered socket:\n%s", strings.Join(argv, " "))
+		}
 	}
 }
 
@@ -216,4 +211,37 @@ func roundTripRemoveVolume(t *testing.T, daemonSays string) error {
 		return nil, errors.New(daemonSays)
 	}}
 	return d.RemoveVolume(context.Background(), "pmc-n1-org-docker")
+}
+
+// TestTheDataDirectorySurvivesButStartsClean pins both halves of a decision that is easy
+// to get half-right: /var/lib/docker is mounted so the next job reuses this job's layers
+// and build cache, and the previous job's stopped containers are pruned so it does not
+// accumulate them forever.
+func TestTheDataDirectorySurvivesButStartsClean(t *testing.T) {
+	d := newFakeDocker()
+	s := testSpec()
+	if err := StartRunner(context.Background(), d, s); err != nil {
+		t.Fatalf("StartRunner: %v", err)
+	}
+	dind := strings.Join(d.runCalls[0], " ")
+	if !strings.Contains(dind, s.DataVolume()+":/var/lib/docker") {
+		t.Fatalf("the daemon does not keep its data directory (no layer or build-cache reuse):\n%s", dind)
+	}
+	// The socket volume is still per-job.
+	if !strings.Contains(dind, s.DinDVolume()+":/var/run") {
+		t.Fatalf("the daemon does not share its socket volume:\n%s", dind)
+	}
+	var pruned []string
+	for _, call := range d.execCalls {
+		pruned = append(pruned, strings.Join(call, " "))
+	}
+	joined := strings.Join(pruned, "|")
+	for _, want := range []string{"container prune", "image prune", "volume prune", "builder prune"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("the daemon is not pruned before the job (%q missing): %v", want, pruned)
+		}
+	}
+	if !strings.Contains(joined, "--keep-storage") {
+		t.Fatalf("the build cache has no ceiling: %v", pruned)
+	}
 }

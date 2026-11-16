@@ -17,9 +17,16 @@ networks:
 volumes:
   parseable_data: ""
   parseable_staging: ""
+  # Filelog checkpoints. On a volume rather than the writable layer so a rescheduled
+  # collector resumes each container's offset instead of re-tailing its file.
+  otel_file_storage: ""
 services:
   parseable:
-    image: parseable/parseable:v2.8.0
+    # quay.io, not Docker Hub: the project stopped publishing there after v2.8.0
+    # (Docker Hub's last tag is v2.8.0, May 2026), and every release after it — the
+    # ones that fix the query-side duplication where the same row is returned once
+    # per overlapping staging file — exists only here.
+    image: quay.io/parseablehq/parseable:v3.2.6
     replicas: 1
     placement: "[[ if .ObservabilityNode ]][[.ObservabilityNode]][[ else if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
     # Published on the HOST, not the routing mesh: the port is bound only on the
@@ -175,72 +182,68 @@ services:
   # is the only cleanup: the exporter holds the file open, and a reader that
   # truncated it would leave a sparse NUL-filled middle.
   #
-  # Host mode was the previous publish shape, and it was a trap worth naming. It
-  # published 4318 ONLY on the node running the task, while the daemon's endpoint
-  # was the constant http://127.0.0.1:4318 — a closed port on every other node.
-  # The OTel SDK's default error handler logs every failed export unbounded, so
-  # on 2026-11-08 node nxt-sw-4-m (1 vCPU) wrote 261,617 journal lines from one
-  # daemon boot (238,951 / 213,808 / 196,367 / 151,609 / 71,180 from other
-  # incarnations); journald writes starved docker's heartbeat, the swarm marked
-  # the node Down and leadership moved off it. 2026-10-16 was the same failure in
-  # miniature: `dial tcp 127.0.0.1:4318: connect: connection refused` on a worker
-  # running no collector.
+  # PUBLISHED ON THE LEADER ONLY (`mode: host`). The collector follows the leader by
+  # name, so its OTLP port exists on exactly one node, and only that node's daemon dials
+  # it — at its own swarm address, which host mode binds.
   #
-  # So 4318 stays ingress-published: the routing mesh binds it on EVERY node and
-  # forwards to the single task. The daemon dials THIS node's swarm address
-  # (config.ResolveOTLPEndpoint), never localhost and never the overlay name —
-  # a host process cannot resolve overlay DNS.
+  # This was `mode: ingress` before, and the reason is worth keeping: host mode shipped
+  # once WITHOUT a daemon-side guard. Every non-leader daemon kept dialling
+  # http://127.0.0.1:4318 against a port nothing bound there, the OTel SDK's default
+  # error handler logged every failed export unbounded, and on 2026-11-08 nxt-sw-4-m
+  # wrote 261,617 journal lines from one boot — journald writes starved docker's
+  # heartbeat, the swarm marked the node Down, and leadership moved off it. Ingress
+  # "fixed" that by binding 4318 on every node and forwarding to the single task.
   #
-  # 4318 is still not public: it is a documented Traefik bypass, and
-  # harden-host.sh DROPs it in DOCKER-USER for every non-private source. That
-  # rule is what makes an ingress publish acceptable — without it, ingress would
-  # put the collector on all four public interfaces, and an unauthenticated OTLP
-  # receiver is an open ingestion endpoint.
+  # Two things now close that class properly, and they are why host mode is safe:
+  #
+  #   1. telemetry.SetErrorHandler is BOUNDED (internal/telemetry/failures.go): one line
+  #      per distinct failure, then a rate-limited summary. A dead endpoint can no longer
+  #      write a journal flood regardless of how the port is published.
+  #   2. the supervisor disables the exporter when the endpoint stops answering, and
+  #      re-probes every minute (internal/cli/telemetry_supervisor.go). A node with no
+  #      local collector exports nothing and says so once.
+  #
+  # So: 4318 answers on the leader's interfaces and nowhere else. It is still not public
+  # — harden-host.sh DROPs it in DOCKER-USER for every non-private source, which is what
+  # made an ingress publish acceptable and is now simply belt and braces.
   #
   # Sizing: reserve ~the measured steady state, cap at ~3x the measured peak, and
   # keep the collector's own memory_limiter (otel-collector-config.yml) strictly
   # BELOW this cap so the limiter sheds load while the process still has room
   # instead of the cgroup OOM-killing it.
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.157.0
+    image: otel/opentelemetry-collector-contrib:0.165.0
     # One task on the leader. NOT global: see the block above for why, and for
     # why the leader is a hard constraint rather than a preference.
     replicas: 1
-    placement: manager
-    constraints:
-      - "node.labels.pmcluster.leader==true"
+    # Follows the LEADER by name — the same mechanism the edge, the SSO stack and the
+    # backup stack use. It used to be `placement: manager` plus a hard constraint on
+    # node.labels.pmcluster.leader, which floated: the constraint says "wherever that
+    # label happens to be", so when leadership moved without a redeploy the task sat at
+    # 0/1 and the only symptom was an empty node-stats panel. A name cannot float: the
+    # render knows who leads, `checkPlacementHosts` refuses a name the swarm does not
+    # have, and a changed name forces the running task (forceCollectorIfPlacementChanged).
+    placement: "[[ if .LeaderNode ]][[.LeaderNode]][[ else ]]manager[[ end ]]"
     user: "0:0"
     restart: any
     restart_delay: 5s
     command: ["--config=/etc/otel-collector-config.yaml"]
-    env:
-      # gopsutil reads these to locate the HOST's proc/sys rather than its own.
-      HOST_PROC: "/hostfs/proc"
-      HOST_SYS: "/hostfs/sys"
     expose:
       port: 4318
       external: 4318
-      # ingress, not host: the routing mesh binds 4318 on EVERY node and forwards
-      # to this service's task wherever it runs, so a host-process daemon can
-      # dial its own node's swarm address and always reach a collector. See the
-      # long note above for what that buys and what it costs.
-      mode: ingress
+      # host, not ingress: the port belongs to the node that runs the collector, and
+      # that node is the leader. Ingress would bind 4318 on every node and forward to
+      # one task, which is exposure nobody needs now that nodes report over mTLS.
+      mode: host
     binds:
       - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "/etc/localtime:/etc/localtime:ro"
-      # Read-only host views for the hostmetrics receiver. A container's /proc is
-      # its own, so node CPU/memory would otherwise report the collector's cgroup
-      # rather than the node's. Read-only, and nothing is written back.
-      - "/proc:/hostfs/proc:ro"
-      - "/sys:/hostfs/sys:ro"
-      # The node-stats file the collector's file exporter appends to. Same path
-      # inside and out, so the leader's daemon reads exactly what this task
-      # wrote. The host directory is created by `cluster up` / `cluster update`
-      # (cluster.NodeStatHostDir) BEFORE this stack is deployed: Docker rejects
-      # a bind whose source is missing, and "bind source path does not exist:
-      # /var/stack/nodestat" is how the collector sat at 0/1 on four nodes.
-      - "[[ .NodeStatDir ]]:[[ .NodeStatDir ]]"
+      # The host's /proc and /sys are no longer mounted: they existed only for the
+      # hostmetrics receiver, which is gone. Node CPU/memory/load now come from each
+      # node's own daemon over OTLP — one producer everywhere, not one host's view.
+    volumes:
+      - "otel_file_storage:/var/lib/otelcol/file_storage"
     configs:
       - config_path(pmcluster_otel_config)
     resources:

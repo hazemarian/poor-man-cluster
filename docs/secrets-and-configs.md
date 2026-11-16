@@ -83,12 +83,10 @@ container for a one-hour token: every rotation would rewrite the service.
   (`pmcluster config history` / `rollback`). Editing a config records the
   previous value; rolling back restores it. The console shows content,
   history, and a rollback button.
-- **A promoted leader carries the newest 10 versions per config.** The
-  survivor kit's `data.db` is windowed (see `internal/controlplane/kitdb.go`),
-  so after a failover `config history` shows the last ten edits of each config,
-  not its whole archive; the leader that recorded an older version keeps it, so
-  a rollback further back than the window is a leader-side operation. The
-  current config CONTENT always crosses, at every scope.
+- **A promoted leader carries the whole config history.** The mirror carries every
+  table, `config_versions` included (ADR 0005), so after a failover
+  `config history` and `config rollback` work to the same depth they did on the
+  old leader. The current config CONTENT crosses, at every scope.
 
 ## Scopes: `cluster` vs `service`
 

@@ -15,17 +15,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
-	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/controlplane"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/clustersnapshot"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/credentials"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodever"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/stacks"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -62,7 +64,7 @@ type Input struct {
 	Docker runtime.Client
 	Store  *store.Store
 	Cipher *credentials.Cipher
-	// DataDir is the daemon's data dir (kit configs are read from the swarm,
+	// DataDir is the daemon's data dir (the key FILE is read from here,
 	// the drill extracts to a temp dir).
 	DataDir string
 	// Version is the running binary version, the reference for skew.
@@ -107,10 +109,15 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 	add := func(c Check) { rep.Checks = append(rep.Checks, c) }
 
 	add(checkSwarm(ctx, in))
-	add(checkLeaderLabel(ctx, in))
+	add(checkCollectorPlacement(ctx, in))
+	add(checkCollectorExposure(ctx, in))
 	add(checkNodeLabels(ctx, in))
+	add(checkPlacementPins(ctx, in))
+	add(checkBackupCoverage(ctx, in))
+	add(checkBackupAgents(ctx, in.backupView()))
+	add(checkUnbackedData(ctx, in.backupView()))
 	add(checkSkew(ctx, in))
-	add(checkKit(ctx, in))
+	add(checkMirrorVerify(ctx, in))
 	add(checkSecrets(ctx, in))
 	add(checkGitHubApp(ctx, in))
 	add(checkGitHubRunners(ctx, in))
@@ -155,48 +162,95 @@ func checkSwarm(ctx context.Context, in Input) Check {
 	return Check{"swarm", StatusOK, fmt.Sprintf("%d/%d manager(s) ready, quorum %d", q.Ready, q.Managers, q.Required())}
 }
 
-// checkLeaderLabel: does exactly the current leader carry pmcluster.leader=true?
+// checkCollectorPlacement answers "is the OTel collector still where the platform says
+// it should be".
 //
-// The collector is pinned to that label by a hard placement CONSTRAINT, so the
-// label is not cosmetic: when no node carries it the collector cannot schedule at
-// all (cluster update refuses to deploy in that state), and when a node other than
-// the leader carries it the collector writes the node-stats JSONL onto a disk the
-// leader's daemon never reads — an empty panel with no error anywhere.
-func checkLeaderLabel(ctx context.Context, in Input) Check {
+// The collector follows the LEADER by name — the same mechanism as the edge. That makes
+// the failure mode specific and checkable: after a leadership change, a stack that was not
+// re-rendered keeps naming the OLD leader, Swarm keeps the task there, and the new leader's
+// daemon finds nothing on its own socket. Nothing errors; the panels just go quiet.
+//
+// So the check compares the running service's rendered placement with the live leader by
+// name, and names both when they disagree.
+// checkCollectorExposure answers "is the OTLP port on one node or on all of them".
+//
+// The collector publishes 4318 with `mode: host`, so it exists on the node that runs the
+// task — the leader — and nowhere else. `mode: ingress` would bind it on every node and
+// forward to the single task, which is exposure nobody needs now that nodes report over
+// mTLS; it was only ever chosen because a daemon without a local collector wrote an
+// unbounded journal flood of export failures. That class is closed at the source (bounded
+// error handler), so the publish shape can go back to the narrow one.
+//
+// A WARN here is not a broken platform: it is 4318 answering on machines that have no
+// collector, which is the state that hid the flood.
+func checkCollectorExposure(ctx context.Context, in Input) Check {
+	const name = "collector exposure"
 	if in.Docker == nil {
-		return Check{"leader label", StatusSkip, "no docker client"}
+		return Check{name, StatusSkip, "no docker client"}
+	}
+	svc, err := in.Docker.ServiceInspect(ctx, observabilityCollectorService)
+	if err != nil {
+		return Check{name, StatusSkip, "the observability stack is not deployed"}
+	}
+	var otlp *runtime.ServicePort
+	for i := range svc.Ports {
+		if svc.Ports[i].Target == 4318 || svc.Ports[i].Published == 4318 {
+			otlp = &svc.Ports[i]
+		}
+	}
+	switch {
+	case otlp == nil:
+		return Check{name, StatusWarn,
+			svc.Name + " publishes no OTLP port — a daemon with no local collector has nothing to export to"}
+	case otlp.Mode == "ingress":
+		return Check{name, StatusWarn,
+			fmt.Sprintf("%s OTLP 4318 is published with mode: ingress — bound on EVERY node and forwarded to one task; it should be host, on the leader only", svc.Name)}
+	}
+	return Check{name, StatusOK,
+		fmt.Sprintf("%s OTLP 4318 is published with mode: %s (the node running the task only)", svc.Name, otlp.Mode)}
+}
+
+// observabilityCollectorService is the collector's Swarm service name, the one
+// service whose placement the platform renders onto the leader.
+const observabilityCollectorService = "observability_otel-collector"
+
+func checkCollectorPlacement(ctx context.Context, in Input) Check {
+	const name = "collector placement"
+	if in.Docker == nil {
+		return Check{name, StatusSkip, "no docker client"}
 	}
 	nodes, err := in.Docker.NodeList(ctx)
 	if err != nil {
-		return Check{"leader label", StatusFail, "node list: " + err.Error()}
+		return Check{name, StatusFail, "node list: " + err.Error()}
 	}
-	if len(nodes) == 0 {
-		return Check{"leader label", StatusSkip, "the node list is empty: no swarm inventory to read the label from"}
-	}
-	var carriers []string
 	leader := ""
 	for _, n := range nodes {
-		if n.Labels[runtime.LeaderNodeLabel] == "true" && n.Hostname != "" {
-			carriers = append(carriers, n.Hostname)
-		}
 		if n.IsLeader && n.Hostname != "" {
 			leader = n.Hostname
 		}
 	}
-	switch {
-	case len(carriers) == 0:
-		return Check{"leader label", StatusFail,
-			cluster.NoLeaderLabelCondition + " (nothing pins the collector, so no task can start)"}
-	case len(carriers) > 1:
-		return Check{"leader label", StatusWarn,
-			fmt.Sprintf("%d nodes carry %s=true (%s) — the collector's constraint matches all of them",
-				len(carriers), runtime.LeaderNodeLabel, strings.Join(carriers, ", "))}
-	case leader != "" && carriers[0] != leader:
-		return Check{"leader label", StatusWarn,
-			fmt.Sprintf("%s=true is on %s, but the swarm leader is %s — the collector writes its node-stats file where the leader's daemon does not read it",
-				runtime.LeaderNodeLabel, carriers[0], leader)}
+	svc, err := in.Docker.ServiceInspect(ctx, observabilityCollectorService)
+	if err != nil {
+		// Not deployed (a cluster without observability) is not a fault.
+		return Check{name, StatusSkip, "the observability stack is not deployed"}
 	}
-	return Check{"leader label", StatusOK, fmt.Sprintf("%s=%s=true", carriers[0], runtime.LeaderNodeLabel)}
+	pinned := ""
+	for _, c := range svc.Constraints {
+		if v, ok := strings.CutPrefix(strings.ReplaceAll(c, " ", ""), "node.hostname=="); ok {
+			pinned = v
+		}
+	}
+	switch {
+	case leader == "":
+		return Check{name, StatusWarn, "no leader is elected, so there is nothing to compare the collector's placement with"}
+	case pinned == "":
+		return Check{name, StatusWarn,
+			fmt.Sprintf("%s carries no hostname constraint — it can run on any manager; run `pmcluster cluster update` to render it onto the leader (%s)", svc.Name, leader)}
+	case pinned != leader:
+		return Check{name, StatusWarn,
+			fmt.Sprintf("%s is pinned to %s, but the leader is %s — the stack was not re-rendered after leadership moved; run `pmcluster cluster update`", svc.Name, pinned, leader)}
+	}
+	return Check{name, StatusOK, fmt.Sprintf("%s is on the leader (%s)", svc.Name, leader)}
 }
 
 // checkNodeLabels: does any pmcluster.* node label carry an empty value?
@@ -248,25 +302,32 @@ func checkSkew(ctx context.Context, in Input) Check {
 	return Check{"version skew", StatusOK, fmt.Sprintf("%d manager(s) on %s", len(skew.Nodes), in.Version)}
 }
 
-// checkKit: does the newest control-plane snapshot restore, and how old is it?
-func checkKit(ctx context.Context, in Input) Check {
-	if in.Docker == nil {
-		return Check{"control-plane kit", StatusSkip, "no docker client"}
+// checkMirrorVerify asks the question the control-plane kit drill used to ask, of the thing
+// that now decides it: the MIRROR. Adoption copies nothing (ADR 0005), so the store this
+// node mirrors IS what it would serve as leader — and a mirror nobody has verified is a
+// promotion nobody has tested.
+//
+// It reports the version applied here, the age of the last successful answer from the
+// leader, what the tables actually carry, and whether a key is present. A stale mirror is a
+// WARN (serving it is accepted); no snapshot and no key are FAILs, because those promote a
+// leader that cannot serve its own cluster.
+func checkMirrorVerify(ctx context.Context, in Input) Check {
+	const name = "cluster mirror verify"
+	if in.Store == nil {
+		return Check{name, StatusSkip, "no control-plane store on this node, so there is no mirror to verify"}
 	}
-	kit := &controlplane.Kit{Docker: in.Docker, DataDir: in.DataDir}
-	rep, err := kit.Verify(ctx)
+	rep, err := clustersnapshot.Verify(ctx, in.Store, in.Cipher != nil, time.Now())
 	if err != nil {
-		return Check{"control-plane kit", StatusFail, err.Error()}
+		return Check{name, StatusFail, err.Error()}
 	}
-	detail := fmt.Sprintf("snapshot %s old, %d table(s), %d secret(s) decrypt",
-		rep.SnapshotAge, rep.Tables, rep.SecretsOK)
+	detail := rep.Human()
+	if len(rep.Problems) > 0 {
+		return Check{name, StatusFail, detail + "; " + strings.Join(rep.Problems, "; ")}
+	}
 	if len(rep.Warnings) > 0 {
-		return Check{"control-plane kit", StatusFail, detail + "; " + strings.Join(rep.Warnings, "; ")}
+		return Check{name, StatusWarn, detail + "; " + strings.Join(rep.Warnings, "; ")}
 	}
-	if age, perr := time.ParseDuration(rep.SnapshotAge); perr == nil && age > 30*time.Minute {
-		return Check{"control-plane kit", StatusWarn, detail + " (snapshot is old for a 5-minute cadence — is this the leader?)"}
-	}
-	return Check{"control-plane kit", StatusOK, detail}
+	return Check{name, StatusOK, detail}
 }
 
 // checkSecrets: does every stored secret decrypt with the current key?
@@ -663,4 +724,176 @@ func first(s []string) string {
 		return ""
 	}
 	return s[0]
+}
+
+// checkPlacementPins answers "is any service pinned to a node that is not in the
+// swarm?".
+//
+// A pin outlives the node it names. The constraint stays spelled correctly, the
+// live spec matches the render, reconcile reports "no drift", last apply is
+// green — and the service sits Pending indefinitely. Measured on
+// nextrum-landing (2026-11-15): pinned to nxt-sw-2-m, which had left the swarm
+// on 12 Nov, Pending for 36 hours with nothing anywhere saying so.
+//
+// The platform can only fix the pins it made itself (stacks/placement.go
+// rewrites those at translation). A pin written in the DSL is the operator's
+// decision about where a workload may run, so it is reported, never relaxed.
+func checkPlacementPins(ctx context.Context, in Input) Check {
+	const name = "placement pins"
+	if in.Docker == nil {
+		return Check{Name: name, Status: StatusSkip, Detail: "no runtime handle in this report"}
+	}
+	nodes, err := in.Docker.NodeList(ctx)
+	if err != nil {
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "could not read the node list (" + err.Error() + "), so pins were not checked"}
+	}
+	live := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		live[n.Hostname] = true
+	}
+	svcs, err := in.Docker.ServiceList(ctx)
+	if err != nil {
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "could not list services (" + err.Error() + "), so pins were not checked"}
+	}
+	var stale []string
+	checked := 0
+	for _, svc := range svcs {
+		ins, ierr := in.Docker.ServiceInspect(ctx, svc.ID)
+		if ierr != nil {
+			continue
+		}
+		for _, c := range ins.Constraints {
+			host, ok := hostnameConstraint(c)
+			if !ok {
+				continue
+			}
+			checked++
+			if !live[host] {
+				stale = append(stale, svc.Name+" -> "+host)
+			}
+		}
+	}
+	switch {
+	case len(stale) > 0:
+		return Check{Name: name, Status: StatusFail,
+			Detail: "pinned to a node that is not in the swarm — the task can never be scheduled: " +
+				strings.Join(stale, "; ") + ". A platform-made pin is moved automatically on the next translation; a pin written in the DSL is yours to change"}
+	case checked == 0:
+		return Check{Name: name, Status: StatusOK, Detail: "no service is pinned to a specific node"}
+	}
+	return Check{Name: name, Status: StatusOK,
+		Detail: fmt.Sprintf("every hostname pin (%d) names a node that is in the swarm", checked)}
+}
+
+// hostnameConstraint pulls the host out of `node.hostname == x`. Label and role
+// constraints are deliberately not pins to a node that can disappear.
+func hostnameConstraint(c string) (string, bool) {
+	parts := strings.SplitN(c, "==", 2)
+	if len(parts) != 2 {
+		return "", false
+	}
+	if strings.TrimSpace(parts[0]) != "node.hostname" {
+		return "", false
+	}
+	return strings.TrimSpace(parts[1]), true
+}
+
+// checkBackupCoverage answers "can this stack's data actually be recovered?".
+//
+// Two ways a stack holding a volume ends up with no recoverable copy, both of
+// which used to be silent:
+//
+//  1. Its data sits on a node that is NOT a storage node. The snapshot disk, the
+//     hourly agent and the archive all live with the storage nodes, so a stack
+//     pinned anywhere else has never been backed up — and nothing said so.
+//     Measured on nextrum-landing (2026-11-15): pinned to nxt-sw-2-m, outside the
+//     storage set, zero archives ever, and the node then left the swarm.
+//  2. No archive has been recorded for it inside the retention window, which is
+//     what a stopped agent looks like from the control plane.
+//
+// Platform stacks are exempt: their volumes (the SeaweedFS store, the collector's
+// queue) are infrastructure the platform places deliberately, not customer data.
+func checkBackupCoverage(ctx context.Context, in Input) Check {
+	const name = "backup coverage"
+	if in.Docker == nil || in.Store == nil {
+		return Check{Name: name, Status: StatusSkip, Detail: "needs a runtime handle and the control-plane store"}
+	}
+	svcs, err := in.Docker.ServiceList(ctx)
+	if err != nil {
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "could not list services (" + err.Error() + "), so coverage was not checked"}
+	}
+	storage := map[string]bool{}
+	for _, n := range stacks.ParseStorageNodes(in.Store.SettingDefault(ctx, cluster.SettingStorageNodes(), "")) {
+		storage[n] = true
+	}
+	platform := map[string]bool{
+		string(cluster.StackInfra): true, string(cluster.StackEdge): true,
+		string(cluster.StackObservability): true, string(cluster.StackBackup): true,
+		string(cluster.StackSSO): true,
+	}
+
+	// stack -> node it is pinned to, for stacks that hold a volume.
+	pinned := map[string]string{}
+	for _, svc := range svcs {
+		stackName := stackOfService(svc.Name)
+		if platform[stackName] {
+			continue
+		}
+		ins, ierr := in.Docker.ServiceInspect(ctx, svc.ID)
+		if ierr != nil || len(ins.Mounts) == 0 {
+			continue
+		}
+		for _, c := range ins.Constraints {
+			if host, ok := hostnameConstraint(c); ok {
+				pinned[stackName] = host
+			}
+		}
+		if _, ok := pinned[stackName]; !ok {
+			pinned[stackName] = "" // holds a volume, no node pin
+		}
+	}
+	if len(pinned) == 0 {
+		return Check{Name: name, Status: StatusSkip, Detail: "no application stack holds a volume"}
+	}
+
+	// What this check may and may not claim.
+	//
+	// It CAN know where a stack's data lives and whether that node is part of the
+	// storage set — structural, always answerable from the pins and the setting.
+	//
+	// It CANNOT know, from the leader, which storage node has archived what. The
+	// agent writes a sidecar beside each artifact on the node that took it, and
+	// the backups table is not a reliable clock: measured 2026-11-15, `abbas` had
+	// a fresh hourly artifact and zero rows, while `test-erp` had a 07:00 artifact
+	// and a row stuck at 5 Nov. Reporting either as unbacked made this check cry
+	// wolf on eleven stacks, which is how an operator learns to ignore it.
+	//
+	// Freshness belongs to a check sourced from the nodes themselves, not guessed
+	// here. What remains is the fact that started all of this: data placed where
+	// no snapshot disk and no agent can ever reach it.
+	var outside []string
+	for stackName, node := range pinned {
+		if node != "" && !storage[node] {
+			outside = append(outside, stackName+" on "+node+" (not a storage node)")
+		}
+	}
+	sort.Strings(outside)
+	if len(outside) > 0 {
+		return Check{Name: name, Status: StatusFail,
+			Detail: "data outside the backup path — the snapshot disk and the hourly agent live on storage nodes, so these stacks can never be archived where they are: " +
+				strings.Join(outside, "; ")}
+	}
+	return Check{Name: name, Status: StatusOK,
+		Detail: fmt.Sprintf("%d stack(s) hold a volume, all on a storage node", len(pinned))}
+}
+
+// stackOfService turns "nextrum-landing_web" into "nextrum-landing".
+func stackOfService(serviceName string) string {
+	if i := strings.Index(serviceName, "_"); i > 0 {
+		return serviceName[:i]
+	}
+	return serviceName
 }

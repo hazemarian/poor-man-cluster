@@ -1,7 +1,6 @@
 package cluster
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -67,129 +66,50 @@ func TestOTelCollectorIsSingleTaskPinnedToTheLeader(t *testing.T) {
 		t.Fatalf("otel-collector replicas = %v, want exactly 1", svc.Deploy.Replicas)
 	}
 
-	const leaderConstraint = "node.labels." + "pmcluster.leader==true"
-	var haveManager, haveLeader bool
+	// Placement is a NAME now, not the leader label: a label constraint floats with
+	// leadership and leaves the task at 0/1 when the label moves without a redeploy.
+	var pinned string
 	for _, c := range svc.Deploy.Placement.Constraints {
-		switch c {
-		case "node.role == manager":
-			haveManager = true
-		case leaderConstraint:
-			haveLeader = true
+		if strings.Contains(c, "pmcluster.leader") {
+			t.Fatalf("otel-collector is still placed by the leader LABEL (%q): that floats", c)
+		}
+		if v, ok := strings.CutPrefix(strings.ReplaceAll(c, " ", ""), "node.hostname=="); ok {
+			pinned = v
 		}
 	}
-	if !haveManager {
-		t.Fatalf("otel-collector constraints = %v, want node.role == manager as the floor",
+	if pinned == "" {
+		t.Fatalf("otel-collector constraints = %v, want it pinned to the leader by hostname",
 			svc.Deploy.Placement.Constraints)
 	}
-	if !haveLeader {
-		t.Fatalf("otel-collector constraints = %v, want the leader as a CONSTRAINT (%s): a preference "+
-			"does not move a running task", svc.Deploy.Placement.Constraints, leaderConstraint)
-	}
-
-	// And the label must not ALSO be a preference: the two together would let the
-	// scheduler keep a task on a node the constraint no longer selects, which is
-	// the bug this pins.
+	// And no preference on the label either: a preference beside a name would let the
+	// scheduler keep a task on a node the name no longer selects.
 	for _, p := range svc.Deploy.Placement.Preferences {
 		if strings.Contains(p.Spread, "pmcluster.leader") {
-			t.Errorf("otel-collector still has a preference on the leader label (%q); it must be a constraint only", p.Spread)
+			t.Errorf("otel-collector still has a preference on the leader label (%q)", p.Spread)
 		}
 	}
 }
 
-// TestOTelCollectorMountsTheNodeStatDirectory: the collector writes the JSONL
-// under /var/stack, and the leader's daemon (a host process) reads it from the
-// same path. Without this bind the file lives only inside the container.
-func TestOTelCollectorMountsTheNodeStatDirectory(t *testing.T) {
-	doc := renderNodeStatStack(t)
-	svc := doc.Services["otel-collector"]
-	want := "/var/stack/nodestat:/var/stack/nodestat"
-	for _, b := range svc.Volumes {
-		if b == want {
-			return
-		}
-	}
-	t.Fatalf("otel-collector volumes = %v, want %q", svc.Volumes, want)
-}
-
-// TestOTelCollectorHasTheNodeStatPipeline pins the collector-side contract:
-// node-stats series land in a JSONL file with bounded rotation, and are kept out
-// of the general metrics pipeline so Parseable does not ingest them twice.
-func TestOTelCollectorHasTheNodeStatPipeline(t *testing.T) {
-	data, err := RenderOTelCollectorConfig(RenderInput{
-		ObservabilityAdminEmail: "admin@example.com",
-		ObservabilityBasicAuth:  observabilityBasicAuth("admin@example.com", "pw"),
-	})
-	if err != nil {
-		t.Fatalf("render collector config: %v", err)
-	}
-	body := string(data)
-
-	for _, want := range []string{
-		"file/nodestat:",
-		"path: /var/stack/nodestat/nodestat.jsonl",
-		"format: json",
-		"max_megabytes: 2",
-		// One backup, not zero: with 0 the exporter renames the rolled file and
-		// never deletes it, which grew a live leader's directory to 722 MiB
-		// across 372 files while the reader tailed only the newest.
-		"max_backups: 1",
-		"metrics/nodestat:",
-		"exporters:  [file/nodestat, otlphttp/parseable-metrics]",
-		"filter/nodestat_only:",
-		"filter/drop_nodestat:",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("collector config is missing %q", want)
-		}
-	}
-
-	// The file pipeline must carry ONLY node-stats series: the reader would
-	// otherwise carry application metrics into the table it builds.
-	if !strings.Contains(body, `^pmcluster\.node\..*`) || !strings.Contains(body, `^pmcluster\.process\..*`) {
-		t.Error("node-stats filter does not name the node and process metric families")
-	}
-
-	// The general metrics pipeline must still lead with memory_limiter and end
-	// with batch, and must drop the node-stats series now that they have their
-	// own pipeline.
-	start := strings.Index(body, "    metrics:")
-	if start < 0 {
-		t.Fatal("no general metrics pipeline")
-	}
-	end := strings.Index(body[start:], "    metrics/nodestat:")
-	if end < 0 {
-		t.Fatal("no metrics/nodestat pipeline after the general one")
-	}
-	pipe := body[start : start+end]
-	if !strings.Contains(pipe, "[memory_limiter,") {
-		t.Error("metrics pipeline must lead with memory_limiter")
-	}
-	if !strings.Contains(pipe, "filter/drop_nodestat") || !strings.Contains(pipe, ", batch]") {
-		t.Error("metrics pipeline must drop node-stats series and end with batch")
-	}
-}
-
-// TestNodeStatOTLPEndpointIsTheNodesOwnSwarmAddress is the daemon half of the
-// same contract: the sample is exported to THIS node's swarm address, never to
-// localhost (a closed port on every node but the collector's) and never to the
-// overlay service name (a host process cannot resolve it).
-func TestNodeStatOTLPEndpointIsTheNodesOwnSwarmAddress(t *testing.T) {
-	endpoint, reason := config.ResolveOTLPEndpoint(context.Background(), config.OTLPAutoEndpoint,
-		func(context.Context) (string, error) { return "10.7.224.15", nil },
-		func(context.Context, string) error { return nil })
+// TestNodeStatOTLPEndpointFollowsTheCollector is the daemon half of the same contract.
+// The collector follows the leader and publishes 4318 there only, so there is exactly one
+// collector and every daemon in the cluster exports to it: the leader beside it on
+// loopback, every other node to the leader's address. What a follower must never do is
+// dial an address nobody has answered on — that is the 2026-11-08 journal storm — so with
+// no answer it stays disabled and says it is being re-probed.
+func TestNodeStatOTLPEndpointFollowsTheCollector(t *testing.T) {
+	endpoint, reason := config.ResolveOTLPEndpoint(config.OTLPAutoEndpoint, true, "")
 	if reason != "" {
-		t.Fatalf("endpoint disabled: %s", reason)
+		t.Fatalf("the leader's endpoint was disabled: %s", reason)
 	}
-	if endpoint != "http://10.7.224.15:4318" {
-		t.Fatalf("endpoint = %q, want http://10.7.224.15:4318", endpoint)
+	if endpoint != "http://127.0.0.1:4318" {
+		t.Fatalf("endpoint = %q, want the collector beside the leader at http://127.0.0.1:4318", endpoint)
 	}
-	for _, bad := range []string{"127.0.0.1", "localhost", "observability_otel-collector"} {
-		if strings.Contains(endpoint, bad) {
-			t.Fatalf("endpoint %q names %q", endpoint, bad)
-		}
+	// A follower exports to the leader's collector, not to nothing.
+	if ep, why := config.ResolveOTLPEndpoint(config.OTLPAutoEndpoint, false, "http://10.7.224.11:4318"); ep != "http://10.7.224.11:4318" || why != "" {
+		t.Fatalf("follower endpoint = (%q, %q), want the leader's collector", ep, why)
 	}
-	// And the port it dials is the one the stack publishes.
-	if config.OTLPPort != 4318 {
-		t.Fatalf("OTLPPort = %d, want 4318", config.OTLPPort)
+	// Before anything has answered on that port, it stays disabled WITH a reason.
+	if ep, why := config.ResolveOTLPEndpoint(config.OTLPAutoEndpoint, false, ""); ep != "" || why == "" {
+		t.Fatalf("follower endpoint = (%q, %q), want none with a reason", ep, why)
 	}
 }

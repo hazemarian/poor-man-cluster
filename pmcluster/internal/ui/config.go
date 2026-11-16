@@ -13,6 +13,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 // Config holds every tunable for the UI service, sourced from the environment.
@@ -27,6 +29,10 @@ type Config struct {
 	CookieName      string
 	UpstreamTimeout time.Duration
 	AppVersion      string
+	// Logger is where the console reports its own failures. It was nil-by-default and nothing in
+	// this package logged at all, so a broken interactive terminal left NO trace anywhere: the
+	// page showed a status line and the server said nothing. Defaults to a no-op.
+	Logger zerolog.Logger
 	// ClusterDomain (PMCLUSTER_DOMAIN) is the public cluster domain (e.g.
 	// example.com). The console renders external links to OpenObserve
 	// (observ.<domain>) and the Traefik dashboard (traefik.<domain>) from it.

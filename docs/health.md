@@ -19,7 +19,7 @@ Same measurements over HTTP, for the console and anything that gates on them:
 | `swarm` | `docker node ls`, then the quorum arithmetic (`internal/cluster/quorum.go`) | quorum is already lost, or the manager count cannot survive one more loss |
 | `node labels` | every node's `pmcluster.*` node labels | a label carries an empty value: the key is present, so anything matching on presence (`node.labels.pmcluster.storage`) reads the node as labelled (warn) |
 | `version skew` | each manager's published `pmcluster_nodever_<host>` config vs this binary | a manager reports a different version |
-| `control-plane kit` | **restores** the newest Raft snapshot into a temp dir, opens the DB, decrypts its secrets | the kit does not extract, does not open, misses its key config, or its key does not decrypt its ciphertext |
+| `cluster mirror verify` | the store this node would promote on: the applied version, the age of the last successful answer from the leader, the rows every mirrored table carries, and whether an encryption key is present | nothing has ever been mirrored **and** the store holds no cluster state; a second line names a stale mirror, a missing key, or a stack with no revision behind its pointer |
 | `secrets` | AES-GCM decrypt of every stored row with the current key | a row cannot be decrypted (sealed by an older key) |
 | `github app` | mints a real installation token straight from the daemon's stored key (no credential helper, no extra port), reads the configured probe repo and HEADs the probe package | key/id rejected, installation removed, or `contents:read`/`packages:read` missing. No app configured is a **skip**; a token with no probe target is a **warn** |
 | `registry credential` | the `created_at` of the stored `ghcr.io` row — the age of the pull credential, reset when `registry add` rotates it | **never fails.** Warns at 60 days: read-only PATs expire at 90, and nothing renews the credential on a timer, so this is the early warning. A missing row is a **skip** naming `registry add ghcr.io` |
@@ -28,61 +28,55 @@ Same measurements over HTTP, for the console and anything that gates on them:
 | `offsite` | `/var/lib/pmcluster-backup/offsite/status.json` | an artifact this node shipped is not in the bucket |
 | `disk` | `statfs` on the volume root | under 5% free (warn under 15%) |
 | `runner memory` (node-local) | the cap in this node's applied runner assignment vs its own `/proc/meminfo` | the cap exceeds 70 % of this node's RAM: the runner would OOM the node instead of being bounded by it ([`runners.md`](runners.md#a-runner-that-cannot-fit-the-node)) |
+| `cluster mirror` (non-leader) | `sync_state` plus the row counts of the mirrored tables · **age = since the last successful poll** (a 304 counts), on this node's clock; the rows' own age is reported beside it | nothing has been applied yet (warn: the mirror fills within one 60 s poll), or the leader has not ANSWERED for three polls (warn, `STALE`, naming the leader): the values are real but old. A quiet cluster whose polls all answer 304 is **ok**, however old the rows are |
 
 **Skipped is not passed.** A check that cannot run — a worker cannot read the
 manager set, a host has no backup state dir — reports `skip` with the reason.
 `doctor`'s exit status is non-zero only for `fail`, so `warn` and `skip` are
 visible without breaking a pipeline.
 
-## The control-plane kit drill
+## The cluster mirror drill
 
-`pmcluster cluster kit verify` (and the `control-plane kit` check above).
+`pmcluster cluster mirror verify` (and the `cluster mirror verify` check above).
 
-The leader publishes the control plane every five minutes as two Raft-replicated
-Docker configs: `pmcluster_state_<ts>` (a tar.gz of a slim `data.db`, `config.yaml`,
-the rendered `config/` tree) and `pmcluster_state_key_<ts>` (the
-`.encryption_key` bytes alone — key and ciphertext never share a blob).
+Cluster state reaches every manager by the swarm-mTLS pull and is mirrored into
+that manager's own store: every table the control plane lives in, minus the ones
+that describe the node they were written on (`internal/store/mirror_tables.go`
+lists both sets, with a reason per exclusion). Adoption copies nothing (ADR 0005),
+so **the store a node mirrors is exactly what it would serve as leader** — which is
+what makes this the drill the control-plane kit verify used to be.
 
-The `data.db` there is an EXPORT of the authoritative tables (users and token
-hashes, managed credentials, the stack list, webhook sources, registries,
-settings, configs, secrets, site-cert metadata, failover markers), plus a short
-rollback window on the two tables that grow without bound: each stack's newest 5
-revisions **and** the one its `current_revision` points at (not always the
-newest — a rollback leaves the pointer on an older row), and the newest 10 config
-versions per config name. The rest of that history, plus backup audit rows,
-webhook delivery history, stack status and node stats, stays behind: the whole
-file had grown past Docker's 500 KiB config ceiling in revision payloads, so no
-snapshot was publishable and anything created since the last accepted one lived
-on one disk. A promoted leader therefore serves the same auth, settings, secrets
-and stack list, reconciles each stack against its current rendered manifest
-without waiting for a re-deploy, and can roll a deploy or a config edit back
-within the window; a revision older than the window still reads as "no stored
-revision" until the stack is re-deployed, and a config rollback further back than
-ten versions is a leader-side operation. The full `data.db` still rides the
-tarball/offsite backup path.
+It answers the same question from the state a promotion would actually use:
 
-Until this drill existed, that pair was only ever exercised when a leader
-actually died. The drill restores it into a temporary directory using the same
-extractor as the real restore, opens the restored `data.db` through the daemon's
-own store (so migrations and pragmas run exactly as they would on promotion),
-and then decrypts every stored secret with the key that came with it. It never
-touches the live data dir, so it is safe on a serving leader — and cheap: a few
-hundred kilobytes of tar into `/tmp`.
+- which leader's version is applied here, and when this node last got a successful
+  answer from it — a 304 counts, because the steady state of a healthy mirror is
+  "nothing changed", not "nothing happened";
+- how many rows every mirrored table carries (the stack list, its revisions, the
+  configs, the users) — a version number says nothing about what came with it;
+- whether this node holds the encryption key that decrypts the secrets it mirrors.
+
+A stale mirror is a **warning**, not a failure: a promotion on it is accepted, and
+the adoption logs the age it took over on. No snapshot at all with an empty store,
+or no key at all, is the failure — those promote a leader that cannot serve its own
+cluster.
 
 ```
-snapshot      2026-11-06T11:17:25Z (4m45s old)
-state config  pmcluster_state_1793963845957904713
-key config    pmcluster_state_key_1793963845957904713 (key e46caf46…)
-extracted     6 file(s)
-database      16 table(s), schema 0025_users_role (25 migration(s))
-content       50 setting(s), 20 config(s), 4 secret(s)
-decryption    4/4 secret(s) decrypt with the snapshot's own key
+source        mirror of nxt-sw-5-m
+version       42
+applied       2026-11-15T09:12:04Z
+confirmed     14s ago
+key           present
+rows          1843 in 17 table(s)
+  cluster_settings      50
+  stack_revisions      1500
+  stacks                 18
+  ...
 ```
 
-A state config whose key config is missing is a hard failure, not a warning: a
-ciphertext without its key is not a backup. The weekly restore drill timer runs
-it after the artifact drill, so a kit that has silently rotted is found on a
-Sunday instead of during an incident.
+It reads only — nothing is extracted, restored or written — so it is safe on a
+serving leader and cheap enough for the weekly systemd drill, which runs it after
+the artifact drill. A mirror that has silently rotted is found on a Sunday instead
+of during an incident.
 
 ## The offsite check
 
@@ -145,6 +139,10 @@ every 60s   GET /_ping over the docker unix socket, 5s timeout
               the node looks recoverable while nothing is retried
 after       → probe again. If it still does not answer, say so: "this node needs an
               operator". Do not report a recovery that did not happen.
+            → then check THIS node's daemon: the docker restart propagated to it
+              through `PartOf`, and the outage may already have spent its start
+              budget. `reset-failed` + start it, because nothing else starts a
+              `failed` unit when docker comes back
 30 min      floor between restarts — three times the daemon-restart floor, because
             the blast radius is three times larger
 ```
@@ -159,6 +157,37 @@ for it — an upgrade will not turn it on.
 operator environment: no `DOCKER_HOST`, no guarantee that a `docker` binary is on
 `PATH` for the workload. `GET /_ping` over the socket path it is given has no such
 dependencies.
+
+**The restart only helps if the control plane survives it.** A unit rendered before
+v0.2.290 carries `BindsTo=docker.service`, and systemd turns a dockerd failure into a
+*stop* of `pmcluster` — `Restart=always` is not honoured for a stop a dependency
+caused. Measured end-to-end on `nxt-sw-6-w` (2026-11-13): the watchdog did its whole
+job — three failed probes, `reset-failed`, `restart docker`, docker answering again —
+and the node came back with dockerd running and **no control plane at all**, because
+`pmcluster` had been stopped at the first kill and nothing was left to start it. The
+fix is in the unit, not in the watchdog: the daemon's startup convergence now removes
+the inherited `BindsTo=docker.service` line from the unit file and `daemon-reload`s,
+and the drop-in adds `PartOf=docker.service` so an explicit docker restart still
+restarts the agent. A drop-in cannot do the removal — an empty `BindsTo=` does **not**
+reset a dependency inherited from the main unit (verified on systemd 259 with a
+scratch unit, not just assumed), which is why the earlier "BindsTo cancelled" drop-in
+was a no-op.
+
+**Two more links in that chain, measured the same day.** With the unit repaired, the
+same test found the daemon restart-looping to `failed` — `pmcluster serve` treated an
+unreachable dockerd on the control-plane check as a *control-plane failure* and returned
+it, so systemd started it five times, hit `StartLimitBurst`, and left it failed (nothing
+starts a failed unit when docker comes back). An unreachable or wedged daemon is now
+classified exactly like a leaderless swarm — defer, keep serving — because it is the same
+fact: this node cannot read the swarm's control-plane configs right now.
+
+And on the way down it disarmed the watchdog: `pmcluster` rewrites
+`<data_dir>/node-policy.json` at startup from `node_docker_restart`, which is a
+leader-owned setting a worker's store does not hold — so it wrote its own default,
+`false`, over the answer the leader had already pushed to that file. The watchdog then
+probed three times, saw nothing to do, and logged nothing. The policy is now written
+only by a store that actually holds the decision; on a worker the runner assignment
+carries it, and the daemon leaves the file alone.
 
 **What it still cannot do.** It cannot recover a node that is out of memory: if the
 kernel is killing processes, the timer is not running either. It cannot reboot a
@@ -187,15 +216,19 @@ nobody reads, which is worse than silence.
 
 ### A node with no row in Node resources
 
-The console's node panel is fed by each node's **own** daemon over OTLP, through the
-leader's collector, into `/var/stack/nodestat/nodestat.jsonl`. A node missing from
+The console's node panel is fed by each node's **own** daemon: the sample travels to
+the leader over swarm mTLS and lands in `node_stats`, and the leader also relays the same
+sample into the metrics pipeline as `system.cpu.utilization`, `system.memory.utilization` and
+`system.cpu.load_average.1m` — so the numbers are queryable in Parseable for every node, not
+just the one running the collector. A node missing from
 the table is therefore a telemetry question, not a swarm one — and it is the
 question this section exists to answer, because the panel looked broken while four
 daemons had simply given up.
 
 **The endpoint is supervised, not decided at boot.** `pmcluster serve` resolves
-self-telemetry (`otlp_endpoint: auto` → this node's swarm address, dial-checked)
-every **minute** and reconciles the exporter with the answer:
+self-telemetry (`otlp_endpoint: auto` → loopback on the leader; on any other node the
+manager address that answers on the collector's port, i.e. the leader) every **minute**
+and reconciles the exporter with the answer:
 
 | The probe says | What the daemon does |
 |---|---|
@@ -207,7 +240,6 @@ every **minute** and reconciles the exporter with the answer:
 
 The node-stat sampler starts **once, on the first successful probe**, and never stops
 afterwards: a sampler with no exporter would do work nobody reads. Its own sampling
-is unconditional by node (the leader included) because the collector's file exporter
 is a sink, not a loop.
 
 Before this, the decision was taken once at startup. A node that booted while the
@@ -219,6 +251,66 @@ five-node cluster showed one row.
 
 ```sh
 journalctl -u pmcluster | grep -i "self-telemetry\|OTel telemetry"
+**How a node's numbers reach the leader.** The console is served by the leader; the
+numbers belong to the node that runs the workload. A host process cannot reach an
+overlay-only service, so the leader can measure exactly one machine — itself. Each node
+therefore POSTs its own sample to the leader on the swarm-mTLS listener:
+
+```
+POST /internal/api/cluster/report      (node certificate, never a token)
+     {"hostname":…,"cores":…,"load1":…,"mem_total_mb":…,"docker_up":…,"top_rss":[…],"ts":…}
+```
+
+`/internal/api` and not `/api`: these routes are for nodes, and the public API's token auth
+must never be the thing standing between a node and its own measurement. The hostname is
+taken from the **certificate**, not the body — a node that claims another's name is
+corrected and logged, because otherwise one machine overwrites another's row and every
+panel built on it lies.
+
+The leader upserts one row per node (never a history: the control-plane SQLite file is what
+every request reads). So the overview and the runner panel keep working when the collector
+is down or Parseable is being upgraded — the store holds the current values, the collector
+holds the history.
+
+**How the collector is exposed, and the incident behind it.** Its OTLP port is published
+`mode: host`, so 4318 exists on the node running the collector — the leader — and nowhere
+else. It was `mode: ingress` before, which binds the port on **every** node and forwards to
+the single task, and it was chosen for a reason worth remembering: with host mode and no
+daemon-side guard, every non-leader daemon dialled a port nothing bound locally, the OTel
+SDK's default error handler logged each failed export, and on 2026-11-08 one node wrote
+261,617 journal lines from a single boot until journald starved docker's heartbeat and the
+swarm marked it Down.
+
+That class is closed at the source now — `telemetry.SetErrorHandler` is bounded (one line
+per distinct failure, then a rate-limited summary) and the supervisor disables an exporter
+whose endpoint stops answering — so the narrow publish is safe again. `doctor` asserts the
+shape:
+
+```
+collector exposure   observability_otel-collector OTLP 4318 is published with mode: host
+                     (the node running the task only)
+```
+
+An `ingress` mode here is a WARN, not a fault: the platform works, but 4318 answers on
+machines that have no collector, which is exactly the state that hid the flood.
+
+**Where the collector runs, and why the check names two nodes.** The collector follows the
+**leader by name** — the same mechanism the edge, the SSO stack and the backup stack use —
+not by a label constraint. A constraint says "wherever `pmcluster.leader=true` happens to
+be", which floats: when leadership moves and nothing re-renders, the task stays on the old
+node, the new leader's daemon finds nothing on its own socket, and the only symptom is
+quiet panels. A rendered hostname cannot float, and `checkPlacementHosts` refuses one the
+swarm does not have.
+
+`doctor` therefore compares the running service's constraint with the current leader and
+names both when they disagree:
+
+```
+collector placement  observability_otel-collector is pinned to nxt-sw-1-m, but the leader
+                     is nxt-sw-5-m — the stack was not re-rendered after leadership moved;
+                     run `pmcluster cluster update`
+```
+
 docker service ps observability_otel-collector     # is the collector itself running
 ss -ltnp | grep 4318                               # does this node answer the OTLP port
 ```
@@ -410,3 +502,14 @@ while the process still has room instead of the cgroup killing it. Swarm service
 have no `oom_score_adj` field (`docker stack config` rejects it), so the ordering
 between the daemon and its tasks is bought from the daemon's side: the control
 plane drops to -500, the tasks stay at 0, and the kernel picks the task.
+
+## What `doctor` reports about runner caches
+
+`runner caches` is a per-node check on the volumes a job keeps between runs — the Go
+module cache, the npm store and the inner daemon's `/var/lib/docker`. It reads sizes from
+`docker system df -v`, because that is the only place they exist.
+
+It is a WARN when a cache passes its ceiling and OK otherwise, and it is skipped when the
+node runs no runner: the volumes are created with the first job, so their absence on a node
+that runs nothing is not a finding. If docker cannot measure them, the check says that
+rather than reporting zero — a number nobody measured is worse than an admission.

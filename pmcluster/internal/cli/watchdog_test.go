@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
 )
 
 // watchdogHarness is one node's worth of watchdog state: a fake clock, a fake
@@ -41,7 +44,9 @@ func newWatchdogHarness(t *testing.T) *watchdogHarness {
 	return h
 }
 
-func (h *watchdogHarness) statePath() string { return filepath.Join(h.dir, watchdogStateFile) }
+func (h *watchdogHarness) statePath() string {
+	return filepath.Join(h.dir, nodeunits.WatchdogStateFile)
+}
 
 func (h *watchdogHarness) deps() watchdogDeps {
 	return watchdogDeps{
@@ -76,9 +81,9 @@ func (h *watchdogHarness) step(t *testing.T, d time.Duration) watchdogVerdict {
 	return v
 }
 
-func (h *watchdogHarness) state(t *testing.T) watchdogState {
+func (h *watchdogHarness) state(t *testing.T) noderuntime.WatchdogState {
 	t.Helper()
-	st, ok := loadWatchdogState(h.statePath())
+	st, ok := noderuntime.LoadWatchdogState(h.statePath())
 	if !ok {
 		t.Fatalf("watchdog state file %s is missing", h.statePath())
 	}
@@ -114,9 +119,9 @@ func TestWatchdog_ThreeFailuresRestart(t *testing.T) {
 		t.Errorf("restart log line does not name the failure count:\n%s", got)
 	}
 	st := h.state(t)
-	if st.Failures != WatchdogFailuresBeforeRestart {
+	if st.Failures != nodeunits.WatchdogFailuresBeforeRestart {
 		t.Errorf("persisted failures = %d, want %d (the count must survive the restart)",
-			st.Failures, WatchdogFailuresBeforeRestart)
+			st.Failures, nodeunits.WatchdogFailuresBeforeRestart)
 	}
 	if st.LastRestart != h.now.Unix() {
 		t.Errorf("persisted last_restart = %d, want %d", st.LastRestart, h.now.Unix())
@@ -276,7 +281,7 @@ func TestWatchdog_StateSurvivesTheFilesystem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read state: %v", err)
 	}
-	var disk watchdogState
+	var disk noderuntime.WatchdogState
 	if err := json.Unmarshal(raw, &disk); err != nil {
 		t.Fatalf("state file is not JSON: %v\n%s", err, raw)
 	}
@@ -336,8 +341,8 @@ func TestHostLoopbackURL(t *testing.T) {
 		{"127.0.0.1:9090", "http://127.0.0.1:9090/health"},
 		{"[::]:9090", "http://[::1]:9090/health"},
 		{":9090", "http://127.0.0.1:9090/health"},
-		{"", defaultWatchdogProbeURL},
-		{"garbage", defaultWatchdogProbeURL},
+		{"", nodeunits.DefaultWatchdogProbeURL},
+		{"garbage", nodeunits.DefaultWatchdogProbeURL},
 	} {
 		if got := hostLoopbackURL(tc.in); got != tc.want {
 			t.Errorf("hostLoopbackURL(%q) = %q, want %q", tc.in, got, tc.want)
@@ -349,10 +354,10 @@ func TestHostLoopbackURL(t *testing.T) {
 // depends on: a 60 s timer, a oneshot service, and the three arguments the
 // command needs to work as root without reading the operator's config.
 func TestWatchdogUnits_AreWiredEveryMinute(t *testing.T) {
-	timer := unitSections(t, renderWatchdogTimer())
+	timer := unitSections(t, nodeunits.RenderWatchdogTimer())
 	tim, ok := timer["Timer"]
 	if !ok {
-		t.Fatalf("timer has no [Timer] section:\n%s", renderWatchdogTimer())
+		t.Fatalf("timer has no [Timer] section:\n%s", nodeunits.RenderWatchdogTimer())
 	}
 	if got := unitSeconds(t, "OnUnitActiveSec", tim["OnUnitActiveSec"]); got != time.Minute {
 		t.Errorf("OnUnitActiveSec = %s, want 1m0s", got)
@@ -364,8 +369,8 @@ func TestWatchdogUnits_AreWiredEveryMinute(t *testing.T) {
 		t.Error("Persistent must not be set: a run missed while the node was down has nothing to probe")
 	}
 
-	svc := unitSections(t, renderWatchdogService(
-		"/usr/local/bin/pmcluster", "/home/pmuser/.pmcluster/watchdog.json", defaultWatchdogProbeURL))
+	svc := unitSections(t, nodeunits.RenderWatchdogService(
+		"/usr/local/bin/pmcluster", "/home/pmuser/.pmcluster/watchdog.json", nodeunits.DefaultWatchdogProbeURL))
 	s, ok := svc["Service"]
 	if !ok {
 		t.Fatalf("service has no [Service] section")
@@ -379,7 +384,7 @@ func TestWatchdogUnits_AreWiredEveryMinute(t *testing.T) {
 	for _, want := range []string{
 		"health-watch",
 		"--state-file /home/pmuser/.pmcluster/watchdog.json",
-		"--probe-url " + defaultWatchdogProbeURL,
+		"--probe-url " + nodeunits.DefaultWatchdogProbeURL,
 		"--unit pmcluster",
 	} {
 		if !strings.Contains(s["ExecStart"], want) {
@@ -399,29 +404,29 @@ func TestWatchdogUnits_AreWiredEveryMinute(t *testing.T) {
 // daemon unit, with the timer enabled — a watchdog that is written but never
 // enabled is the failure mode this test names.
 func TestEnsureDaemonRunning_InstallsTheWatchdog(t *testing.T) {
-	oldPath, oldSys, oldHas, oldWrite, oldHost := daemonUnitPath, systemctlFn, hasSystemctl, writeUnitFn, hostOS
+	oldPath, oldSys, oldHas, oldWrite, oldHost := nodeunits.DaemonUnitPath, nodeunits.Systemctl, nodeunits.HasSystemctl, nodeunits.WriteUnit, nodeunits.HostOS
 	t.Cleanup(func() {
-		daemonUnitPath, systemctlFn, hasSystemctl, writeUnitFn, hostOS = oldPath, oldSys, oldHas, oldWrite, oldHost
+		nodeunits.DaemonUnitPath, nodeunits.Systemctl, nodeunits.HasSystemctl, nodeunits.WriteUnit, nodeunits.HostOS = oldPath, oldSys, oldHas, oldWrite, oldHost
 	})
-	hostOS = "linux"
-	hasSystemctl = func() bool { return true }
-	writeUnitFn = os.WriteFile
+	nodeunits.HostOS = "linux"
+	nodeunits.HasSystemctl = func() bool { return true }
+	nodeunits.WriteUnit = os.WriteFile
 	t.Setenv("PMCLUSTER_USER", "testuser")
 
 	dir := t.TempDir()
-	daemonUnitPath = filepath.Join(dir, "pmcluster.service")
+	nodeunits.DaemonUnitPath = filepath.Join(dir, "pmcluster.service")
 	var calls []string
-	systemctlFn = func(args ...string) error {
+	nodeunits.Systemctl = func(args ...string) error {
 		calls = append(calls, strings.Join(args, " "))
 		return nil
 	}
 
 	var out bytes.Buffer
-	if err := ensureDaemonRunning(&out); err != nil {
-		t.Fatalf("ensureDaemonRunning: %v", err)
+	if err := nodeunits.EnsureDaemonRunning(&out, configPath); err != nil {
+		t.Fatalf("nodeunits.EnsureDaemonRunning: %v", err)
 	}
 
-	servicePath, timerPath := watchdogUnitPaths()
+	servicePath, timerPath := nodeunits.WatchdogUnitPaths()
 	svc, err := os.ReadFile(servicePath)
 	if err != nil {
 		t.Fatalf("watchdog service not written next to the daemon unit: %v", err)
@@ -447,8 +452,8 @@ func TestEnsureDaemonRunning_InstallsTheWatchdog(t *testing.T) {
 
 	// Idempotent: a second pass must not rewrite the units.
 	var out2 bytes.Buffer
-	if err := ensureDaemonRunning(&out2); err != nil {
-		t.Fatalf("second ensureDaemonRunning: %v", err)
+	if err := nodeunits.EnsureDaemonRunning(&out2, configPath); err != nil {
+		t.Fatalf("second nodeunits.EnsureDaemonRunning: %v", err)
 	}
 	if strings.Contains(out2.String(), "installed health watchdog units") {
 		t.Errorf("second run re-installed the watchdog units:\n%s", out2.String())

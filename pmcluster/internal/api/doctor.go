@@ -14,7 +14,11 @@ import (
 // DoctorHandler runs the platform health checks and reports them as JSON.
 //
 // The daemon already holds the store, the cipher and the docker client, so this
-// is the same measurement `pmcluster doctor` makes — reachable from the console
+// is the same measurement `pmcluster doctor` makes.
+//
+// NOTHING IN THE CONSOLE CALLS THIS YET (checked 2026-11-16: no template, no script, no pmclient
+// method). An earlier comment claimed it was "reachable from the console", which was untrue and
+// made the health model look visible when it is CLI-only. Wiring a Health page here is open work.
 // and from anything that wants to gate on platform health.
 func DoctorHandler(dc runtime.Client, st *store.Store, cipher *credentials.Cipher, gha doctor.GitHubAppProbe) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

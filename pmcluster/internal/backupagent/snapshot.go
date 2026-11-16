@@ -158,7 +158,10 @@ func (l *LVMSnapshotter) Thaw(ctx context.Context, root string) error {
 	return nil
 }
 
-// Snapshot creates the thin snapshot and mounts it read-only.
+// Snapshot creates the thin snapshot and mounts the copy read-WRITE, so the
+// kernel replays its journal on the copy and the archive holds an already
+// recovered tree. (The old wording said read-only, which contradicted both the
+// recovery step and the type's own documentation.)
 func (l *LVMSnapshotter) Snapshot(ctx context.Context, root string, at time.Time) (string, string, error) {
 	if l.VG == "" || l.LV == "" {
 		return "", "", fmt.Errorf("snapshot: VG and LV are required (set backup_vg / backup_lv)")

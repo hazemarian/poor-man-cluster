@@ -77,18 +77,33 @@ func SecretHash(value string) string {
 }
 
 // CreateSecret inserts a new secret. Returns ErrSecretExists on name clash.
+//
+// secrets is one of the tables a follower mirrors (Store.Snapshot), so the insert
+// shares its transaction with the cluster-version bump: a row that landed without a
+// bump would stay invisible to every follower until an unrelated write advanced the
+// counter.
 func (s *Store) CreateSecret(ctx context.Context, scope, stack, name string, payload []byte, hash string) (int64, error) {
-	res, err := s.conn().ExecContext(ctx,
-		`INSERT INTO secrets (scope, stack, name, payload, hash, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		scope, stack, name, payload, hash, time.Now().Unix(),
-	)
-	if err != nil {
-		if isUniqueViolation(err) {
-			return 0, ErrSecretExists
+	var id int64
+	err := s.inTxBump(ctx, func(tx *sql.Tx) (bool, error) {
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO secrets (scope, stack, name, payload, hash, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			scope, stack, name, payload, hash, time.Now().Unix(),
+		)
+		if err != nil {
+			if isUniqueViolation(err) {
+				return false, ErrSecretExists
+			}
+			return false, fmt.Errorf("insert secret: %w", err)
 		}
-		return 0, fmt.Errorf("insert secret: %w", err)
+		if id, err = res.LastInsertId(); err != nil {
+			return false, fmt.Errorf("insert secret id: %w", err)
+		}
+		return true, nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 // Secret fetches a secret by name (including ciphertext payload).
@@ -134,59 +149,78 @@ func (s *Store) ListSecrets(ctx context.Context, scope, stack string) ([]*Secret
 	return out, rows.Err()
 }
 
-// UpdateSecret replaces the ciphertext payload and hash of an existing secret
-// and bumps its swarm rotation counter (SwarmRev +1) so the CLI can mirror
-// the new value into a fresh versioned swarm secret without touching the
-// immutable in-use one. Keeps scope, stack, name and created_at.
+// UpdateSecret replaces the ciphertext payload and hash of an existing secret and
+// bumps its swarm rotation counter (SwarmRev +1) so the CLI can mirror the new
+// value into a fresh versioned swarm secret without touching the immutable in-use
+// one. Keeps scope, stack, name and created_at.
 // Returns ErrSecretNotFound when no row matched.
+//
+// Always bumps the cluster version when it matches: swarm_rev is part of the
+// snapshot, so every rotation is a content change even when the plaintext is the
+// same (re-sealing produces a new nonce, hence new ciphertext).
 func (s *Store) UpdateSecret(ctx context.Context, name string, payload []byte, hash string) error {
-	res, err := s.conn().ExecContext(ctx,
-		`UPDATE secrets SET payload = ?, hash = ?, swarm_rev = swarm_rev + 1 WHERE name = ?`, payload, hash, name)
-	if err != nil {
-		return fmt.Errorf("update secret: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrSecretNotFound
-	}
-	return nil
+	return s.inTxBump(ctx, func(tx *sql.Tx) (bool, error) {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE secrets SET payload = ?, hash = ?, swarm_rev = swarm_rev + 1 WHERE name = ?`, payload, hash, name)
+		if err != nil {
+			return false, fmt.Errorf("update secret: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return false, fmt.Errorf("rows affected: %w", err)
+		}
+		if n == 0 {
+			return false, ErrSecretNotFound
+		}
+		return true, nil
+	})
 }
 
 // UpdateSecretStack retags a secret row's scope and stack. This is how a row
 // created unattached (stack "") gets bound to a stack — or moved between them —
 // from the console or CLI, without touching its payload. Returns
 // ErrSecretNotFound when no row matched.
+//
+// A retag to the values the row already carries is a no-op and does not bump;
+// callers re-apply bindings idempotently.
 func (s *Store) UpdateSecretStack(ctx context.Context, name, scope, stack string) error {
-	res, err := s.conn().ExecContext(ctx,
-		`UPDATE secrets SET scope = ?, stack = ? WHERE name = ?`, scope, stack, name)
-	if err != nil {
-		return fmt.Errorf("update secret stack: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrSecretNotFound
-	}
-	return nil
+	return s.inTxBump(ctx, func(tx *sql.Tx) (bool, error) {
+		var haveScope, haveStack string
+		err := tx.QueryRowContext(ctx, `SELECT scope, stack FROM secrets WHERE name = ?`, name).
+			Scan(&haveScope, &haveStack)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, ErrSecretNotFound
+		}
+		if err != nil {
+			return false, fmt.Errorf("read secret scope: %w", err)
+		}
+		if haveScope == scope && haveStack == stack {
+			return false, nil
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE secrets SET scope = ?, stack = ? WHERE name = ?`, scope, stack, name); err != nil {
+			return false, fmt.Errorf("update secret stack: %w", err)
+		}
+		return true, nil
+	})
 }
 
 // DeleteSecret removes a secret. Returns ErrSecretNotFound when no row matched.
+// A delete that removed a row bumps the cluster version; the absent row is how the
+// follower learns to delete its mirror of it.
 func (s *Store) DeleteSecret(ctx context.Context, name string) error {
-	res, err := s.conn().ExecContext(ctx, `DELETE FROM secrets WHERE name = ?`, name)
-	if err != nil {
-		return fmt.Errorf("delete secret: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrSecretNotFound
-	}
-	return nil
+	return s.inTxBump(ctx, func(tx *sql.Tx) (bool, error) {
+		res, err := tx.ExecContext(ctx, `DELETE FROM secrets WHERE name = ?`, name)
+		if err != nil {
+			return false, fmt.Errorf("delete secret: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return false, fmt.Errorf("rows affected: %w", err)
+		}
+		if n == 0 {
+			return false, ErrSecretNotFound
+		}
+		return true, nil
+	})
 }

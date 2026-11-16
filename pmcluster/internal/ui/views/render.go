@@ -238,6 +238,15 @@ func shortImage(v string) string {
 // full page load (no HX-Request header — a browser refresh or deep link on a
 // fragment URL) and ShellData is set, it renders the app shell with the
 // fragment embedded in #view so navigation styles survive a refresh.
+//
+// HX-History-Restore-Request is a full page load too, and that is not obvious:
+// when the operator presses Back or Forward, HTMX re-requests the pushed URL
+// WITH HX-Request set and replaces the entire document with what comes back. A
+// fragment there produces a page that is literally the fragment — no <head>, no
+// stylesheets, no sidebar, raw HTML — which is exactly how the console looked on
+// 2026-11-16 at /web/overview. The console pushes a URL on 21 links, so Back was
+// always going to find it. htmx documents this: history restore must be answered
+// with a full page.
 func (r *Renderer) Fragment(c *gin.Context, name string, data any) {
 	// The same URL answers two ways (fragment for htmx, whole page otherwise), so caches must key on the
 	// request kind, and revalidate: otherwise Back can show a stored fragment with no stylesheet.

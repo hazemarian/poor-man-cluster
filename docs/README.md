@@ -54,10 +54,10 @@ the [whitepaper](whitepaper.md).
 | `settings.md` | The cluster-settings catalogue: every key the daemon accepts, its default, who sets it, and how a change reaches the swarm |
 | `console.md` | The operator console: every page, auth model, status badges |
 | `storage-and-databases.md` | Storage nodes and auto-placement, the Path 1 decision, storage matrix, DB strategies, moving/failing over a stack — backups live in `backup.md` |
-| `health.md` | `pmcluster doctor`: every health check, what it measures and what it cannot see — the control-plane kit drill, the offsite re-read, version skew across managers, and why a node can be missing from Node resources (the supervised self-telemetry probe, the bounded node-stats file) |
+| `health.md` | `pmcluster doctor`: every health check, what it measures and what it cannot see — the cluster-mirror drill, the offsite re-read, version skew across managers, and why a node can be missing from Node resources (the supervised self-telemetry probe, the bounded node-stats file) |
 | `backup.md` | **The** backup chapter: the snapshot-capable volume and its repair, the hourly run (no freeze, and why), what an artifact is, what "verified" means per engine, the three destinations, retention, discovery, restore, the failure modes seen in production, what is not built, and the open questions |
 | `network-topology.md` | Traffic planes, topology options, firewall reference, DNS routing |
-| `control-loop-design.md` | The reconcile loop as built — passes, drift signals, outage pause, Raft snapshot |
+| `control-loop-design.md` | The reconcile loop as built — passes, drift signals, outage pause, the cluster-state mirror |
 | `test-reports/` | TC1–TC10 field reports from live campaigns |
 | `whitepaper.md` | The technical whitepaper — problem, hardware envelope, architecture, design rationale, limitations |
 

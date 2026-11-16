@@ -11,84 +11,20 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
-// The OTel collector is placed by a HARD constraint on
-// node.labels.pmcluster.leader (see embeds/observability-stack.yml). A
-// constraint has no schedulable floor: when no node carries the label the task
-// never starts, and the only symptom is an empty node-stats panel with nothing in
-// the deploy output saying why. These helpers make the label an explicit
-// precondition of deploying that stack, and make a placement change actually
-// move the running task — the scheduler keeps a running task where it is, so a
-// rewritten constraint alone moves nothing.
-
-// noLeaderLabelCondition is the one sentence for the condition underneath the
-// deploy refusal and the doctor check, so an operator who reads it in a failed
-// update and then runs `pmcluster doctor` reads the same words in both places.
-const NoLeaderLabelCondition = "no node carries " + runtime.LeaderNodeLabel + "=true — the leader must claim it before the collector can be pinned"
-
-// noLeaderLabelCondition is the local spelling used inside this package.
-const noLeaderLabelCondition = NoLeaderLabelCondition
-
-// RequireLeaderLabel verifies that some node carries pmcluster.leader=true,
-// which the collector's placement constraint requires. It is called before the
-// observability stack is deployed: deploying without it produces a service that
-// sits at 0/1 with no task log to explain it, which looks like a scheduler bug
-// rather than a missing label.
-func RequireLeaderLabel(ctx context.Context, dc runtime.Client) error {
-	if dc == nil {
-		return nil // no orchestrator (standalone): nothing is constrained
-	}
-	nodes, err := dc.NodeList(ctx)
-	if err != nil {
-		return fmt.Errorf("cannot verify %s=true: %w", runtime.LeaderNodeLabel, err)
-	}
-	if len(nodes) == 0 {
-		// A manager's node list always contains at least itself, so an empty
-		// list is a client in transition, not a cluster without a leader.
-		// Nothing can schedule against an empty inventory; the deploy below
-		// fails on its own terms rather than being misnamed here.
-		return nil
-	}
-	for _, n := range nodes {
-		if n.Labels[runtime.LeaderNodeLabel] == "true" {
-			return nil
-		}
-	}
-	return fmt.Errorf("%s", noLeaderLabelCondition)
-}
-
-// ClaimLeaderLabel stamps pmcluster.leader=true on the current Swarm leader when
-// no node carries it, and returns the node that carries it afterwards ("" when
-// there is no leader to claim).
+// The OTel collector follows the LEADER by NAME, the way every other platform service
+// does (edge, sso, backup). That replaced a hard constraint on
+// node.labels.pmcluster.leader, which needed three helpers to be usable at all: a deploy
+// gate (no label → 0/1 with nothing in the output), a bootstrap claim (a fresh install
+// deploys before the daemon that maintains the label exists), and a doctor condition.
+// A rendered hostname needs none of that:
 //
-// `cluster up` calls this before deploying: on a fresh install the daemon that
-// normally maintains the label is installed and started AFTER the deploy, so the
-// collector's constraint would match nothing on exactly the run that creates it.
-// The CLI is a manager here (Preflight requires it), which is enough to label the
-// leader; the daemon re-asserts the same value on every leader tick.
-func ClaimLeaderLabel(ctx context.Context, dc runtime.Client) (string, error) {
-	if dc == nil {
-		return "", nil
-	}
-	nodes, err := dc.NodeList(ctx)
-	if err != nil {
-		return "", fmt.Errorf("list nodes for the %s label: %w", runtime.LeaderNodeLabel, err)
-	}
-	for _, n := range nodes {
-		if n.Labels[runtime.LeaderNodeLabel] == "true" {
-			return n.Hostname, nil
-		}
-	}
-	for _, n := range nodes {
-		if !n.IsLeader || n.Hostname == "" {
-			continue
-		}
-		if err := dc.SetNodeLabel(ctx, n.ID, runtime.LeaderNodeLabel, "true"); err != nil {
-			return "", fmt.Errorf("claim %s=true on leader %s: %w", runtime.LeaderNodeLabel, n.Hostname, err)
-		}
-		return n.Hostname, nil
-	}
-	return "", nil
-}
+//   - the render reads the live leader, so the placement is right by construction;
+//   - checkPlacementHosts refuses a hostname the swarm does not have, which is the
+//     failure the label gate existed to catch, caught earlier and by name;
+//   - forceCollectorIfPlacementChanged still moves the running task, because
+//     `docker stack deploy` rewrites the spec and does not reschedule a healthy task.
+//
+// What is left here is only the moving half.
 
 // observabilityCollectorService is the collector's Swarm service name
 // (`<stack>_<service>`), the one service this package moves directly.

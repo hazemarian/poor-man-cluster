@@ -53,6 +53,18 @@ type Sample struct {
 	// anything, which the panel must say out loud.
 	DockerUp int `json:"docker_up"`
 
+	// CPUIdleFrac is the fraction of CPU time this node spent idle over the interval
+	// since the previous Collect: 1.0 means nothing ran, 0.0 means it was saturated.
+	// It is the same quantity the collector's own hostmetrics receiver publishes as
+	// system.cpu.utilization{state=idle}, which is what lets a daemon-produced sample
+	// be read by a view built for host metrics.
+	//
+	// Known is false on the first sample (there is no interval to divide by yet) and
+	// whenever /proc/stat could not be read — an unknown utilization must not be
+	// published as 0, which would read as a saturated node.
+	CPUIdleFrac  float64 `json:"cpu_idle_frac"`
+	CPUIdleKnown bool    `json:"cpu_idle_known"`
+
 	TopRSS []Proc `json:"top_rss"`
 	TopCPU []Proc `json:"top_cpu"`
 
@@ -74,6 +86,13 @@ type Sampler struct {
 
 	prev   map[int]procTicks
 	prevAt time.Time
+
+	// prevCPUTotal/prevCPUIdle are the last aggregate jiffy counters read from the
+	// first line of /proc/stat. Node-level utilization only exists as a DELTA, so the
+	// first Collect can record nothing and the second can.
+	prevCPUTotal int64
+	prevCPUIdle  int64
+	hasPrevCPU   bool
 }
 
 type procTicks struct {
@@ -109,6 +128,7 @@ func (s *Sampler) Collect(now time.Time) (Sample, error) {
 		smp.MemTotalMB, smp.MemAvailMB = total, avail
 		smp.MemUsedMB = total - avail
 	}
+	smp.CPUIdleFrac, smp.CPUIdleKnown = s.cpuIdleFrac()
 	procs, err := s.processes(now)
 	if err != nil {
 		return smp, err
@@ -145,6 +165,65 @@ func TopBy(procs []Proc, value func(Proc) float64, n int) []Proc {
 
 func (s *Sampler) path(parts ...string) string {
 	return filepath.Join(append([]string{s.Root}, parts...)...)
+}
+
+// cpuIdleFrac returns the idle share of CPU time since the previous call, from the
+// aggregate "cpu" line of /proc/stat (user nice system idle iowait irq softirq steal ...).
+//
+// idle + iowait is the part the machine spent doing nothing, which is what hostmetrics
+// reports as state=idle; everything else is work. Two calls are needed because the file
+// holds counters since boot, not rates — the first call only remembers them.
+//
+// A counter that goes backwards (a rebooted fixture, a wrapped value) is treated as
+// "unknown" rather than as negative utilization.
+func (s *Sampler) cpuIdleFrac() (float64, bool) {
+	b, err := os.ReadFile(s.path("proc", "stat"))
+	if err != nil {
+		return 0, false
+	}
+	var fields []string
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "cpu ") {
+			fields = strings.Fields(line)[1:]
+			break
+		}
+	}
+	if len(fields) < 4 {
+		return 0, false
+	}
+	var total, idle int64
+	for i, f := range fields {
+		v, err := strconv.ParseInt(f, 10, 64)
+		if err != nil {
+			// One unreadable field is not worth failing the sample over: keep the ones
+			// that parsed. guest/guest_nice are already counted inside user/nice on
+			// every kernel that has them, which is why summing them unconditionally is
+			// still the right total.
+			continue
+		}
+		total += v
+		if i == 3 || i == 4 {
+			idle += v
+		}
+	}
+	if total == 0 {
+		return 0, false
+	}
+	if !s.hasPrevCPU {
+		s.prevCPUTotal, s.prevCPUIdle, s.hasPrevCPU = total, idle, true
+		return 0, false
+	}
+	dTotal := total - s.prevCPUTotal
+	dIdle := idle - s.prevCPUIdle
+	s.prevCPUTotal, s.prevCPUIdle = total, idle
+	if dTotal <= 0 || dIdle < 0 {
+		return 0, false
+	}
+	idleFrac := float64(dIdle) / float64(dTotal)
+	if idleFrac > 1 {
+		idleFrac = 1
+	}
+	return idleFrac, true
 }
 
 func (s *Sampler) cores() (int, error) {
@@ -310,4 +389,46 @@ func (s *Sampler) rssKB(pid int) int64 {
 		}
 	}
 	return 0
+}
+
+// Stat is the row view of a sample: what the console reads, one row per node. It used to
+// live beside the JSONL reader; the reader is gone with the file transport, and this is
+// the shape both producers agree on (a node's report, written by the leader).
+type Stat struct {
+	Hostname   string
+	Role       string
+	Cores      int
+	Load1      float64
+	Load5      float64
+	Load15     float64
+	MemTotalMB int64
+	MemUsedMB  int64
+	MemAvailMB int64
+	DockerUp   int
+	TopRSS     []Proc
+	TopCPU     []Proc
+	SampleTS   int64
+}
+
+// Stat is the row view of this sample: what the console reads, one per node.
+//
+// It lives here rather than in the reader because there are now TWO producers — the
+// collector's JSONL file (the leader's own pipeline) and a node reporting itself over
+// mTLS — and a second copy of this mapping is how a field silently stops arriving.
+func (s Sample) Stat() Stat {
+	return Stat{
+		Hostname:   s.Hostname,
+		Role:       s.Role,
+		Cores:      s.Cores,
+		Load1:      s.Load1,
+		Load5:      s.Load5,
+		Load15:     s.Load15,
+		MemTotalMB: s.MemTotalMB,
+		MemUsedMB:  s.MemUsedMB,
+		MemAvailMB: s.MemAvailMB,
+		DockerUp:   s.DockerUp,
+		TopRSS:     s.TopRSS,
+		TopCPU:     s.TopCPU,
+		SampleTS:   s.TS,
+	}
 }

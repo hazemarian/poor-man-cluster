@@ -424,6 +424,10 @@ func writeEvidence(w http.ResponseWriter, res Result, err error) {
 	if err != nil || res.Status == StatusUnavailable {
 		dto.Status = string(StatusUnavailable)
 		dto.Error = "observability source unavailable"
+		// Deliberately one sentence: the underlying error can carry the source's address
+		// and shape, and this envelope is the shape the console renders. A test pins the
+		// sanitisation. What is missing is not detail in the RESPONSE — it is the cause in
+		// the JOURNAL, once, where an operator can find it.
 	}
 	writeJSON(w, http.StatusOK, dto)
 }

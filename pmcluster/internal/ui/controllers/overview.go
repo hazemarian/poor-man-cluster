@@ -59,6 +59,15 @@ type overviewData struct {
 	// version this console's daemon runs.
 	Skew      []versionModel
 	SkewKnown bool
+	// Health is what `pmcluster doctor` answers, minus the checks that pass — the console should
+	// say what is WRONG, not print seventeen green lines. It exists because every finding of the
+	// 2026-11-16 audit (a storage node with no backup agent, 1908 unbacked files) was invisible
+	// except to someone who typed the command on the right node.
+	Health      []healthModel
+	HealthKnown bool
+	// HealthTone is the banner tone: "bad" when a check failed, "warn" when only warnings remain
+	// (a template cannot call `if` as an argument, so the model carries the answer).
+	HealthTone string
 
 	InfoKnown  bool
 	NodesKnown bool
@@ -103,15 +112,18 @@ func (c Overview) Fragment(g *gin.Context) {
 		errN     error
 		stat     []pmapi.NodeStat
 		errS     error
+		checks   []pmapi.DoctorCheck
+		errD     error
 	)
 	var wg sync.WaitGroup
-	wg.Add(6)
+	wg.Add(7)
 	go func() { defer wg.Done(); me, err = c.API.Me(ctx) }()
 	go func() { defer wg.Done(); info, errI = c.API.ClusterInfo(ctx) }()
 	go func() { defer wg.Done(); versions, errV = c.API.Versions(ctx) }()
 	go func() { defer wg.Done(); rec, errA = c.API.ApplyRecord(ctx) }()
 	go func() { defer wg.Done(); nodes, errN = c.API.Nodes(ctx) }()
 	go func() { defer wg.Done(); stat, errS = c.API.NodeStats(ctx) }()
+	go func() { defer wg.Done(); checks, errD = c.API.Doctor(ctx) }()
 	wg.Wait()
 
 	if err == nil && me != nil {
@@ -125,6 +137,10 @@ func (c Overview) Fragment(g *gin.Context) {
 			SwarmState: info.Swarm.State, SwarmManagers: info.Swarm.Managers,
 			SwarmNodes: info.Swarm.Nodes, ControlAvailable: info.Swarm.ControlAvailable,
 		}
+	}
+	if errD == nil && checks != nil {
+		// Same shaping as every other screen: see healthView in health.go.
+		d.Health, d.HealthKnown, d.HealthTone = shapeHealth(checks)
 	}
 	if errV == nil && versions != nil {
 		d.SkewKnown = true

@@ -1,133 +1,72 @@
 package config
 
-import (
-	"context"
-	"fmt"
-	"net"
-	"net/netip"
-	"strconv"
-	"strings"
-	"time"
-)
+import "strings"
 
-// OTLPAutoEndpoint is the default value of otlp_endpoint. It does not name an
-// address; it asks the process to resolve THIS node's own address on every probe
-// (see ResolveOTLPEndpoint). Empty string still means "disabled".
+// OTLPAutoEndpoint is the default value of otlp_endpoint. It does not name an address;
+// it asks the process to place itself by ROLE (see ResolveOTLPEndpoint). Empty string
+// still means "disabled".
 const OTLPAutoEndpoint = "auto"
 
-// OTLPPort is the collector's OTLP/HTTP receiver port, published by the
-// observability stack with `mode: ingress` so every node in the swarm answers
-// on it (internal/cluster/embeds/observability-stack.yml).
+// OTLPPort is the collector's OTLP/HTTP receiver port. There is ONE collector, on the
+// leader, published with `mode: host` (internal/cluster/embeds/observability-stack.yml),
+// so the port exists on the leader and nowhere else.
 const OTLPPort = 4318
 
-// selfTelemetryDialTimeout bounds ONE dial of the reachability check. The daemon
-// re-probes every minute (internal/cli/telemetry_supervisor.go), so the timeout
-// must stay small: a dead endpoint must neither stall the probe loop nor delay
-// startup by more than a few seconds.
-const selfTelemetryDialTimeout = 2 * time.Second
-
-// loopbackAddress is the dial target for a node whose swarm record is the
-// wildcard address (0.0.0.0 / ::): the value means "this host", and the only
-// address that is certainly this host is loopback.
+// loopbackAddress is where the leader's daemon reaches the collector running beside it.
 const loopbackAddress = "127.0.0.1"
 
-// SwarmAddrFunc reports this node's swarm-advertised address (node.Status.Addr).
-// The daemon passes internal/docker.NodeSelfAddr; tests pass a stub.
-type SwarmAddrFunc func(ctx context.Context) (string, error)
-
-// DialFunc reports whether addr accepts a TCP connection. nil means the real
-// TCP dial with selfTelemetryDialTimeout.
-type DialFunc func(ctx context.Context, addr string) error
-
-// ResolveOTLPEndpoint turns the configured otlp_endpoint value into the base
-// URL the OTel exporters dial.
+// ResolveOTLPEndpoint turns the configured otlp_endpoint value into the base URL this
+// daemon's exporters dial.
 //
-//   - ""              → disabled ("" and no reason): the operator turned it off.
-//   - "auto" (default)→ this node's swarm address, dial-checked; disabled with
-//     a reason when the address cannot be read or nothing answers there. A
-//     wildcard address (0.0.0.0 / ::) — which is what a swarm records for the
-//     node holding leadership on this fleet — is dialled on loopback instead,
-//     because that is the one address that certainly names this host.
-//   - anything else   → used verbatim. An explicit endpoint is the operator's
-//     decision and is never second-guessed.
+//   - ""               → disabled: the operator turned it off.
+//   - "auto" (default) → the collector, wherever it is: loopback on the leader, the
+//     leader's own address on every other node.
+//   - anything else    → used verbatim: an explicit endpoint is the operator's decision.
 //
-// Why the address comes from the swarm and from nowhere else.
+// Every node exports its own logs, metrics and traces, and they all land in the one
+// collector the platform runs. The difference between nodes is only WHERE that collector
+// is: beside the leader, so the leader dials loopback and everyone else dials the leader.
 //
-// The daemon is a systemd process on the host, outside the swarm overlay. It
-// cannot resolve `observability_otel-collector` — that name only exists inside
-// the overlay's DNS — so pointing OTLPEndpoint at the service name (the obvious
-// fix, and the way every application on this cluster is wired) fails on every
-// node with a DNS error instead of a refused connection.
+// This replaced "loopback on the leader, DISABLED everywhere else". Disabled was not a
+// neutral choice: it meant four daemons of five exported nothing, the node reports that
+// carried their numbers landed in the leader's SQLite and stopped there, and the console
+// showed one node in a five-node cluster with no way to tell "quiet" from "not collected".
+// The telemetry never had to stop at the leader — it had to reach the collector, and the
+// collector is reachable from every node over the swarm data path.
 //
-// 127.0.0.1 was the constant this used to be, and it is only correct on the one
-// node that happens to be running the collector task. Everywhere else it is a
-// closed port, and an exporter pointed at a closed port is not a harmless
-// no-op: the OTel SDK's default error handler logs every failed export, with no
-// rate limit and no recovery path. On 2026-11-08 that cost node nxt-sw-4-m
-// (1 vCPU) 261,617 journald lines from a single daemon boot plus 238,951 /
-// 213,808 / 196,367 / 151,609 / 71,180 from other incarnations; journald writes
-// starved Docker's heartbeat, the swarm marked the node Down, and leadership
-// moved. A missing trace is acceptable. A wrong endpoint is not.
-//
-// Not route-derived either: neither the default-route interface, nor a UDP
-// "connect" trick, nor `hostname -I` names the address the swarm knows this
-// node by. Each of those can just as easily produce a private address that
-// nothing listens on — the same closed port, the same storm, reached by another
-// route. So the only accepted source is the swarm's own record of this node,
-// and the only accepted answer is one that answers a dial.
-func ResolveOTLPEndpoint(ctx context.Context, configured string, swarmAddr SwarmAddrFunc, dial DialFunc) (endpoint, disabledReason string) {
+// leaderEndpoint is only consulted on a non-leader, and is expected to be the empty string
+// unless something has ALREADY answered on the collector port (the caller dials the swarm
+// manager addresses first). That ordering is deliberate: pointing an exporter at a port
+// nobody listens on is what saturated nxt-sw-4-m's journal with 261,617 lines from a single
+// boot on 2026-11-08, and the SDK's bounded error handler is a safety net, not a licence to
+// dial blind.
+func ResolveOTLPEndpoint(configured string, isLeader bool, leaderEndpoint string) (endpoint, disabledReason string) {
 	switch v := strings.TrimSpace(configured); {
 	case v == "":
 		return "", ""
 	case !strings.EqualFold(v, OTLPAutoEndpoint):
 		return v, ""
 	}
-
-	if swarmAddr == nil {
-		return "", "self-telemetry disabled: no swarm address source is wired in"
+	if isLeader {
+		return "http://" + loopbackAddress + ":" + portString(OTLPPort), ""
 	}
-	addr, err := swarmAddr(ctx)
-	if err != nil {
-		return "", fmt.Sprintf("self-telemetry disabled: swarm node address unavailable: %v", err)
+	if e := strings.TrimSpace(leaderEndpoint); e != "" {
+		return e, ""
 	}
-	addr = strings.TrimSpace(addr)
-	if addr == "" {
-		return "", "self-telemetry disabled: the swarm reported an empty address for this node"
-	}
-	ip, perr := netip.ParseAddr(addr)
-	if perr != nil {
-		return "", fmt.Sprintf("self-telemetry disabled: swarm node address %q is not an IP address", addr)
-	}
-	if ip.IsUnspecified() {
-		// 0.0.0.0 / :: is not an address a PEER can dial, but it is a value a
-		// swarm records for the node itself and it means "this host". The
-		// collector is one task pinned to the leader, so on the leader loopback
-		// IS where its published 4318 answers — and refusing the wildcard was
-		// the leader-only skip that cost nxt-sw-5-m its own row in the Node
-		// resources panel: every other node exported, the leader had no
-		// exporter at all. The dial check below still refuses a node where
-		// nothing listens, so this cannot bring back the 2026-11-08 storm.
-		addr = loopbackAddress
-	} else if ip.IsLoopback() || ip.IsMulticast() {
-		return "", fmt.Sprintf("self-telemetry disabled: swarm node address %q is not routable from a peer", addr)
-	}
-
-	target := net.JoinHostPort(addr, strconv.Itoa(OTLPPort))
-	if dial == nil {
-		dial = tcpDial
-	}
-	if err := dial(ctx, target); err != nil {
-		return "", fmt.Sprintf("self-telemetry disabled: nothing answers at http://%s (%v)", target, err)
-	}
-	return "http://" + target, ""
+	return "", "no manager is answering the collector's OTLP port yet (the collector runs on the leader); re-probed every minute"
 }
 
-// tcpDial is the default DialFunc: one TCP connect, bounded.
-func tcpDial(ctx context.Context, addr string) error {
-	d := net.Dialer{Timeout: selfTelemetryDialTimeout}
-	conn, err := d.DialContext(ctx, "tcp", addr)
-	if err != nil {
-		return err
+// portString formats the OTLP port without pulling strconv into a file this small.
+func portString(n int) string {
+	if n <= 0 {
+		return "0"
 	}
-	return conn.Close()
+	var buf [6]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
 }

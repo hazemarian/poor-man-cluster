@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/time/rate"
 
@@ -111,8 +112,14 @@ func NewApp(cfg Config) (*App, error) {
 		return !fu.PasswordSet, nil
 	}
 
+	// A zero Logger has a nil writer and would panic on first use; Nop is the honest default for
+	// tests and for any caller that has not installed one.
+	uiLog := cfg.Logger
+	if uiLog.GetLevel() == zerolog.Disabled {
+		uiLog = zerolog.Nop()
+	}
 	ctrl := &controllers.Controller{
-		Store: st, API: api, Views: renderer, Auth: auth,
+		Store: st, API: api, Views: renderer, Auth: auth, Log: uiLog,
 		Version: cfg.AppVersion, Domain: cfg.ClusterDomain,
 		EnvAPI: cfg.PMAPIURL, EnvToken: cfg.PMAPIToken,
 		// The console asks the daemon for telemetry; it never holds the
@@ -311,6 +318,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	op.GET("/stacks/:name/secrets/reveal/:secret_name", scc.RevealSecret)
 
 	op.POST("/backups", bk.Create)
+	op.POST("/backups/platform", bk.Platform)
 	op.POST("/backups/:id/restore", bk.Restore)
 
 	op.POST("/deploy", dp.Submit)

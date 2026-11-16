@@ -66,6 +66,10 @@ type Deps struct {
 	Cipher        *credentials.Cipher
 	Backups       backups.Service
 
+	// PlatformExport is the manual control-plane export behind POST /api/backups/platform
+	// (ADR 0007). Optional; when nil the route is not mounted.
+	PlatformExport func(ctx context.Context) (backups.PlatformExportResult, error)
+
 	// Settings exposes the editable cluster settings surface under
 	// /api/cluster/settings. Optional; when nil those routes are omitted.
 	Settings settings.Service
@@ -256,7 +260,7 @@ func New(d Deps) http.Handler {
 				}).Mount(r)
 			}
 			if d.Backups != nil {
-				bh := &backups.HTTP{Svc: d.Backups}
+				bh := &backups.HTTP{Svc: d.Backups, PlatformExport: d.PlatformExport}
 				if d.Store != nil {
 					bh.VolumeRoot = func(ctx context.Context) string {
 						return d.Store.SettingDefault(ctx, cluster.SettingVolumeRoot(), "")

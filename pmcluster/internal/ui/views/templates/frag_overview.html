@@ -26,6 +26,12 @@
 {{template "banner" (dict "Tone" "warn" "Icon" "alert" "Title" (TF "overview.apply_warnings_title" (len .Apply.Warnings)) "Body" (T "overview.apply_warnings_body") "Extra" (partial "overview_apply_list" .) "Muted" (TF "overview.apply_warnings_when" .Apply.AtText .Apply.Source))}}
 {{end}}
 
+{{/* What `pmcluster doctor` found wrong, on the page an operator actually opens. The
+     version-skew banner below was the only health signal the console had; the rest — a storage
+     node with no backup agent, data no backup covers — lived only in the CLI. */}}
+{{if .Health}}
+{{template "banner" (dict "Tone" .HealthTone "Icon" "alert" "Title" (TF "overview.health_title" (len .Health)) "Body" (T "overview.health_body") "Extra" (partial "overview_health_list" .))}}
+{{end}}
 {{if .Skew}}
 {{template "banner" (dict "Tone" "warn" "Icon" "alert" "Title" (TF "overview.version_skew_title" (len .Skew)) "Body" (T "overview.version_skew_body") "Extra" (partial "overview_skew_list" .))}}
 {{end}}
@@ -292,6 +298,11 @@
 {{end}}
 
 {{define "overview_apply_list"}}<ul class="b-list">{{range .Apply.Warnings}}<li>{{.}}</li>{{end}}</ul>{{end}}
+
+{{define "overview_health_list"}}{{template "health_list" .}}{{end}}
+
+{{/* health_list is shared with the backups screen: the same checks, quoted the same way. */}}
+{{define "health_list"}}<ul class="b-list">{{range .Health}}<li><strong>{{.Name}}</strong> — {{.Detail}}</li>{{end}}</ul>{{end}}
 
 {{define "overview_skew_list"}}<ul class="b-list">{{range .Skew}}<li>{{.Hostname}} — {{.Version}}</li>{{end}}</ul>{{end}}
 

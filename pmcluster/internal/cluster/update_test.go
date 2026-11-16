@@ -93,9 +93,9 @@ func TestUpdate_RedeploysWhenLiveServiceLabelDrifted(t *testing.T) {
 	}
 
 	// Drifted: one service still carries an older render's hash.
-	svc := f.services["backup_control-plane-backup"]
+	svc := f.services["backup_seaweedfs"]
 	svc.Labels = map[string]string{runtime.RenderedHashLabel: "stale-from-an-older-render"}
-	f.services["backup_control-plane-backup"] = svc
+	f.services["backup_seaweedfs"] = svc
 
 	deployer2 := &recordingDeployer{}
 	deps.Deployer = deployer2
@@ -126,9 +126,12 @@ func TestUpdate_RedeploysWhenServiceLabelMissing(t *testing.T) {
 		t.Fatalf("baseline Update: %v", err)
 	}
 	f := deps.Docker.(*fakeDocker)
-	row, err := deps.Store.Config(ctx, "backup-stack")
+	// The mixed state is set up on the OBSERVABILITY stack: it is the one platform stack
+	// with several services since the backup stack lost its archivers and kept only the
+	// store.
+	row, err := deps.Store.Config(ctx, "observability-stack")
 	if err != nil {
-		t.Fatalf("read backup-stack: %v", err)
+		t.Fatalf("read observability-stack: %v", err)
 	}
 	var doc struct {
 		Services map[string]struct {
@@ -150,13 +153,12 @@ func TestUpdate_RedeploysWhenServiceLabelMissing(t *testing.T) {
 		t.Fatal("stored render carries no rendered-hash label")
 	}
 
-	// Stamp every backup service except one: the interrupted-deploy shape.
-	// Named explicitly before, which broke silently when the per-volume archiver
-	// was removed from the stack — so pick the first backup service that exists
-	// and stamp the rest.
+	// Stamp every observability service except one: the interrupted-deploy shape.
+	// Named explicitly before, which broke silently when a service was removed from a
+	// stack — so pick the first service of the stack that exists and stamp the rest.
 	stamped, unstamped := 0, ""
 	for name, svc := range f.services {
-		if !strings.HasPrefix(name, "backup_") {
+		if !strings.HasPrefix(name, "observability_") {
 			continue
 		}
 		if unstamped == "" {
@@ -169,7 +171,7 @@ func TestUpdate_RedeploysWhenServiceLabelMissing(t *testing.T) {
 		f.services[name] = svc
 	}
 	if unstamped == "" {
-		t.Fatal("fixture has no backup services")
+		t.Fatal("fixture has no observability services")
 	}
 	if stamped == 0 {
 		t.Fatal("fixture stamped no services; the mixed state was not set up")
@@ -180,14 +182,14 @@ func TestUpdate_RedeploysWhenServiceLabelMissing(t *testing.T) {
 	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
 		t.Fatalf("partial-deploy Update: %v", err)
 	}
-	var backupDeployed bool
+	var obsDeployed bool
 	for _, d := range deployer.deployedStacks {
-		if d.Name == "backup" {
-			backupDeployed = true
+		if d.Name == "observability" {
+			obsDeployed = true
 		}
 	}
-	if !backupDeployed {
-		t.Fatalf("expected the backup stack to be redeployed after a partial deploy, got %v", deployer.deployedStacks)
+	if !obsDeployed {
+		t.Fatalf("expected the observability stack to be redeployed after a partial deploy, got %v", deployer.deployedStacks)
 	}
 }
 
@@ -202,6 +204,19 @@ func healthyService(name string) runtime.Service {
 	return runtime.Service{Name: name, Stack: stack, Replicas: 1, Desired: 1}
 }
 
+// stubHostMutations keeps a test off the real host filesystem: Update creates the
+// storage roots and the platform bind sources, and on a non-root host those are
+// /var/stack paths it cannot make. A test that builds UpdateDeps by hand calls
+// this itself — before it existed, two of them passed only because an earlier test
+// had leaked the stub, so they failed the day the leak was fixed.
+func stubHostMutations(t *testing.T) {
+	t.Helper()
+	origStorage, origHost := ensureStorageDirs, ensurePlatformHostDirs
+	t.Cleanup(func() { ensureStorageDirs, ensurePlatformHostDirs = origStorage, origHost })
+	ensureStorageDirs = func(string) error { return nil }
+	ensurePlatformHostDirs = func(string) error { return nil }
+}
+
 // seedUpdateState runs a real Up with a fresh fake docker + deployer, then
 // returns a freshly-wired UpdateDeps (separate recording deployer) — plus the
 // config dir shared by up and update — so update tests observe exactly what
@@ -209,10 +224,15 @@ func healthyService(name string) runtime.Service {
 func seedUpdateState(t *testing.T) (UpdateDeps, string) {
 	t.Helper()
 	dir := t.TempDir()
+	// Both seams are package-level: leaving them stubbed would hand a no-op
+	// ensurePlatformHostDirs to every test that runs AFTER this helper, which is
+	// how a later test "passes" while nothing was created. Restore them.
+	origStorageDirs, origHostDirs := ensureStorageDirs, ensurePlatformHostDirs
+	t.Cleanup(func() { ensureStorageDirs, ensurePlatformHostDirs = origStorageDirs, origHostDirs })
 	ensureStorageDirs = func(string) error { return nil }
 	// The host-directory step is the same kind of host mutation: keep it
 	// out of the real filesystem (the real helper is covered by hostpaths_test).
-	ensurePlatformHostDirs = func() error { return nil }
+	ensurePlatformHostDirs = func(string) error { return nil }
 	s, err := store.Open(filepath.Join(dir, "seed.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -795,6 +815,7 @@ func TestUpdate_TLSNotACMEWithoutCertPathsErrorsIfNoACMEEmail(t *testing.T) {
 	f.info = goodSwarmInfo()
 	seedHealthySwarm(f)
 
+	stubHostMutations(t)
 	_, err = Update(ctx, UpdateDeps{
 		Store:    s,
 		Cipher:   cipher,
@@ -808,6 +829,67 @@ func TestUpdate_TLSNotACMEWithoutCertPathsErrorsIfNoACMEEmail(t *testing.T) {
 	if !strings.Contains(err.Error(), "no cert/key paths are persisted") {
 		t.Errorf("error should explain the missing cert/key paths, got: %v", err)
 	}
+}
+
+// TestPruneEmptyPlatformStack is the wafaa case, in miniature: a retired platform service left
+// a stack rendering an empty document. Skipping the empty render is right when nothing is live
+// and wrong when something is — the service then survives the very update that removed it from
+// the template (`control-plane-backup` stayed 1/1).
+//
+// It PRUNES and does not remove the stack: `docker stack rm` takes the stack's network with it
+// asynchronously, and a render that becomes non-empty again a moment later then fails to deploy
+// with "network backup_net not found" (measured on the shared swarm).
+func TestPruneEmptyPlatformStack(t *testing.T) {
+	ctx := context.Background()
+	emptyCompose := []byte("services: {}\n")
+	newDeps := func(liveServices ...string) (*fakeDocker, *recordingDeployer) {
+		f := newFakeDocker()
+		for _, name := range liveServices {
+			f.services[name] = runtime.Service{ID: name, Name: name, Stack: "backup"}
+		}
+		return f, &recordingDeployer{}
+	}
+
+	t.Run("prunes when services are still live", func(t *testing.T) {
+		f, dep := newDeps("backup_control-plane-backup")
+		var out bytes.Buffer
+		pruned, err := pruneEmptyPlatformStack(ctx, &out, f, dep, StackBackup, emptyCompose)
+		if err != nil {
+			t.Fatalf("pruneEmptyPlatformStack: %v", err)
+		}
+		if !pruned {
+			t.Fatal("a stack rendering nothing over a live service must be pruned")
+		}
+		if len(dep.prunedStacks) != 1 || dep.prunedStacks[0] != "backup" {
+			t.Fatalf("prunedStacks = %v, want [backup]", dep.prunedStacks)
+		}
+		if len(dep.removedStacks) != 0 {
+			t.Errorf("removedStacks = %v: removing the stack takes its network with it", dep.removedStacks)
+		}
+		if !strings.Contains(out.String(), "renders no services") {
+			t.Errorf("the operator was not told what happened: %q", out.String())
+		}
+	})
+
+	t.Run("a genuinely empty stack is a no-op", func(t *testing.T) {
+		f, dep := newDeps()
+		pruned, err := pruneEmptyPlatformStack(ctx, io.Discard, f, dep, StackBackup, emptyCompose)
+		if err != nil {
+			t.Fatalf("pruneEmptyPlatformStack: %v", err)
+		}
+		if pruned || len(dep.prunedStacks) != 0 {
+			t.Fatalf("pruned %v for a stack that was never live", dep.prunedStacks)
+		}
+	})
+
+	t.Run("a docker error prunes nothing", func(t *testing.T) {
+		f, dep := newDeps("backup_control-plane-backup")
+		f.serviceListErr = errors.New("docker is unhappy")
+		pruned, err := pruneEmptyPlatformStack(ctx, io.Discard, f, dep, StackBackup, emptyCompose)
+		if err != nil || pruned || len(dep.prunedStacks) != 0 {
+			t.Fatalf("a flaky ServiceList must leave the stack alone, got pruned=%v err=%v", pruned, err)
+		}
+	})
 }
 
 // TestUpdate_ACMEModeDoesNotRequireCertPaths ensures that a box in ACME mode
@@ -853,6 +935,7 @@ func TestUpdate_ACMEModeDoesNotRequireCertPaths(t *testing.T) {
 	f.info = goodSwarmInfo()
 	seedHealthySwarm(f)
 
+	stubHostMutations(t)
 	if _, err := Update(ctx, UpdateDeps{
 		Store:    s,
 		Cipher:   cipher,
@@ -1018,6 +1101,116 @@ func TestUpdate_ForceRedeploysAllStacks(t *testing.T) {
 		if !got[s] {
 			t.Errorf("force update should redeploy %s, got %v", s, deployer.deployedStacks)
 		}
+	}
+}
+
+// TestUpdate_LeaderBecomesAStorageNodeWhenNoneIsSet is the wafaa case: one manager, hourly
+// verified backups, `storage_nodes` never set — so nobody was designated, `doctor` failed the
+// backup-coverage check with "not a storage node", and the check was right about the flag
+// while the data was in fact backed up.
+//
+// The reconcile documents "the leader MUST be a storage node" and implements it thirty lines
+// below an `if raw == "" { return nil }`. Every fresh install starts empty, so that return
+// silently disabled the invariant — and the label stamping that makes the coverage check
+// agree — on exactly the clusters that had never configured anything.
+func TestUpdate_LeaderBecomesAStorageNodeWhenNoneIsSet(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if got := deps.Store.SettingDefault(ctx, SettingStorageNodes(), ""); got != "" {
+		t.Fatalf("precondition: storage_nodes = %q, want empty", got)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "idlib-wafaa", ID: "n1", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
+			Labels: map[string]string{runtime.LeaderNodeLabel: "true"}},
+	}
+	var out bytes.Buffer
+	deps.Stdout = &out
+
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	got := deps.Store.SettingDefault(ctx, SettingStorageNodes(), "")
+	if got != "idlib-wafaa" {
+		t.Fatalf("storage_nodes = %q, want the leader designated — an empty setting means \"nothing designated yet\", not \"designation disabled\" (output:\n%s)", got, out.String())
+	}
+	labelled := false
+	for _, l := range f.nodeLabels {
+		if l == runtime.StorageNodeLabel+"=true" {
+			labelled = true
+		}
+	}
+	if !labelled {
+		t.Fatalf("the leader was not labelled %s=true, so the coverage check still calls it a non-storage node: %v (output:\n%s)",
+			runtime.StorageNodeLabel, f.nodeLabels, out.String())
+	}
+}
+
+// TestUpdate_InstallsTheBackupAgentOnAStorageNode is ADR 0008: a node that is a storage node
+// ends every update with a working backup agent. The agent used to be opt-in per node with
+// nothing tracking adoption — measured on production 2026-11-16, a storage node held a live
+// stack for weeks with no unit, no timer and no policy.
+func TestUpdate_InstallsTheBackupAgentOnAStorageNode(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "node-a"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "node-a", ID: "na", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
+			Labels: map[string]string{runtime.StorageNodeLabel: "true"}},
+		{Hostname: "node-b", ID: "nb", Role: "worker", Status: "ready", Availability: "active"},
+	}
+	// The reconcile asks the LOCAL hostname; pin it to the storage node for this test.
+	prevHost := localHostnameFn
+	localHostnameFn = func() (string, error) { return "node-a", nil }
+	t.Cleanup(func() { localHostnameFn = prevHost })
+
+	var installed int
+	deps.EnsureBackupAgent = func(_ io.Writer, configPath string) error {
+		installed++
+		if configPath == "" {
+			t.Error("the agent was installed with no config path to write its policy from")
+		}
+		return nil
+	}
+	var out bytes.Buffer
+	deps.Stdout = &out
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, ConfigPath: "/tmp/config.yaml", Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if installed != 1 {
+		t.Fatalf("the backup agent was installed %d time(s), want exactly 1 (output:\n%s)", installed, out.String())
+	}
+}
+
+// TestUpdate_LeavesTheBackupAgentAloneOnANonStorageNode: a worker must not get an agent (it
+// would snapshot an empty directory), and a node that is not designated must not either.
+func TestUpdate_LeavesTheBackupAgentAloneOnANonStorageNode(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "node-a"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "node-a", ID: "na", Role: "manager", Status: "ready", Availability: "active", IsLeader: true},
+		{Hostname: "node-b", ID: "nb", Role: "manager", Status: "ready", Availability: "active"},
+	}
+	prevHost := localHostnameFn
+	localHostnameFn = func() (string, error) { return "node-b", nil }
+	t.Cleanup(func() { localHostnameFn = prevHost })
+
+	var installed int
+	deps.EnsureBackupAgent = func(io.Writer, string) error { installed++; return nil }
+	deps.Stdout = io.Discard
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, ConfigPath: "/tmp/config.yaml", Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if installed != 0 {
+		t.Fatalf("a non-storage node received a backup agent (%d install(s))", installed)
 	}
 }
 

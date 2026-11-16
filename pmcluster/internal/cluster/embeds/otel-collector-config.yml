@@ -23,6 +23,27 @@
 extensions:
   health_check:
 
+  # Offsets for the dynamic filelog receivers, on disk.
+  #
+  # The receiver_creator recreates a receiver whenever the docker observer re-announces a
+  # container, and without storage each new instance starts from `start_at: end` at ITS
+  # creation moment — so several instances created within the same second each tail the
+  # same file, and every line they all see is ingested once per instance. Measured on the
+  # live leader before this existed: one daemon line stored 72 times, and 3,240 receiver
+  # starts an hour. The extension is what makes a recreation resume instead of re-tail.
+  # The offsets live in the named volume the stack mounts here. create_directory
+  # because the extension REFUSES to start when the directory is missing
+  # ("directory must exist: stat /var/lib/otelcol/file_storage"), and a config that
+  # only works when something else created the path fails the moment it is run any
+  # other way — which is exactly what happened to the filelog e2e, which starts the
+  # collector without the stack's volume and got 190 s of
+  # "table 'datafusion.public.pmcluster-logs' not found" with the real reason buried
+  # in the container log.
+  file_storage:
+    directory: /var/lib/otelcol/file_storage
+    create_directory: true
+    timeout: 1s
+
   # Discovers every running container and its Swarm labels. The receiver_creator
   # below turns each one into a filelog receiver, which is the only way a log
   # record can learn which service produced it.
@@ -73,6 +94,10 @@ receivers:
           and (labels["com.docker.stack.namespace"] ?? "") != "sso"
           and (labels["com.docker.stack.namespace"] ?? "") != "edge"
         config:
+          # Checkpointed, so a recreated receiver resumes where the last one stopped
+          # instead of re-reading the tail. Without this the churn above multiplies every
+          # line by the number of instances that were alive when it was written.
+          storage: file_storage
           include:
             - /var/lib/docker/containers/`container_id`/*-json.log
           include_file_name: false
@@ -91,14 +116,56 @@ receivers:
               timestamp:
                 parse_from: attributes.time
                 layout: '%Y-%m-%dT%H:%M:%S.%LZ'
-              severity:
-                parse_from: attributes.stream
-                mapping: { info: stdout, error: stderr }
+              # NO severity from `stream`. Docker gives us two streams, not five
+              # levels, so mapping stderr→error made every warning, every progress
+              # line and every retry an ERROR — and the console then needed a pile of
+              # regex hints at QUERY time to guess the level back out of the text.
+              # The level belongs to the producer: it is parsed from the record below,
+              # and a line that states no level is left without one (rendered as
+              # "info", which is the honest reading of "unknown").
             # Move the parsed log message from attributes.log to body.
             - type: move
               from: attributes.log
               to: body
               if: attributes.log != nil
+            # THE LEVEL, FROM THE SOURCE. Most of this cluster's software writes
+            # zerolog JSON (`{"level":"info",...}`) or logfmt (`level=info`), so the
+            # level is in the record itself — parse it here, once, instead of guessing
+            # per query. `error_mode: ignore` keeps a non-JSON line (a shell script, a
+            # JVM, PostgreSQL) as it was rather than dropping it.
+            - type: json_parser
+              error_mode: ignore
+              parse_from: body
+              parse_to: attributes
+              if: body matches "^\\s*\\{"
+              severity:
+                parse_from: attributes.level
+                mapping:
+                  trace: trace
+                  debug: debug
+                  info: info
+                  warn: warn
+                  warning: warn
+                  error: error
+                  fatal: fatal
+                  panic: fatal
+            # logfmt fallback: `level=info` with no braces at all.
+            - type: regex_parser
+              error_mode: ignore
+              parse_from: body
+              regex: '(?i)\\blevel=(?P<level>trace|debug|info|warn|warning|error|fatal|panic)\\b'
+              if: body matches "(?i)\\blevel="
+              severity:
+                parse_from: attributes.level
+                mapping:
+                  trace: trace
+                  debug: debug
+                  info: info
+                  warn: warn
+                  warning: warn
+                  error: error
+                  fatal: fatal
+                  panic: fatal
           # Resource attributes are what make a stdout line attributable, and
           # they are declared inside `config` rather than as the receiver
           # template's own resource_attributes map: the e2e showed the
@@ -122,31 +189,21 @@ receivers:
             # failure here would ship a service's logs against its explicit wish.
             container.labels.io.pmcluster.skip_filelog: '`labels["io.pmcluster.skip_filelog"] ?? ""`'
 
-  # Node-level CPU and memory. docker_stats only ever sees CONTAINERS, so there
-  # was no way to answer "how loaded is this node" — the question that decides
-  # whether a node can take another workload.
+  # NO hostmetrics. It scraped this host's /proc and /sys through
+  # HOST_PROC/HOST_SYS, so it could only ever describe the node the collector
+  # runs on — the leader — and the platform's own daemon now publishes exactly
+  # the three series it produced (system.cpu.utilization{state=idle},
+  # system.memory.utilization{state=used}, system.cpu.load_average.1m) for
+  # EVERY node, because each daemon samples its own /proc and exports OTLP
+  # (internal/nodestat). Two producers for one series meant the leader's bucket
+  # averaged both, and the collector was re-collecting what a node had already
+  # measured about itself.
   #
-  # The service mounts the host's /proc and /sys read-only and points gopsutil at
-  # them (HOST_PROC/HOST_SYS in the stack), because a container's own /proc is
-  # not the host's. mode: global means every node scrapes itself, and the
-  # resourcedetection processor tags each series with that node's host.name — so
-  # "per node" grouping is honest rather than an aggregation of containers.
-  hostmetrics:
-    collection_interval: 30s
-    scrapers:
-      # The double-valued utilization series are what the console charts.
-      # Parseable does not map int64 datapoints (their rows arrive with an empty
-      # value), so system.cpu.utilization / system.memory.utilization are the
-      # only node percentages that can be plotted at all.
-      cpu:
-        metrics:
-          system.cpu.utilization:
-            enabled: true
-      memory:
-        metrics:
-          system.memory.utilization:
-            enabled: true
-      load:
+  # What is lost: nothing that is enabled. The scrapers above were cpu, memory
+  # and load only — the same three the daemon emits. What would be lost is the
+  # rest of hostmetrics (network, disk, filesystem, per-state CPU), and none of
+  # it was ever enabled; if a series is wanted later, the daemon is where it
+  # belongs, because it exists on every node instead of only the leader.
 
 processors:
   # memory_limiter is the guard that keeps a failing exporter from growing the
@@ -199,7 +256,6 @@ processors:
         - 'resource.attributes["service.name"] == "observability_provision"'
         - 'resource.attributes["service.name"] == "sso_oauth2-proxy"'
         - 'resource.attributes["service.name"] == "backup_volume-backup"'
-        - 'resource.attributes["service.name"] == "backup_control-plane-backup"'
         - 'resource.attributes["service.name"] == "backup_seaweedfs"'
 
   # Docker Engine API calls are PLUMBING, and two components emit them by the
@@ -227,6 +283,12 @@ processors:
   # Parseable stores metric fields separately). Logs need no equivalent: the
   # filelog receiver sets these names on the resource itself, and an OTLP sender
   # already carries the service.name IT chose — this guard leaves those alone.
+  # ONE statement per attribute, each guarded by its OWN condition. This is not style:
+  # measured on 0.165.0, a statement that assigns a MISSING resource attribute to a
+  # datapoint attribute (our daemons set service.name but never stack.name) makes the
+  # processor DISCARD the datapoint — no error, no log, nothing in the exporter. The
+  # symptom was every daemon metric vanishing while container metrics flowed, because a
+  # container resource carries both attributes and the daemon resource only one.
   transform/metrics:
     metric_statements:
       - context: datapoint
@@ -234,6 +296,10 @@ processors:
           - 'resource.attributes["service.name"] != nil'
         statements:
           - set(attributes["service.name"], resource.attributes["service.name"])
+      - context: datapoint
+        conditions:
+          - 'resource.attributes["stack.name"] != nil'
+        statements:
           - set(attributes["stack.name"], resource.attributes["stack.name"])
 
   # ORDER MATTERS, and it is the whole reason a per-node view was broken.
@@ -251,41 +317,6 @@ processors:
   resourcedetection:
     detectors: [docker, system]
     override: false
-
-  # Per-node process visibility for the console overview.
-  #
-  # Each node's DAEMON samples its own /proc and exports OTLP here (the daemon
-  # is a host process on every node; hostmetrics below can only ever read the
-  # host it runs on, and after this stack became leader-pinned that is exactly
-  # one node). The collector keeps the node-stats series out of the main
-  # metrics pipeline and writes them to a host-bound file, which the leader's
-  # daemon tails into the node_stats table. Parseable gets the same series, so
-  # the history is still queryable — but the PANEL does not depend on it, which
-  # is the point: the panel must work when telemetry is broken.
-  #
-  # Rotation is the only cleanup. The reader must NEVER truncate this file: the
-  # exporter holds it open, and truncation leaves a sparse NUL-filled middle
-  # that neither side can parse.
-  filter/nodestat_only:
-    error_mode: ignore
-    metrics:
-      include:
-        match_type: regexp
-        metric_names:
-          - ^pmcluster\.node\..*
-          - ^pmcluster\.process\..*
-
-  # The same series, dropped from the general metrics pipeline: they are
-  # ingested by metrics/nodestat below, and a second copy would double every
-  # per-process datapoint in Parseable.
-  filter/drop_nodestat:
-    error_mode: ignore
-    metrics:
-      exclude:
-        match_type: regexp
-        metric_names:
-          - ^pmcluster\.node\..*
-          - ^pmcluster\.process\..*
 
   batch:
     send_batch_size: 1000
@@ -307,7 +338,7 @@ exporters:
   # ever lands here.
   # retry_on_failure + sending_queue are bounded so a Parseable outage can
   # never make the collector grow without limit.
-  otlphttp/parseable-logs:
+  otlp_http/parseable-logs:
     logs_endpoint: "http://observability_parseable:8000/v1/logs"
     encoding: json
     timeout: 10s
@@ -325,7 +356,7 @@ exporters:
       X-P-Stream: "pmcluster-logs"
       X-P-Log-Source: "otel-logs"
 
-  otlphttp/parseable-metrics:
+  otlp_http/parseable-metrics:
     metrics_endpoint: "http://observability_parseable:8000/v1/metrics"
     encoding: json
     timeout: 10s
@@ -343,7 +374,7 @@ exporters:
       X-P-Stream: "pmcluster-metrics"
       X-P-Log-Source: "otel-metrics"
 
-  otlphttp/parseable-traces:
+  otlp_http/parseable-traces:
     traces_endpoint: "http://observability_parseable:8000/v1/traces"
     encoding: json
     timeout: 10s
@@ -361,34 +392,8 @@ exporters:
       X-P-Stream: "pmcluster-traces"
       X-P-Log-Source: "otel-traces"
 
-  # Node-stats JSONL. One JSON object per batch, appended; the leader's daemon
-  # tails it by byte offset + inode. `format: json` is the OTLP/JSON encoding
-  # the reader decodes — not the debug exporter's human format.
-  #
-  # The path lives under the platform data root (/var/stack) and is bind-
-  # mounted into the container at the SAME path, so the leader daemon (a host
-  # process) can read exactly what the collector wrote. The directory comes from
-  # cluster.NodeStatHostDir — the same constant the bind mount and the host
-  # mkdir use — so the exporter cannot write outside the mounted directory.
-  file/nodestat:
-    path: [[ .NodeStatDir ]]/nodestat.jsonl
-    format: json
-    flush_interval: 5s
-    # Bounded growth: 2 MiB with ONE backup. Rotation replaces the file (new
-    # inode), which the reader detects and rebuilds from the tail.
-    #
-    # max_backups MUST be >= 1: with 0 the exporter renames the rolled file to
-    # nodestat-<timestamp>-size.jsonl and never deletes it, so a live leader grew
-    # this directory to 722 MiB across 372 files while the reader only ever
-    # tailed the newest. One backup keeps rotation bounded and still leaves the
-    # previous file readable if the process dies mid-rename.
-    rotation:
-      max_megabytes: 2
-      max_backups: 1
-      max_days: 0
-
 service:
-  extensions: [health_check, docker_observer]
+  extensions: [health_check, docker_observer, file_storage]
   telemetry:
     logs:
       level: info
@@ -396,19 +401,16 @@ service:
     logs:
       receivers:  [receiver_creator, otlp]
       processors: [memory_limiter, resourcedetection, filter/skip_filelog, batch]
-      exporters:  [otlphttp/parseable-logs]
+      exporters:  [otlp_http/parseable-logs]
     metrics:
-      receivers:  [docker_stats, hostmetrics, otlp]
-      processors: [memory_limiter, resourcedetection, transform/metrics, filter/drop_nodestat, batch]
-      exporters:  [otlphttp/parseable-metrics]
-    # Node-stats: daemon samples → file (for the panel) AND Parseable (for
-    # history and alerting). The panel reads the file, so a Parseable outage
-    # never blanks it.
-    metrics/nodestat:
-      receivers:  [otlp]
-      processors: [memory_limiter, filter/nodestat_only, batch]
-      exporters:  [file/nodestat, otlphttp/parseable-metrics]
+      receivers:  [docker_stats, otlp]
+      processors: [memory_limiter, resourcedetection, transform/metrics, batch]
+      exporters:  [otlp_http/parseable-metrics]
+    # Node metrics used to need a pipeline of their own: the daemon's samples were
+    # written to a host-bound file that the leader's daemon tailed into SQLite. They now
+    # travel node → leader over mTLS and the leader records them, so the pipeline is the
+    # ordinary one above — a single metrics pipeline, one exporter, and no file to tail.
     traces:
       receivers:  [otlp]
       processors: [memory_limiter, filter/drop_docker_api_spans, batch]
-      exporters:  [otlphttp/parseable-traces]
+      exporters:  [otlp_http/parseable-traces]

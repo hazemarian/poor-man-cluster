@@ -1,0 +1,169 @@
+package noderuntime
+
+// Per-node resource visibility, daemon side.
+//
+// Two halves, both driven from serve:
+//
+//  1. EVERY daemon samples its own /proc every 15s and publishes the sample as
+//     OTLP metrics (internal/nodestat.Publish). The collector receives it over
+//     the ingress-published 4318 and appends it to the node-stats JSONL.
+//  2. The LEADER's daemon tails that JSONL and upserts one row per node. Only
+//     the leader: it is the node that runs the collector task, so it is the only
+//     node where the file exists, and it is the only node whose store the
+//     console reads.
+//
+// The split is what makes the panel survive a telemetry outage: the reader
+// needs a file on a local disk, not a working Parseable.
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"time"
+
+	"github.com/rs/zerolog"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodereport"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodestat"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+)
+
+const (
+	// nodeStatSampleInterval paces the /proc sample. 15s is frequent enough
+	// that the panel is current when an operator opens it and cheap enough that
+	// the sample never shows up in a load average.
+	nodeStatSampleInterval = 15 * time.Second
+	// nodeStatTailInterval paces the leader's read of the collector's file.
+	// Independent of the sample interval on purpose: a slow sample must not
+	// delay a read, and a read must never trigger a sample.
+
+	// nodeStatPathEnv overrides the path for tests and for a host whose
+	// /var/stack lives elsewhere.
+)
+
+// StartNodeStatSampler runs the /proc sampler for this node until ctx ends.
+//
+// It is started on EVERY node (not just the leader): the whole point is that each node
+// describes itself. It no longer waits for a collector endpoint — after the collector
+// lives on the leader, a worker exports to it remotely once the probe finds it, and waiting for one is
+// exactly how four nodes went missing from the panel. The sample is POSTed to the leader
+// on the swarm mTLS channel instead; the OTLP publish is still attempted and is a no-op
+// where there is no exporter.
+func StartNodeStatSampler(ctx context.Context, dc runtime.Client, log zerolog.Logger) {
+	go func() {
+		host := nodeStatHostname(ctx, dc, log)
+		role := localRole(ctx, dc)
+		s := nodestat.NewSampler("/", host, role)
+		t := time.NewTicker(nodeStatSampleInterval)
+		defer t.Stop()
+		for {
+			nodeStatTick(ctx, dc, s, log)
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+}
+
+// nodeStatTick is one sample → export cycle, split out of the loop so a test can
+// drive exactly one tick. It has NO leadership condition: the collector's
+// /var/stack/nodestat file is written by a pipeline that ends in a `file`
+// exporter, so there is no loop for the leader to avoid by staying silent.
+// Suppressing the leader's own sample was the bug that left the leader without
+// a row in the Node resources panel.
+func nodeStatTick(ctx context.Context, dc runtime.Client, s *nodestat.Sampler, log zerolog.Logger) {
+	nodeStatTickWith(ctx, dc, s, log, NodeReportSender(dc))
+}
+
+// localHostname prefers the swarm's name for this node over a short hostname:
+// the panel joins these rows against `docker node ls`, and a FQDN/short-name
+// mismatch would show an empty process column for the very node in trouble.
+func nodeStatHostname(ctx context.Context, dc runtime.Client, log zerolog.Logger) string {
+	if dc != nil {
+		if info, err := dc.Info(ctx); err == nil && info.Name != "" {
+			return info.Name
+		}
+	}
+	h, err := os.Hostname()
+	if err != nil {
+		log.Warn().Err(err).Msg("hostname unavailable for node stats")
+		return "unknown"
+	}
+	return h
+}
+
+// localRole names this node's swarm role for the panel's role column. Read once
+// at startup: a role change restarts the swarm membership anyway.
+func localRole(ctx context.Context, dc runtime.Client) string {
+	if dc == nil {
+		return ""
+	}
+	host := nodeStatHostname(ctx, dc, zerolog.Nop())
+	nodes, err := dc.NodeList(ctx)
+	if err != nil {
+		return ""
+	}
+	for _, n := range nodes {
+		if n.Hostname == host {
+			return n.Role
+		}
+	}
+	return ""
+}
+
+// NodeReportSender builds the client a node uses to report itself to the leader. It is
+// the same transport the runner assignment uses: swarm mTLS, manager addresses from the
+// live swarm, no published port and no shared secret.
+func NodeReportSender(dc runtime.Client) *runners.Client {
+	if dc == nil {
+		return nil
+	}
+	return &runners.Client{Managers: func(ctx context.Context) ([]string, error) {
+		return ManagerHosts(ctx, dc)
+	}}
+}
+
+// nodeStatTickWith is nodeStatTick with the sender injected, so a test can drive one tick
+// without a leader.
+// reportSender is the one method the tick needs. An interface, so a test can drive one
+// tick and assert what would be sent without a leader to send it to.
+type reportSender interface {
+	PostJSON(ctx context.Context, path string, body []byte) error
+}
+
+func nodeStatTickWith(ctx context.Context, dc runtime.Client, s *nodestat.Sampler, log zerolog.Logger, sender reportSender) {
+	smp, err := s.Collect(time.Now())
+	if err != nil {
+		log.Warn().Err(err).Msg("node stat sample incomplete")
+	}
+	if dc != nil {
+		if _, err := dc.Info(ctx); err != nil {
+			smp.DockerUp = 0
+		}
+	}
+	// TWO independent legs from one sample, and they must not be confused:
+	//
+	//   - the REPORT (below) is state: it lands in the leader's node_stats and is what the
+	//     panel draws. It is stored, and stored only on the leader.
+	//   - the OTLP EXPORT (right here) is telemetry: the same sample goes straight to the
+	//     collector, which is a proxy in front of Parseable and stores nothing itself
+	//     beyond its batch. Each node exports its OWN point, so there is no store-and-
+	//     forward hop and nothing for the leader to republish.
+	//
+	// Publishing only on the leader — by relaying the received report — was the earlier
+	// shape: it made telemetry depend on the state transaction and put a database write
+	// between a node's number and the graph.
+	nodestat.Publish(ctx, smp)
+	if sender != nil {
+		body, merr := json.Marshal(smp)
+		if merr != nil {
+			log.Warn().Err(merr).Msg("node report: encode")
+		} else if perr := sender.PostJSON(ctx, nodereport.Path, body); perr != nil {
+			log.Debug().Err(perr).Msg("node report: not delivered to the leader")
+		}
+	}
+}

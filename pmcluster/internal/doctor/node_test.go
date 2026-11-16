@@ -78,9 +78,10 @@ func TestRunNodeLocalReportsTheWorkerFields(t *testing.T) {
 	if !strings.Contains(daemon.Detail, "127.0.0.1:9090") {
 		t.Fatalf("the daemon check should name the address it probed: %q", daemon.Detail)
 	}
-	sock, ok := find(rep, "socket proxy")
-	if !ok || sock.Status != StatusWarn || !strings.Contains(sock.Detail, "not a socket") {
-		t.Fatalf("socket proxy check = %+v ok=%v", sock, ok)
+	// There is no socket check any more: a job brings its own daemon, so a missing
+	// host socket is not a warning — it is the normal state of a node that runs jobs.
+	if sock, ok := find(rep, "socket proxy"); ok {
+		t.Fatalf("doctor still reports a socket-proxy check: %+v", sock)
 	}
 	assignment, ok := find(rep, "runner assignment")
 	if !ok || assignment.Status != StatusOK {
@@ -216,3 +217,8 @@ func (f fakeRunnerDocker) ExecIn(context.Context, string, ...string) ([]byte, er
 
 // RemoveVolume satisfies runners.LocalDocker for the same reason.
 func (f fakeRunnerDocker) RemoveVolume(context.Context, string) error { return nil }
+
+// VolumeSizes: this fake models a node with no cache volumes unless a test sets them.
+func (d fakeRunnerDocker) VolumeSizes(_ context.Context, prefix string) ([]runners.VolumeSize, error) {
+	return nil, nil
+}

@@ -106,7 +106,7 @@ func TestLogVolumeAndTraceStatsSQLAreFixedStatements(t *testing.T) {
 	}
 	for _, want := range []string{"date_bin(INTERVAL '60 seconds', p_timestamp) AS bucket", "FROM `pmcluster-logs`", // The EXPRESSIONS, not their aliases — grouping by `bucket, level` is
 		// what made this panel answer 400 and render as unavailable.
-		"GROUP BY date_bin(INTERVAL '60 seconds', p_timestamp), CASE WHEN", "regexp_like(SUBSTR(body, 1, 200)", "THEN 'error'", "THEN 'warn'"} {
+		"GROUP BY date_bin(INTERVAL '60 seconds', p_timestamp), CASE WHEN", "severity_text", "THEN 'error'", "THEN 'warn'"} {
 		if !strings.Contains(vol, want) {
 			t.Errorf("volume: missing %q in %s", want, vol)
 		}

@@ -3,6 +3,844 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.361 — the terminal says why it failed, on both sides
+
+"Terminal is not working" left no evidence anywhere: the console package had no logger at all, so a
+refused daemon dial, a service with no ExecAttacher and a browser socket closed by an intermediary
+all ended as a one-line browser status and silence in the log.
+
+The console now has a logger (installed by the edge), the terminal logs each way it can fail — an
+upgrade it could not perform, a console with no daemon address, the daemon refusing the exec socket
+(with the HTTP status and the URL) — and the page prints the websocket CLOSE CODE, because 1006
+means the handshake never completed while 1000 is a finished session.
+
+There is also one line per terminal open — page served, then handshake arrived with the Upgrade
+and Origin headers — so "did the request reach the console at all" becomes answerable in one look at
+the edge log instead of a guess about gates and proxies.
+
+Measured while chasing this, and worth recording: the daemon's exec socket is healthy (a real
+handshake with the edge token answers 101; a plain GET 400; no token 401), the console route is
+healthy, and the xterm assets are served. The untested leg is the browser's handshake through the
+SSO gate.
+
+## v0.2.360 — the CLI stops advertising a way out that does not exist
+
+`cluster update` was refused on a follower with "Run it on the leader, or use the remote CLI from
+your own machine: pmcluster cluster update --api-url … --api-token …". There is no remote form: the
+command opens the leader's `data.db` and the local docker socket, and `internal/remote` has no client
+for it. Following that advice produced a connection error on a cluster that was working fine.
+
+The hint is now conditional on the command actually being served by the daemon — an allowlist
+mirroring the `remote.New*` clients the CLI wires in `backend.go`. Everything else is told the truth:
+no remote form, run it on the leader. The direction of failure is deliberate: a missing entry costs a
+hint, a wrong entry would make the CLI lie.
+
+`hack/upgrade-nodes.sh` is deleted; `cluster upgrade` replaced it (ordering, checksum, health gate,
+rollback, and an archive layout it actually reads).
+
+## v0.2.359 — the timer's flag reaches the command
+
+`backup platform --if-leader` failed on two managers out of three on its first scheduled run: the
+leader guard refused `backup platform` before the command could read its own flag, because scope is
+resolved by command NAME and `backup` is leader-scoped. The daily timer would have been red on two
+nodes every morning.
+
+`--if-leader` is now a flag-level carve-out (the plain form stays leader-only), and
+`backup platform-verify` is node-local outright — it drills a file on this disk and the weekly drill
+runs it on every storage node.
+
+## v0.2.358 — the control-plane export stops being a manual command
+
+The audit that found a storage node with no backup agent found something else: the control-plane
+export — the one artifact that rebuilds the whole cluster — had been run by hand four times in one
+evening and never again. The stack volumes had an hourly timer, an offsite check and a weekly drill;
+the database had a shell command.
+
+- **`pmcluster-platform.timer`** on every manager: daily at 01:20, `Persistent=true`, running
+  `backup platform --if-leader`. A follower exits 0 with one line — two managers of three are
+  followers, and a unit that is red every morning is a unit nobody reads.
+- **Gated on manager, not storage node.** An export needs the authoritative store; an agent needs
+  stack volumes. Installing one with the other would have left a manager that hosts no volume with
+  no restore point at all.
+- **The weekly drill verifies the export** as its third step (`backup platform-verify --if-present`),
+  so "it restores" stops being something proven once by hand.
+- **The backups screen carries its own findings.** `pmcluster doctor`'s backup-related checks now
+  render in a banner there — narrowed to their own subject (the certificate check belongs elsewhere)
+  — instead of living only on the overview, one nav click from the page that could act on them.
+
+## v0.2.357 — Back is a page load
+
+Pressing Back or Forward on any console screen returned raw HTML — no head, no stylesheets, no
+sidebar. HTMX sends `HX-Request` **and** `HX-History-Restore-Request` when it restores history, and it
+replaces the entire document with whatever comes back, so a fragment response became the page. The
+renderer only treated a missing `HX-Request` as a full page load. All 21 pushed URLs were exposed.
+History restore now renders the full page; HTMX partial navigations are unchanged.
+
+## v0.2.356 — the agent on join, and the checks on the page
+
+- **`pmcluster join --storage-node` installs the agent immediately**, not at the next daemon start:
+  a node that joined as storage has unarchived data until that happens, and the operator is standing
+  there with root. The leader's `cluster update` keeps ensuring its own — ADR 0008 now lists all
+  three entry points (daemon start, leader update, join).
+- **The overview shows what `pmcluster doctor` finds.** A banner lists every failing or warning
+  check and prints nothing for a pass. The console already rendered version skew from the version
+  configs; this extends that same surface to the rest of the health model — which is where the two
+  real findings of the 2026-11-16 audit should have appeared and did not.
+- The overview test asserts both halves: findings appear, and a passing check does NOT.
+
+## v0.2.355 — the daemon installs its own backup agent, because the leader cannot
+
+The first attempt put the installer in the leader's storage-node reconcile and it never ran:
+`cluster update` is refused on a follower manager, so that reconcile only executes on the leader —
+and a leader cannot install a systemd unit on another host. `convergeStorage` runs on every node at
+start and every two minutes, so the daemon now ensures its own agent there; it re-checks when the
+node's storage membership changes, so the console toggle takes effect within a tick.
+
+## v0.2.354 — becoming a storage node installs the agent; the export is drilled
+
+**Why:** the audit found a storage node with a live stack and no backup agent at all, and it was
+invisible because the agent is opt-in per node and nothing tracked adoption. Two fixes, plus the
+drill the platform export never had.
+
+- **A storage node's daemon installs its own agent.** `convergeStorage` runs on every node at start
+  and every two minutes, so the restart a binary upgrade performs is when the agent converges; it
+  re-checks when the node's storage membership changes, so flipping the toggle takes effect within a
+  tick. The first attempt put this in the leader's reconcile and never ran: `cluster update` is
+  refused on a follower manager, and a leader cannot install a unit on another host — measured on
+  `nxt-sw-4-m`, where the unit stayed missing until the daemon did it (ADR 0008).
+- **`pmcluster backup platform-verify`** proves an export restores instead of assuming it: manifest
+  sha256 per member, `PRAGMA integrity_check` on `data.db`, and the archived key decrypting a
+  sampled secret — the step that proves the key belongs to the ciphertext it shipped with. Refuses
+  a tampered archive, a missing key, or a member the manifest does not describe.
+- `internal/api/doctor.go` no longer claims to be "reachable from the console": nothing calls it.
+  The health model is CLI-only until a Health page exists.
+
+## v0.2.353 — the agent check skips where it cannot see the run history
+
+**Why:** `backups` is node-local and not mirrored, so a follower's store answers "no runs ever" for
+a cluster that backs up hourly — and the moment `backup agents` reached a follower it called all
+three storage nodes silent, which is the same class of lie the check exists to catch. It now skips
+there with the reason and points at the leader, the only place the question can be answered. Found
+by running v0.2.352 on the fleet rather than trusting its unit tests.
+
+## v0.2.352 — the backup checks answer on every node, not just the leader
+
+**Why:** v0.2.351 added the two checks and they were useless on the fleet that needed them. They
+were registered only in the leader view, so a follower — the node an operator usually stands on —
+printed nothing about them; and `unbacked data` read a volume root the leader view never sets, so
+it reported "no volume root on this host" and looked at nothing. Both now take a shared
+`backupView` and run in `RunNodeLocal` as well as `Run`: a follower manager mirrors the settings,
+so it can answer "is every storage node reporting" as well as the leader can, and `unbacked data`
+falls back to the stock volume root instead of skipping.
+
+## v0.2.351 — a storage node with no agent, and data no backup covers, are now findings
+
+**Why:** a backup audit on production found one of three storage nodes (`nxt-sw-4-m`) with **no
+backup unit at all** — no service, no timer, no policy, no env — while its share of the data (a
+live stack, five sqlite databases) sat on the volume, and `doctor` reported
+`✓ backup coverage 15 stack(s) hold a volume, all on a storage node` on every run. The agent is
+opt-in per node, and nothing tracked which storage nodes had it.
+
+- **`backup agents`** (new check): every designated storage node must have reported a backup run
+  in the last 7 days. The signal is "has this node EVER reported", read from the artifact names
+  the run rows carry (`backup-<node>-<ts>-stack-<stack>.tar.gz`) — deliberately not "is the
+  newest row fresh", because the run table is a known-unreliable clock and the check must not
+  inherit that. A node that has never produced a row is a node with no working agent, and the
+  finding names it plus `pmcluster backup-agent install`.
+- **`unbacked data`** (new check, local): directories under the volume root that belong to no
+  stack in the swarm are archived by nothing. Measured the same day: `dep-s2` and `dep-s3` on
+  nxt-sw-1-m held 954 files each, warned about hourly into a journal nobody reads, and appeared
+  in no check. Data there is a failure; empty leftovers are named and are not.
+- **A delivered record no longer reports as lost.** The record route answers `204 No Content` and
+  the node client accepted only `200`, so a run that had landed said "the record did not reach
+  the leader" — the row was in the leader's table. Any 2xx is acceptance now.
+
+## v0.2.350 — a platform export ships its sidecar, so the offsite copy is verifiable
+
+**Why:** the verifier reported the three offsite exports as "restorable, not verifiable". It looks
+for a `.json` beside every archive it ships — that is what makes an offsite copy *verified* rather
+than merely *present* — and the export's manifest only existed inside the tarball. The sidecar is
+now written from the archive itself (which also proves the archive reads back) and uploaded next
+to it, so `backup-agent verify-offsite` can check it like any stack artifact.
+
+## v0.2.349 — a platform export is checked offsite only
+
+**Why:** `doctor` went red on production the moment the first export was taken — `offsite …
+store:pmcluster-backups: 3/6 present, 3 missing (e.g. pmcluster-platform-…tar.gz)`. The verify pass
+expects every local artifact in every configured target, but a platform export goes to the bucket
+and NOWHERE inside the cluster on purpose: a copy inside the cluster it protects dies with the
+cluster. The check was wrong, not the export. `artifactIsCheckedOn` exempts it from the in-cluster
+store and still verifies it offsite, with a test.
+
+## v0.2.348 — the rollout finds the binary the release actually ships
+
+**Why:** the first rollout of v0.2.347 stopped on the worker with "no pmcluster binary in the
+archive". The release archive holds ONE file named after the asset with `.tar.gz` dropped
+(`pmcluster-v0.2.347-linux-amd64`); an older release tarred a directory containing `pmcluster`,
+so the layout changed shape between two tags and the installer looked for a name neither tag
+uses. It now takes the expected name from the asset and falls back to any executable starting
+with `pmcluster` — a rollout should not break because the release layout changed between tags.
+
+The failure is also the gate working: it stopped on the WORKER, before touching a manager, and
+said so.
+
+## v0.2.347 — the upgrade is a workflow, with a gate and a rollback
+
+**Why:** replacing the binary across a swarm was the one operation that runs unattended, can take
+every node down, and had no verification. `hack/upgrade-nodes.sh` ordered the nodes correctly,
+verified the release checksum and treated every step as fatal — most of the way there — and then
+slept six seconds, printed `systemctl is-active` and moved on. That value reads "active" for a
+binary that starts and dies in a loop, so a bad release reported `✔ upgraded` on the whole fleet
+and left it crash-looping; and the `.prev` copy it took was never used, because nothing knew what
+to do with it.
+
+`pmcluster cluster upgrade <version>` (`internal/upgrade` + `internal/cli/cluster_upgrade.go`):
+
+- **Verified twice.** The artifact is fetched with `gh`, its sha256 read from `SHA256SUMS.txt` and
+  checked locally, then copied over ssh and checked AGAIN on the node. The release repo is
+  private, so nodes cannot fetch it; two checks catch a corrupt transfer, which is otherwise what
+  reaches `/usr/local/bin`.
+- **Ordered from the nodes.** Each node is asked what it is — through `docker info`
+  (ControlAvailable), because a WORKER cannot run `docker node inspect self` and that is exactly
+  the node a rollout starts with. Workers → follower managers → **leader last**. No node claiming
+  leadership is a refusal, not a guess.
+- **Gated.** After the restart the node must answer `/health` with the NEW version in the body.
+  `systemctl is-active` is not a gate.
+- **Rolled back, and the rollback is verified.** A node that fails the gate is restored to
+  `.prev`, restarted and re-gated; a rollback that does not bring the node back is reported as
+  such instead of as a rollback. Either way the rollout STOPS — the nodes it had not reached are
+  untouched, because continuing past a broken node is how a fleet ends up with mixed versions and
+  a dead leader.
+- **Idempotent.** A node already on the version is skipped, so a failed run resumes by running the
+  same command again.
+- `--dry-run` prints the plan and touches nothing.
+
+The transport is an interface with an ssh implementation, so the last hop can move to the node API
+without touching the workflow. `hack/upgrade-nodes.sh` still works but has no gate and no rollback.
+
+## v0.2.346 — the key config is gone; the key is a file
+
+**And the control plane has a restore point again, on a button.** Deleting the
+control-plane backup service (v0.2.345) was right for the mechanism and left a hole in
+disaster recovery: nothing archived the platform's own state, so losing every manager at
+once had no restore path. The answer is not a schedule — an autonomous object moving
+platform state is what ADR 0005/0006 removed — but a manual export: the leader's `data.db`
+**and `.encryption_key`** in one archive, offsite, triggered from the console
+(**Export platform**, on the backups page) or `pmcluster backup platform`.
+
+- The archive carries a `MANIFEST.json` (host, build, created-at, per-member sha256 and mode,
+  hashed as the bytes are written) and refuses to be written at all if the key or the database
+  is missing — a partial export reads as complete.
+- Leader-only: a follower answers 409, because a follower's `data.db` is a mirror and an
+  export of it has no provenance. The refusal names the leader.
+- Including the key is a deliberate departure from ADR 0003's split (ADR 0007): without it the
+  archive cannot decrypt a single stored secret, so it would look like a backup and restore
+  into a cluster nobody can read.
+
+**Also fixed, both found by deploying this release rather than by reading the code:**
+
+- **An unset `storage_nodes` now designates the leader**, instead of skipping the entire
+  reconcile. The function documents "the leader MUST be a storage node: otherwise a manual
+  `backup create` finds no local agent" and implemented it *below* an
+  `if raw == "" { return nil }` — and every fresh install starts empty, so the leader rule, the
+  label stamping and the label adoption never ran on exactly the clusters that had never
+  configured anything. Measured on wafaa: one manager, hourly backups succeeding and verified,
+  `storage_nodes` empty, no `pmcluster.storage` label, and `doctor` failing backup coverage
+  with "not a storage node" — which read like the data was unbacked when it was. The same three
+  lines appended the leader as `raw + "," + host`, persisting a leading comma (`,idlib-wafaa`)
+  into a setting the console shows verbatim; `appendStorageNode` joins properly.
+- **The loop-mode image follows the configured volume root.** Designating the leader made the
+  convergence provision on every fresh cluster, at the hardcoded `/var/lib/pmcluster/app-data.img`
+  — root-owned, so a temp-rooted or non-root host could not create it and its storage node
+  "CANNOT host stateful stacks yet". `storage.ImagePathFor` derives a sibling of the volume root
+  for any non-stock root, and the deploy-time mount guard uses the same path (it was checking
+  the stock one, so a custom-rooted cluster that WAS provisioned but unmounted read as "never
+  provisioned", which is the one case the guard exists to catch).
+- **An emptied platform stack is pruned, not removed** (`RemoveStack` took the stack's network
+  down asynchronously; a render that became non-empty again a moment later failed with
+  `network backup_net not found`).
+
+**Why:** v0.2.345 deleted the data kit but left one Docker config behind — the encryption key,
+republished on promotion and every five minutes, pruned to two — to move 32 bytes that are
+minted once and never rotate. It was the last thing contradicting "no platform secrets in
+Docker configs", and it existed only to answer a question the store can answer directly.
+
+- **The key is `<data dir>/.encryption_key`.** `PublishKey`, `KeyLoop`, `newestKey`,
+  `ErrNoKeyConfig`, the prune, the label family and the `PMCLUSTER_CONTROLPLANE_SNAPSHOT_INTERVAL`
+  interval are deleted; `internal/controlplane` keeps the adoption check and the two paths
+  (ADR 0006). The platform now writes **no Docker config at all**.
+- **A node with `data.db` never mints a key.** `credentials.OpenExisting` fails instead of
+  creating one. This is the property the design rests on: `loadOrCreateKey` would have let a
+  manager that never received the key invent one silently and encrypt every new secret with
+  material no other manager holds.
+- **The key is proven by decrypting, not by comparing.** On a leadership gain the node decrypts
+  a bounded sample of its secrets with the loaded cipher; a key that opens none is a WARN naming
+  the file (and `doctor` reports it), never a refusal — no leader is a worse outcome than a
+  leader that cannot read its secrets, and the file is a copy away from fixed.
+
+The join route (`POST /internal/api/join/key`, swarm mTLS) is still the plan for delivering it
+automatically; until it lands an operator copies the file, and every message that mentions the
+key names its path so the copy is obvious.
+
+## v0.2.345 — cluster state travels by pull, and nothing of the platform lives in a config
+
+**Why:** the control plane left Docker configs last release series (ADR 0003, slices 1–3) but
+the config path was still the one that mattered: settings and the cipher key were written
+into Raft-replicated objects every five minutes, the control plane had its own backup
+archive, and promotion restored `data.db` from a config because a follower's store held only
+three tables. This release removes that channel, and everything that existed to work around
+it. Two things fell out of doing it — a real deploy bug and a sturdier upgrade.
+
+- **The mirror is the document (ADR 0005).** The mTLS snapshot carries every table except an
+  explicit, commented exclusion list, so a follower's store is a replica rather than a
+  projection. `store.MirroredTables`/`ExcludedTables` classify each table, and a test fails
+  when a migration adds one neither list mentions — `cluster_version` was the first it caught,
+  and it had been crossing in the kit and nowhere else.
+- **Promotion copies nothing.** `Store.Swap`, the staging directory and the rename of
+  `data.db`/`.encryption_key` are gone. On leadership gain the node stops and joins the mirror
+  loop, reads `sync_state`, and serves the store it already has. A **stale** mirror is served
+  and logged (the operator's call: five minutes of age is acceptable, and silence about it is
+  not); an **empty store with no snapshot ever applied** refuses leadership, because that is
+  nothing to serve rather than something old.
+- **`pmcluster_state_<ts>` is never written again**, and with it the control-plane BACKUP
+  path: the `control-plane-backup` service, its otel filter, `NewestControlPlaneArchive`,
+  `RestoreControlPlane`, `PruneControlPlaneArchives`. Backups are service volumes only.
+- **The drill was repointed, not deleted.** `cluster kit verify` → `cluster mirror verify`
+  (`clustersnapshot.Verify`), which answers on a follower because asking only the leader is
+  asking the node that needs no proof; `doctor`'s line follows, and the weekly systemd drill
+  runs the new command.
+- **`internal/controlplane` is reduced to the encryption key**, which still travels in its own
+  config until the join route lands (next release): `PublishKey`/`KeyLoop`, content-compared
+  and pruned to two, and `PublishKey` is the only config the platform now writes.
+
+Two more, found on the way:
+
+- **A platform stack that empties is removed, not skipped.** Deploying this to wafaa showed
+  `control-plane-backup` still 1/1 after the update that deleted it: `backup` now renders an
+  empty document, and the reconcile treated "renders no services" as nothing-to-do. The
+  render is the statement of what should exist, so an empty one over a live stack calls
+  `RemoveStack` — and a docker error leaves it alone, the same conservatism the drift check
+  applies.
+- **The upgrade order comes from the nodes, not an address match.** `hack/upgrade-nodes.sh`
+  sorted a public-IP list against the swarm's INTERNAL addresses, matched nothing, and
+  silently kept whatever order was typed — the one case where "leader last" was void printed
+  nothing at all. It now asks each host `docker node inspect self` over the ssh channel it
+  already uses, refuses to start when no host claims leadership, and takes `--assume-order`
+  when you mean it.
+
+And the earlier work in this release series:
+
+- **The node-stat bind source follows the volume root.** It was the literal
+  `/var/stack/nodestat` while every other platform path honoured the configured root, so
+  `cluster up` on a non-root host reached out of its temp tree and died on
+  `mkdir /var/stack/nodestat: permission denied` — eleven failing real-swarm tests, for eight
+  commits. `NodeStatHostDirFor` keeps `/var/stack/nodestat` for the stock root and derives a
+  creatable sibling otherwise.
+- **The node's loops and host units left `internal/cli`** (`noderuntime`, `nodeunits`; ADR
+  0004). 105 files/26,461 lines of three jobs became 45 files/19,307, and the `-race` suite
+  went 79.8s → 15.4s because the multi-minute loops took their waits with them.
+  `boundary_test.go` fails when a name is defined twice across the three packages or a runtime
+  entry point reappears in the CLI.
+- **One owner for the never-create rule.** `store.Open` creates a database, which is right in
+  `init` and `join` and wrong everywhere else; six hand-rolled `os.Stat` guards with four
+  different sentences are now `requireInitialised`, `openExistingStore`,
+  `openOrCreateStore` (the two bootstrap exceptions, named) and `store.OpenExisting`.
+- **Concurrency is counted in waves, not measured with a clock.** Four elapsed-time budgets
+  became assertions about the code: two 80ms reads took 168ms on a loaded CI runner with both
+  in flight, and the fake now counts bursts, parks the apply, and marks when a phase finishes.
+
+*v0.2.328 – v0.2.344 were tagged without a written entry. These are back-filled from the
+commits each tag carries, so they record what changed and why it had to — not what the
+release was called.*
+
+## v0.2.344 — the record is written by the run, and a volume only lives on a storage node
+
+Four changes from one incident: `nextrum-landing` was pinned to `nxt-sw-2-m`, outside the
+storage set, so no snapshot disk and no agent ever covered it. Its only two archives hold
+two empty directories and their manifests say so — `"files": 0, "bytes": 0, "verified":
+true` — recorded as a success. Rows for the stack: none, ever. Then the node left the swarm
+and the database with it.
+
+- **The agent posts each archived stack to the leader as it finishes** — `POST
+  /internal/api/backups/record` on the node-facing mTLS listener, next to the cluster
+  snapshot and node report: no token, no published port, idempotent on the filename. The
+  row used to be written by discovery, a scan that ran only when somebody opened the
+  backups page and which recorded object-store artifacts without their stack at all
+  (1639 of 1770 rows).
+- **Empty is not a failure.** A stack whose subtree holds no files produces no artifact and
+  is reported (`Empty` plus a run warning) instead of turning the hourly run red. An app
+  that has written nothing yet is not broken.
+- **A volume only lives on a storage node.** Translation refuses to place a service holding
+  a volume outside `storage_nodes`: an explicit DSL placement gets an error naming them, a
+  platform-made pin is moved to a live storage node and made sticky. Platform stacks are
+  exempt — their volumes are infrastructure the platform places deliberately.
+- **Two comments were lying.** `Freeze` is a no-op by design (fsfreeze hung a node for 19
+  minutes at a 4.4% chance per run) yet still logged a "SLOW WINDOW" warning that can never
+  fire, and `Snapshot`'s docstring said read-only while the code mounts read-write so the
+  journal can replay. The backup is crash-consistent, not quiesced.
+
+## v0.2.343 — discovered artifacts keep their stack
+
+The backups table was not a record of what had been backed up. `discoverStore` — the pass
+that indexes the in-cluster object store, i.e. every artifact taken by a node other than
+the leader — wrote rows **without the stack**, where `discoverLocal` passed it: measured
+2026-11-15, 1639 of 1770 rows had an empty `stack_name`. The CLI hid it by deriving the
+stack from the archive filename when printing, so the table looked complete while the
+console's per-stack backup view, restore-by-stack and the coverage check all saw nothing.
+
+- `discoverStore` parses the artifact name and records the stack, as local discovery does.
+- `AttributeUnnamedBackups` names the rows written before the fix, from the same parser —
+  the artifacts always carried `-stack-<app>`, only the row lost it. Control-plane archives
+  belong to no stack and are left alone.
+- An unreachable in-cluster store now logs instead of returning silently; that branch is how
+  a cluster could look fully indexed while nothing from the object store had been recorded.
+
+## v0.2.342 — the unused coverage window is gone
+
+`chore(doctor)`. The window parameter of the coverage check became dead once the check
+stopped inferring staleness from the backups table (v0.2.340, v0.2.341).
+
+## v0.2.341 — coverage asserts only where the data lives
+
+Freshness from the backups table is not trustworthy: `abbas` had a fresh hourly artifact
+and zero rows, `test-erp` had a 07:00 artifact and a row stuck at 5 Nov. Reporting either
+way made the check cry wolf on eleven stacks. What is answerable from the leader — and what
+started this — is structural: a volume-holding stack pinned outside the storage set sits
+where no snapshot disk and no agent can reach it.
+
+## v0.2.340 — coverage asserts structure, not missing rows
+
+The first version reported nine stacks as never archived because their artifacts have
+sidecars on the storage node and no row here. Staleness is now reported only where a
+history exists, and "never archived" is never inferred from a missing row: what the check
+asserts is that a volume-holding stack whose pin is outside the storage set has no snapshot
+disk and no agent.
+
+## v0.2.339 — `doctor`: backup coverage
+
+The agent already refuses to invent an artifact for an empty subtree. What nobody could see
+from the control plane was the case that actually bit: a stack whose data was never in the
+snapshot path at all. `doctor` now fails a volume-holding stack when its data sits on a node
+that is not a storage node, or when no archive is recorded for it inside 48h — which is what
+a stopped agent looks like from here. Platform stacks are exempt.
+
+Deliberately a report and not a relocation: a pin naming a live node that is no longer a
+storage node cannot be fixed by moving the stack, because its data stays where it is — an
+automatic move would trade a missing backup for a silently empty database.
+
+## v0.2.338 — the CLI resolves stale pins too
+
+The daemon was wired to the live node list and the CLI was not, so a hand deploy of a stack
+pinned to a departed node re-applied the same impossible constraint — the exact case a hand
+deploy is usually run to fix. It opens a client only when a pin is being resolved.
+
+## v0.2.337 — a pin to a node that left the swarm is moved, not waited on
+
+`nextrum-landing` sat Pending for 36 hours pinned to `nxt-sw-2-m`, removed from the swarm on
+12 Nov. Nothing any check could see was wrong: the constraint is spelled correctly, the live
+spec matches the render, reconcile reports "no drift", the last apply is green. Swarm's own
+words — "no suitable node (scheduling constraints not satisfied on 4 nodes)" — were the only
+clue, and nobody is told them.
+
+- `stacks.PinResolver` gains `LiveNodes` and rewrites a platform-made pin that names a node
+  no longer in the swarm, choosing a live storage node round-robined by stack name and
+  writing it back with `SetStackPin` — a move that does not stick repeats every pass.
+- An explicit `placement:` in the DSL is the operator's statement about WHERE and is
+  reported, not relocated.
+- An unreadable node list skips the check: the resolver must never invent nodes.
+- `doctor` gains "placement pins", the line that would have caught this on 12 Nov.
+- Also: the console renders the docker-restart switch, asserted through the controller
+  rather than only against the key list and the section map — which is what was missing.
+
+## v0.2.336 — the docker-restart switch moves into Settings
+
+Settings → Advanced carries "Restart docker automatically when it stops answering". The
+daemon had allowlisted `node_docker_restart` and validated it as a flag for a release while
+nothing in the console carried the key, so arming the only mechanism that recovers a node
+whose docker died needed the CLI and knowledge of the key's name.
+
+- the form lists the key, treats it as a flag (a cleared checkbox sends nothing, so it is
+  written as the words the daemon reads) and files it under Advanced;
+- the hint states the price: three failed probes in a row, at most one restart per ten
+  minutes, and every container on that node stops until docker is back;
+- en + ar strings; `changedClusterSections` reads a key the form did not carry at its
+  default, or a newly defaulted flag reports Advanced as changed on every save.
+
+## v0.2.335 — the leader follows its own docker-restart setting
+
+The node policy that arms the docker watchdog is written once at daemon startup, and the
+leader has no runner agent pushing an updated assignment at it — so the one node that OWNS
+`node_docker_restart` was the one node that never applied it. Measured:
+`settings set node_docker_restart=true` reached a follower (4-m) in 50s while the leader
+still held `false` at 12:22, its policy file unchanged since boot at 11:44.
+
+A minute-tick loop now re-reads the decision and rewrites the policy only when it differs,
+on every node that holds it. A store without the row is left alone — the rule that once
+disarmed a node's watchdog during the very dockerd outage it existed for.
+
+## v0.2.334 — a follower repairs its bind paths too
+
+The repair loop read the managed root from an atomic published only after the local store
+opens, and only the leader opens a store — so on every other node the root was `""`,
+`underVolumeRoot()` matched nothing, and the bind half of the repair was silently off on
+exactly the nodes that cannot read `volume_root`. It falls back to
+`PMCLUSTER_VOLUME_ROOT`, then the managed default, and the leader still overrides once its
+store is up.
+
+## v0.2.333 — app data is repaired, reported, and never silently emptied
+
+Three holes around one asset: the directory a stack's data lives in.
+
+- **Repair**, node-local, every 30s: the loop created missing directories but never asked
+  who owned them. It now resolves the user the image runs as — numerically when the image
+  says so, otherwise from the image's own `/etc/passwd` read out of a stopped container, so
+  a distroless image works — and hands the directory and its contents to that user when
+  they belong to someone else. Resolutions are cached per daemon.
+- **Report**: `doctor` fails when a directory under the volume root is owned by root while
+  the service placed there runs as a non-root user — the state that made 4-m unusable for
+  two days.
+- **Refuse**: the loop no longer recreates a data directory that has disappeared on a node
+  that has already run the service. Creating it starts the app on an empty database and
+  serves it as though nothing happened.
+
+No new DSL surface: ownership is derived from the image the stack already names.
+
+## v0.2.332 — adoption keeps file ownership, so apps stay able to write
+
+Node adoption copies `/var/stack/data` onto the snapshot-capable volume as root. `copyTree`
+preserved modes, symlinks and mtimes but not uid/gid, so every app-data directory came out
+root-owned. An app running as a non-root user then cannot create its own SQLite lock, exits
+1, and swarm restarts it every five seconds — and each restart rebuilds the task's network
+sandbox, which emits a few hundred veth queue events through udev. Sustained, that
+saturates the node: on 4-m it ran for two days at load ~15 on four vCPUs with the app as the
+only visible symptom at 0/1.
+
+`copyTree` restores uid/gid (`os.Lchown`) and mtime on every dir, file and symlink, and
+fails loudly on an ownership error rather than silently carrying a copy as root.
+
+## v0.2.331 — swarm node-refresh events are noise too
+
+Filtering exec/health left the pass rate at 59 per three minutes: the remaining driver is
+node update, 11 events in 8 seconds on a four-node cluster. The pass lists and inspects
+nodes itself, so a refresh tells it nothing; membership changes still wake it, and the 60s
+safety tick covers a node going Down.
+
+## v0.2.330 — healthcheck execs no longer wake the reconcile loop
+
+The "duplicated logs" were not duplication. journald on the leader showed the daemon writing
+`sync — no drift, rendered hash unchanged` 100 times in twenty seconds — 18 identical lines
+at one timestamp, every three seconds. The loop subscribes to the Docker event stream with
+no filter, and a healthcheck is three events per probe for every container that has one, so
+each event armed the 2s debounce and the loop ran a full pass — re-rendering all 18 stacks —
+every 3.1s (measured: 57 passes in three minutes). The same stream is what made the OTel
+collector rebuild a filelog receiver about once a second.
+
+- `docker.Events` drops `exec_*`/`health_status` events before they reach the loop; real
+  lifecycle events still wake it, pinned by a table test.
+- the per-stack "no drift" line is Debug.
+- Parseable v2.9.5 → v3.2.6, the hardening release that keeps the `P_*` contract this stack
+  uses.
+
+## v0.2.329 — Parseable v2.9.5
+
+The same log row is returned 22–42× from Parseable: total vs `distinct(body, p_timestamp)`
+is 26610 vs 625 over 15m, 63231 vs 2847 over 2h, and a record POSTed straight into
+Parseable — no collector involved — is stored once, served 11 times, then disappears. That
+is a read-path overlap in the backend, not double collection.
+
+## v0.2.328 — a transform statement that assigns a missing attribute drops the datapoint
+
+The collector bump to 0.165.0 fixed the receiver churn (3,240 starts/hour → 0) and made
+every daemon metric vanish: Parseable held zero `system.*` and zero `pmcluster.*` rows while
+`container.*` flowed normally, and nothing logged an error.
+
+Isolated with a throwaway collector in Parseable's network namespace, posting one OTLP metric
+whose resource carried `service.name` but no `stack.name`:
+
+    with transform/metrics : 200 accepted, 0 export failures, row NEVER lands
+    without it             : 200 accepted, row lands immediately
+
+So the transform discarded the datapoint. One statement per attribute, each guarded by its
+own condition, fixes it; container metrics were untouched because their resource carries
+both. The failure mode is silent by design of the component, which is why it looked like a
+network or backend problem for an hour. `otlphttp/parseable-*` also becomes
+`otlp_http/parseable-*`, since 0.165.0 deprecates the alias with a startup warning.
+
+## v0.2.327 — collector 0.165.0 (and what the churn actually was)
+
+The filelog receivers are rebuilt ~0.9 times a second, and each rebuild re-emits the tail it
+scans, so a busy line is stored dozens of times (54 for the daemon, 13 for a busy web app, 1
+for a quiet container). The trigger is not the log file: every container healthcheck is an
+`exec_create` / `exec_start` / `exec_die` event on the docker socket, `docker_observer`
+surfaces each one as a container change, and `receiver_creator` tears the receiver down and
+builds a new one. Measured: 3,240 receiver starts an hour, steady.
+
+- Collector `0.157.0` → `0.165.0`, validated against the rendered config before the bump
+  (`validate --config` exits 0). This release is a MEASUREMENT: if the churn survives the
+  upgrade it is a design problem in the observer/creator pair, not a version bug, and the
+  next decision is whether the filelog leg earns its keep at all.
+- Offsets are checkpointed (`v0.2.326`), so a recreation or a reschedule resumes instead of
+  re-reading — that is correct regardless of what the measurement says.
+
+## v0.2.326 — one producer per series, and log receivers that resume
+
+Two collector-side defects, both measured on the live leader before they were changed.
+
+**The filelog receivers churned, and every line was stored dozens of times.** The docker
+observer re-announces a container and the creator tears down its filelog receiver and builds
+a new one; with `start_at: end` and no checkpoint, several instances created in the same
+second each tail the same file. Measured: **3,240 receiver starts an hour** (0.9/s, steady
+for 6 h) and a single daemon line stored **72 times** — the copy count tracked how many
+instances were alive when it was written (72 newest, 54 ten seconds earlier, 36 before
+that). The Logs view was dominated by `sync — no drift` repeated fifty-odd times per
+interval, and Parseable held ~60 copies of everything.
+
+- A `file_storage` extension now checkpoints offsets, on a volume
+  (`otel_file_storage:/var/lib/otelcol/file_storage`) so a rescheduled collector resumes
+  instead of re-tailing. A recreated receiver continues where the last one stopped.
+
+**The leader had two producers for the same three series.** `hostmetrics` scraped the
+leader's own `/proc` through `HOST_PROC`/`HOST_SYS`, while the leader's daemon published the
+same three names for the same host — one bucket averaging two producers.
+
+- `hostmetrics` is removed, with its `/proc` and `/sys` bind mounts and its `HOST_PROC`/
+  `HOST_SYS` env. Its scrapers were cpu, memory and load only: exactly the three series every
+  node's daemon now publishes for itself. Nothing enabled is lost, and the collector stops
+  re-collecting what a node already measured — one producer per series, on every node.
+- If a series is wanted later (network, disk, per-state CPU), the daemon is where it belongs:
+  it exists on every node, not only the leader.
+
+## v0.2.325 — node resource metrics reach Parseable for every node
+
+The daemon sampled its node's `/proc` every 15 s and reported it to the leader, but the
+sample stopped at `node_stats`: the three numbers existed for the Node resources panel and
+nowhere else. The collector could not fill the gap either — `hostmetrics`, `docker_stats` and
+`filelog` all read *the leader's* host (`/hostfs/proc`, its own Docker socket, its own
+container log paths), so the metrics view held exactly one hostname while four nodes were
+being sampled.
+
+- `nodestat.Publish` now emits the node's own resource metrics under the **collector's**
+  names — `system.cpu.utilization{state=idle}`, `system.memory.utilization{state=used}`,
+  `system.cpu.load_average.1m` — which is the vocabulary `observability metrics nodes` and
+  the freshness query already read. Nothing in the reader changed.
+- CPU utilization is a delta: `/proc/stat` holds counters since boot, so the first sample
+  after a restart knows nothing and publishes no cpu point rather than a 0 that would read
+  as a saturated node. A counter that goes backwards is treated the same way.
+- **The node exports its own point; the leader proxies, it does not store.** The publish
+  happens in the daemon's own tick, next to the report, so telemetry never passes through
+  the leader's database: the collector receives it, batches it, and forwards it to
+  Parseable. The leader's report handler now does exactly one thing — the `node_stats` row —
+  and no longer republishes what it receives. Relaying was the earlier shape, and it put a
+  database write between a node's number and its graph.
+- Every point names its node on the datapoint as well as the resource, so four machines do
+  not collapse into one when they meet in the same pipeline.
+- Consequence, and the point of it: `observability status` reads 4/4 and the nodes view
+  shows every node, while `node_stats` and the journal report stay exactly as they were.
+
+## v0.2.324 — every node exports to the one collector
+
+Self-telemetry was leader-only: `otlp_endpoint: auto` resolved to loopback on the leader and
+to **disabled** everywhere else. Four daemons of five exported nothing — their samples
+reached the leader over mTLS and stopped in `node_stats` — which is why the console showed
+one node in a five-node cluster and `pmcluster observability status` said `1/4 reporting`
+while a day of Parseable metrics contained exactly one hostname.
+
+- `auto` now means "the one collector, wherever it is": loopback on the leader, and on every
+  other node the manager address that **answers** on `4318` — the same first-answer-wins
+  discovery the mTLS assignment channel already uses, because a worker cannot be told which
+  manager leads. A manager cannot be asked either without a second election to keep in
+  sync; a dial is the election.
+- A follower never dials a port nobody answered on: no answer means disabled *and* a reason,
+  re-probed every minute. The bounded error handler from the 2026-11-08 storm still stands
+  between a wrong endpoint and a journal, but the cheapest fix is not pointing at a closed
+  port in the first place.
+- Leadership moves the collector, and the next probe re-points the exporter at the new
+  leader without a restart.
+- `node_stats` and the journal are untouched: node state stays where the leader reads it and
+  nothing new is pushed into Parseable.
+
+## v0.2.322 — the mirror's age is about contact, not about change
+
+**A defect the first deployment exposed, four minutes after it started.** v0.2.321 aged a
+follower's mirror from `applied_at`, and `applied_at` only moves when the 200 changes rows.
+The steady state of a healthy cluster is a **304 on every poll**, so within four minutes a
+follower that had just been told "you are current" reported
+`applied 3m40s ago — STALE: nothing applied for over 3m0s`. A warning that fires when
+nothing is wrong is the one kind this platform must not ship.
+
+- **`sync_state.checked_at`** (migration `0032`) records the last successful answer — 200
+  **or** 304 — and the age is computed from it. `applied_at` keeps its own meaning: when
+  the rows were written, which is provenance and normally older.
+- A 304 now records a confirmation (`Store.ConfirmMirrorSync`); the label reads
+  `confirmed 20s ago · rows last written 40m ago`, and the second clause appears only when
+  it says something the first one does not.
+- `doctor` warns **STALE** only when the leader has stopped *answering*, and says so in
+  those words.
+
+
+## v0.2.320 — the watchdog finishes its own action
+
+**Why:** v0.2.319 made the daemon survive a dead dockerd and keep its policy armed, and
+the third live run of the same controlled test found the last link: the watchdog
+restarted docker, `PartOf` propagated that restart to `pmcluster`, the outage had already
+spent the unit's five-starts-in-five-minutes budget, and systemd answered "start request
+repeated too quickly" — `failed`, which nothing restarts when docker comes back. The node
+that the watchdog had just rescued was left with docker and no control plane, again.
+
+- **A docker restart now completes:** when this run restarted docker
+  (`restarted`/`reset-failed-and-restarted`), the watchdog checks its own unit, and if it
+  is down it runs `reset-failed` first (a start-limited unit refuses a start, silently)
+  then starts it. Only that run may do this — the watchdog knows it just took the daemon
+  down, which no general babysitter could claim, and the docker restart itself is
+  rate-limited to once per 30 minutes.
+
+Measured live on `nxt-sw-6-w` (2026-11-13, v0.2.320), one journal, no operator:
+
+```
+18:07:41  docker did not answer probe 1/3: … connection refused
+18:08:46  docker did not answer probe 2/3: … connection refused
+18:09:50  docker did not answer probe 3/3: … connection refused
+18:09:50  restarting docker after 3 consecutive failed probes — EVERY container on this
+          node will stop
+18:09:50  docker answers again after the restart
+18:09:52  pmcluster was down after the docker restart; started it
+```
+
+dockerd was down 2m54s and the control plane ~2s; the daemon served `/health` 200 for
+the whole docker outage, the node came back `Ready`, its storage task and its runner
+container were rescheduled, and the setting was then put back to `false` and the node's
+policy flipped with it.
+
+## v0.2.319 — the docker watchdog works; the control plane has to survive it
+
+**Why:** `node_docker_restart` exists so a dead `dockerd` fixes itself. It was exercised
+end-to-end for the first time on `nxt-sw-6-w` (2026-11-13): dockerd was killed until
+systemd's `StartLimitBurst` refused to start it again — the 2026-11-12 incident state —
+and the watchdog did exactly what it promises. Three failed `/_ping` probes a minute
+apart, `reset-failed`, `restart docker`, docker answering again. The node was still
+broken: `pmcluster.service` was `inactive`.
+
+- **A unit rendered before v0.2.290 carries `BindsTo=docker.service`, and systemd
+  propagates a bound unit's failure as a STOP** — for which `Restart=always` is not
+  honoured, so the control plane went down with the first kill and nothing brought it
+  back. The startup convergence now removes that line from the unit file itself
+  (`repairDaemonUnitDependency`) and `daemon-reload`s; every other line, including the
+  `User`/`Group`/`ExecStart` the node was installed with, is preserved.
+- **An empty `BindsTo=` in a drop-in does NOT cancel it.** The v0.2.290 drop-in carried
+  one, claimed in a comment and pinned by a test that asserted the text — while systemd
+  259 kept the inherited dependency, which is why the drop-in looked like a fix for two
+  months. Verified with a minimal scratch unit; the drop-in now carries only
+  `PartOf=docker.service` and says what it cannot do.
+- **`PartOf` stays, and is the right directive for the explicit case:** `systemctl
+  restart docker` restarts the agent with it (docker.service lists it in
+  `ConsistsOf=`), which is what the deploy script and the watchdog do.
+- **A dead dockerd is not a control-plane failure.** With the unit repaired, the same
+  test found `pmcluster serve` exiting on the post-leadership restore ("control-plane
+  Raft restore: … Cannot connect to the Docker daemon"), restart-looping to `failed` on
+  `StartLimitBurst` — and nothing starts a failed unit when docker comes back. An
+  unreachable or wedged daemon is now classified like a leaderless swarm: defer the
+  restore, keep serving. `IsSwarmUnavailable` is the one predicate, extended — not a
+  second check beside it.
+- **A worker no longer disarms its own watchdog.** At startup the daemon rewrote
+  `node-policy.json` from `node_docker_restart`, a leader-owned setting a worker's store
+  does not hold, so it wrote its own default `false` over the leader's answer — and the
+  watchdog then sat through three failed probes doing nothing. The policy is written
+  only by a store that holds the decision (`LoadNodeDockerRestartKnown`); on a worker
+  the runner assignment carries it.
+
+Measured on the node in two runs, in this order. **Run 1, before any fix:** the watchdog
+restored dockerd after 2m46s and `pmcluster` stayed `inactive` — the restart half worked,
+the control plane did not come back. **Run 2, with the unit repaired by hand to the state
+this convergence produces:** dockerd restored again, and the two remaining links showed
+themselves — the daemon restart-looped to `failed` on the control-plane restore, and
+rewrote its own policy as `false` so the watchdog did nothing on the next attempt. With
+the heal in v0.2.320 the full chain was then measured live on the same node — see that
+entry — so these three changes are verified end-to-end, not only by unit tests.
+
+## Unreleased — a follower answers, with an age (step 3 of 5)
+
+**Why:** steps 1 and 2 gave the leader a versioned snapshot and the follower a loop that
+applies it — and every read surface still refused, saying "standing by" about data the node
+was already holding. A stale answer an operator can see is worth more than a blank one.
+
+- **`doctor` on a non-leader answers a `cluster mirror` check**: the leader's name, the
+  version, the row counts, and `age_seconds`. Past three polls it is a WARN saying `STALE`
+  and naming the leader; nothing ever applied is a WARN naming the poll. The old blanket
+  "cluster state: not answered here" is now a specific list — secret decryption (the cipher
+  key arrives at join, step 5), stacks/revisions, the last apply, the kit drill.
+- **`cluster settings` reads answer on a follower**, prefixed with
+  `mirrored: from <leader>, version N, applied ... ago (age_seconds=N)`. `set` still
+  requires the leader: one writer, and its refusal now points at the readable half instead
+  of denying that settings exist on this node.
+- **The age is measured on this node's clock** from `applied_at`, clamped at zero — the
+  cache-report lesson (never subtract a remote timestamp from a local clock) and a clock
+  that steps backwards must not print a future age.
+- **A follower manager is no longer told the node list is manager-only** (it can read it);
+  the swarm line now differs by role.
+- Fixed while testing: `cmd.Context()` can be nil on a cobra command that was not executed,
+  and a nil context panics inside `database/sql` instead of falling back.
+
+Still unbuilt: settings still travel in Docker configs (step 4), no join-time key route
+(step 5) — a follower mirrors secret ciphertext but cannot yet decrypt it.
+
+## Unreleased — a follower stops standing by (step 2 of 5)
+
+**Why:** after step 1 the leader could serve a versioned snapshot, and nothing consumed
+it. A manager that is not the leader still answered "standing by" — its settings were
+whatever the last control-plane kit happened to carry, which is why `doctor` cannot answer
+five of its checks on any follower. Now it pulls.
+
+- **A follower manager mirrors the snapshot every 60 s** — the runner-assignment cadence,
+  one number for every node-facing pull. `Store.ApplySnapshot` does it in ONE transaction:
+  upsert settings and secrets on their natural keys, **delete every row the snapshot does
+  not carry** (the half an upsert-only mirror gets wrong — a deleted setting would live on
+  every follower forever), then record `sync_state`.
+- **Ordering is the safety property.** The loop starts before the leadership wait (a
+  follower blocks there forever) and after the startup control-plane restore (only safe
+  while nothing has the store open); at promotion it is stopped and **joined** before the
+  leader's store opens, because this node becomes the writer and two writers to one row is
+  a race. The leader never fetches from itself.
+- **The poll is conditional on the (leader, version) pair** it applied, so a failover is a
+  200 rather than a 304 for state this node never applied, and a quiet cluster costs a few
+  dozen bytes per follower per minute.
+- **A failed poll changes nothing.** The last snapshot and its age stay; the log names the
+  failure. A leader that dies therefore leaves followers serving a stale answer, never a
+  blank one.
+- **Two clocks, never mixed.** `applied_at`/`mirrored_at` are this node's; the leader's
+  `generated_at` is provenance only.
+
+Still unbuilt: no read surface answers from the mirror yet (step 3), settings still travel
+in Docker configs (step 4), no join-time key route (step 5).
+
+## Unreleased — cluster state learns to be pulled (step 1 of 5)
+
+**Why:** cluster settings — and the cipher key that decrypts every secret — are copied to
+every node by writing them into Docker configs. So the key sits in a Raft-replicated
+object any manager can read, every settings write is a config rotation against a 512 KB
+ceiling (the survivor kit already uses 84,740 of it), and a follower manager's store
+answers "standing by", which has already cost a runner selection and five `doctor` checks.
+The target is one writer (the leader) and readers that pull. Full reasoning in
+`pmcluster/docs/adr/0003-cluster-state-by-pull.md`.
+
+- **`GET /internal/api/cluster/snapshot`** on the leader's swarm-mTLS listener, behind the
+  existing node-certificate verifier and never on the public API (a test asserts the 404
+  there). It answers `settings`, `secrets` (ciphertext — the key never crosses this
+  channel) and `users`, always as arrays so an empty table is `[]` and never `null`:
+  a follower must tell "no rows" from "not sent". A **worker** certificate is refused —
+  a worker has no store to mirror into.
+- **A version that means content, not time.** One `cluster_version` row is bumped inside
+  the same transaction as the settings/secret/user write it describes, and stamped by the
+  store, so two reads of one version report one `generated_at`. It doubles as the ETag
+  (`leader:version`, weak comparison), so an unchanged poll is a **304 with no body**.
+  Rewriting a value that is already stored does not bump — reconcile reapplies settings
+  every pass, and a bump per pass would keep every follower re-fetching forever.
+- **It survives failover.** `cluster_version` rides the control-plane survivor kit via a
+  new `store.CopyReplace` selector (the migrations seed the row, so a verbatim copy would
+  collide), which keeps a promoted leader's version describing the data it adopted.
+- **Changes no behaviour yet.** Settings still travel in Docker configs, no follower polls
+  the route, and the join-time key route (step 5) does not exist. Additive so it can be
+  observed on the fleet before anything depends on it.
+
 ## Unreleased — the console can answer "what is my CI doing"
 
 - **A CI board at `/web/ci`.** One row per repository: newest workflow run, state,

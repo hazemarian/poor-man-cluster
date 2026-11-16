@@ -16,6 +16,9 @@ type HTTP struct {
 	// VolumeRoot resolves the cluster's configured volume_root setting so the
 	// restore default follows the operator's layout (nil → "/var/stack/data").
 	VolumeRoot func(ctx context.Context) string
+	// PlatformExport runs the manual control-plane export (ADR 0007). Nil means the route
+	// is not mounted: a daemon without a store or a leader position cannot export.
+	PlatformExport func(ctx context.Context) (PlatformExportResult, error)
 }
 
 // Mount registers the cluster-scope backup routes on the API router.
@@ -24,6 +27,29 @@ func (h *HTTP) Mount(r chi.Router) {
 	r.Post("/backups", h.create)
 	r.Get("/backups/{id}/files", h.browse)
 	r.Post("/backups/{id}/restore", h.restore)
+	if h.PlatformExport != nil {
+		// The control plane's own restore point, NOT a stack artifact: `backup create` is the
+		// volume pipeline, this is the leader's database plus its key (ADR 0007).
+		r.Post("/backups/platform", h.platform)
+	}
+}
+
+// platform exports the leader's control plane offsite now.
+//
+// The leader refusal is a 409, not a 500: asking the wrong node is a caller-side mistake the
+// console can explain ("this node is not the leader"), while a failure to write or upload is a
+// 502 the operator should look at.
+func (h *HTTP) platform(w http.ResponseWriter, r *http.Request) {
+	res, err := h.PlatformExport(r.Context())
+	if err != nil {
+		if errors.Is(err, ErrNotLeader) {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeErr(w, http.StatusBadGateway, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 // MountStackScoped is split out so the route can attach to the same

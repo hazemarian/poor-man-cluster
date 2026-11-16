@@ -5,6 +5,13 @@ port(s), a local adapter and its REST handler. Composition happens in exactly
 two roots: `internal/cli` (backend factory — the **only** local/remote switch)
 and `internal/server` (HTTP `Deps` + route mounting).
 
+Two node-local packages sit beside them and are not composition roots:
+`internal/noderuntime` holds the loops `serve` starts (assignment channel,
+snapshot mirror, volume repair, the runners, the docker watchdog), and
+`internal/nodeunits` holds the systemd units a node installs on itself and the
+node-local files those units read. Both are leaves: domain packages never import
+them, and neither may import `internal/cli`.
+
 ## Dependency rule
 
 Arrows point inward. Domain packages never import `remote`, `server` or `cli`.
@@ -144,16 +151,20 @@ node's runner half:
   exists for a single-node cluster).
 
 **The assignment channel** (`internal/runners/assignment.go`, served by
-`internal/cli/assignment.go`) is the leader's answer to "what should THIS node run":
+`internal/noderuntime/assignment.go`) is the leader's answer to "what should THIS node run":
 
 - `GET /api/github/runners/assignment` on the leader's **swarm data-path address,
   port 9092** — a listener of its own, never `0.0.0.0`, never a published host port.
 - Authenticated by **mutual TLS with the swarm node certificate**
   (`internal/auth/swarmtls`): chain to the swarm CA, `O` = this swarm's ID, `CN` = a
   node ID in the live node list (that is the revocation path), not expired. The
-  middleware is mounted on this route **and nothing else** — not on `/api/*`, not on
-  `/metrics`, not on the console — so a compromised worker gains no second readable
-  endpoint. `?node=` is ignored: identity comes from the certificate only.
+  middleware is mounted **per route** on this listener and never around a mux; the
+  listener carries three node-facing routes — this one, the node report
+  (`/internal/api/cluster/report`) and the cluster snapshot
+  (`/internal/api/cluster/snapshot`) — and none of them is mounted on `/api/*`, on
+  `/metrics`, or on the console, so a compromised worker gains no second readable
+  endpoint. `?node=` is ignored: identity comes from the certificate only, and each
+  route answers the projection that certificate entitles it to.
 - The leader resolves the same decision the reconcile makes (switch, org, node list,
   manager/leader refusal, `selected` group visibility) and sends the **resolved
   spec**: org, group, socket path/proxy, memory, labels, poll interval, a `reason`,
@@ -195,6 +206,124 @@ container/registration agreement (ghosts, offline runners, raw sockets), and the
 missing `organization_self_hosted_runners: write` permission that would otherwise
 appear as a bare 403. On a worker it answers the node-local subset (daemon, socket
 proxy, last assignment fetched, local runner, disk) instead of refusing.
+
+## Cluster state: one writer, readers that pull
+
+`internal/clustersnapshot` serves `GET /internal/api/cluster/snapshot` — the state a
+follower manager mirrors so it can answer reads from its own store instead of
+"standing by". The decision, its alternatives and its costs are in
+`docs/adr/0003-cluster-state-by-pull.md`; what the code constrains:
+
+- **The version is a content identity, not a clock.** One `cluster_version` row is bumped
+  inside the same transaction as every settings/secret/user write that changes
+  something, and stamped at that moment by the store — never by the handler at read
+  time, so two reads of one version report one `generated_at` and the age a follower
+  shows is the age of the data. Rewriting a value that is already stored does not bump:
+  reconcile reapplies settings every pass, and a bump per pass would make every poll a
+  full body.
+- **The ETag is `"<leader>:<version>"`.** A version alone is meaningless across a
+  leadership change, where a different store can answer the same number for different
+  content. A client must remember the PAIR it applied.
+- **The whole document, to managers only.** Every table the cluster's control plane lives
+  in — settings, secrets (ciphertext, never plaintext), users, stacks and their revisions,
+  configs and their versions, registries, the GitHub App — always present as arrays, so an
+  empty table is `[]` and never `null`: a follower has to be able to tell "no rows" from "not
+  sent", and the difference is every deleted row. What is absent is listed as data with a
+  reason per table in `internal/store/mirror_tables.go`: `backups`, `node_stats`,
+  `github_runners`, `sync_state` and the two structural tables, all for the same reason — the
+  row describes the node it lives on. A worker certificate is refused: it has no store to
+  mirror into and is told what to do through the assignment.
+- **Adoption copies nothing** (ADR 0005), so the mirror must be complete: a manager promoted
+  to leader has only the store it has been mirroring. `internal/store/mirror_tables.go` holds
+  the classification as data and `TestMirrorTables_EveryTableIsClassified` fails when a
+  migration adds a table that neither list mentions.
+
+**The follower half** (`internal/noderuntime/snapshot_mirror.go`, `Store.ApplySnapshot`) polls
+that route and applies it in ONE transaction — clear and re-insert every table it was sent,
+then record `sync_state`. What the code constrains:
+
+- **It starts before the leadership wait and stops before the leader's store opens.** A
+  follower manager blocks in that wait forever (the runner assignment loop has the same
+  shape for the same reason), and at promotion this node becomes the writer: the loop is
+  closed and joined, not merely cancelled, or two paths apply different answers to the
+  same rows.
+- **The leader never fetches from itself** — it reads its own store, and the tick checks
+  leadership every time rather than once at start.
+- **A failed poll changes nothing.** The last applied snapshot stays and the log says the
+  poll failed; a mirror that empties on a transport error turns a failover into a blank
+  console.
+- **The delete half is the point.** A row missing from the snapshot is deleted here, because
+  every table in it is cleared before the leader's rows go back in; an upsert-only mirror
+  would keep a stack the operator deleted, forever. Rows keep the leader's ids — a config
+  version, a stack revision and a users row are all named by id somewhere else — and legacy
+  `token_id` is written as NULL (it is UNIQUE when set).
+- **A table the document does not name is left alone.** That is the rolling-upgrade rule: a
+  leader on an older binary sends three tables, and a follower keeps everything else rather
+  than deleting what nobody sent.
+- **Bytes survive JSON as bytes.** Each table crosses with its column names and declared
+  types, so a BLOB (secret ciphertext, a GitHub private key) is base64 on the wire and
+  `[]byte` in the store, and a number arrives as `json.Number` so an INTEGER column is never
+  handed a float.
+- **Two clocks, never mixed.** `applied_at` and `mirrored_at` are this node's; the
+  leader's `generated_at` is provenance. Age is computed from the local stamps — the
+  cache-report bug was a report stamped by one clock and aged by another, which read as
+  stale the instant it was written.
+
+**The mirror is a read source, with its age attached** (`store.MirrorReading`). Slice 3
+switched the surfaces that used to refuse:
+
+- `doctor` on a non-leader answers a `cluster mirror` check instead of one blanket "not
+  answered here": the leader's name, the version, and the age measured on this node's
+  clock. Stale past three poll intervals is a WARN naming the leader; never-applied is a
+  WARN naming the poll. On the LEADER the report answers `cluster mirror verify` instead —
+  the check the control-plane kit drill used to be, pointed at the mirror: the version
+  applied, the age of the last successful answer, the rows every table carries, and whether
+  a key is present (`clustersnapshot.Verify`). What the mirror never carries is listed
+  separately and honestly — secret decryption (the key is provisioned at join, not by the
+  snapshot) and the last apply.
+- `cluster settings` (the READ form) is answered on a follower, prefixed with the mirror's
+  label. `set` still requires the leader: one writer, and a follower that accepted a write
+  would persist a value nothing replicates upward. The guard distinguishes them on the
+  subcommand WORD (`mirrorReadable`), because both forms are one cobra command and a scope
+  table keyed by command name cannot tell them apart.
+- The staleness threshold is derived from `clustersnapshot.PollInterval`, so the loop and
+  the read surfaces cannot disagree about what "three polls" means.
+
+**Not built yet:** the join-time key route (ADR 0005's handoff). Settings travel only by the
+pull now, adoption copies nothing, the data kit and the control-plane backup archive are
+retired — what is left of the Docker-config channel is the KEY config
+(`internal/controlplane/state.go`: `PublishKey` / `KeyLoop`, `newestKey`), and it goes when
+the key route lands.
+
+**Adoption copies nothing** (`internal/controlplane/adopt.go`, ADR 0005). A manager gaining
+leadership keeps serving the store it has been mirroring; there is no kit to stage, no
+`data.db` to rename and no `.encryption_key` to move, and `store.Store.Swap` — which existed
+only to replace a database under a live handle — is gone with it. The check is about trust,
+and the operator settled where the line is:
+
+- **A stale mirror is served**, and the adoption logs the version and the age it is adopting
+  ("adopting mirror version N, age Ts"). Refusing would turn a failover into an outage over
+  an age the operator decided is acceptable; hiding it would make a leader on old data
+  indistinguishable from a current one.
+- **One refusal: nothing to serve.** No snapshot ever applied AND no cluster state in the
+  store (no setting, user, stack, secret or config) means an empty control plane. It refuses
+  and starts no control loop. That is an absence, not an age, and the two do not share a code
+  path.
+- **A node that never mirrored but holds data is the source** — the first leader of a cluster
+  adopts itself.
+- **The key is reported, not enforced.** A key that differs from the cluster's key config is a
+  WARN in the adoption log and a problem in `cluster mirror verify`; ending up with no leader
+  over a key the next change replaces is the wrong trade.
+- **The drill moved, it did not disappear.** `cluster kit verify` became
+  `cluster mirror verify` (`internal/cli/cluster_mirror.go`), the `doctor` line
+  `control-plane kit` became `cluster mirror verify`, and the weekly systemd drill step runs
+  the new command. Losing the only proof that a promotion would work is not a cost of
+  retiring the kit.
+- **Startup says what the node holds.** `noderuntime.ConfirmMirrorAtStartup` replaced the old
+  restore-from-config: it reads `sync_state` and states the leader, version and age, or says
+  plainly that the node is waiting for its first snapshot. `cli.openServeStore` is the one
+  place `serve` tolerates a missing database — the store is seeded by the mirror, so a node
+  with no data starts, serves `/health` and says so instead of crash-looping.
 
 ## Leaf packages
 

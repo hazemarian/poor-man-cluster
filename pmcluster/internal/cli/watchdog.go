@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -14,9 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
+
 	"github.com/spf13/cobra"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/config"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
 )
 
 // The health watchdog: the one actor that can bring a WEDGED daemon back.
@@ -39,10 +41,6 @@ import (
 // first state, or a probe that fails because the machine is ALREADY restarting.
 
 const (
-	// WatchdogFailuresBeforeRestart is N: three consecutive failed probes, one
-	// minute apart. One failure is a blip (a GC pause, a busy CPU during a
-	// build); three is a minute of silence, which a healthy daemon cannot do.
-	WatchdogFailuresBeforeRestart = 3
 
 	// WatchdogRestartRateLimit is the floor between two restarts. A daemon that
 	// cannot answer 10 minutes after being restarted will not be fixed by being
@@ -60,30 +58,12 @@ const (
 	// five seconds is not answering; waiting longer only delays the decision.
 	WatchdogProbeTimeout = 5 * time.Second
 
-	// watchdogStateFile lives under the daemon's data dir, NOT in /run: the
-	// failure count has to survive the restart it triggers, or every restart
-	// would reset the count to zero and the watchdog would restart once a
-	// minute instead of once per rate limit.
-	watchdogStateFile = "watchdog.json"
+	// The state file name lives with the runtime that owns the counter; the
+	// reasoning for its location is in nodeunits.WatchdogStateFile.
 
-	// defaultWatchdogProbeURL is what the timer probes. 127.0.0.1, not the
-	// configured listen address: `serve` binds 0.0.0.0, and dialing the
-	// unspecified address is not a probe of this node.
-	defaultWatchdogProbeURL = "http://127.0.0.1:9090/health"
+	// nodeunits.DefaultWatchdogProbeURL lives in nodeunits with the rest of the watchdog
+	// contract; this node's timer and this node's runtime must probe one URL.
 )
-
-// watchdogState is the persisted evidence, one small JSON file.
-type watchdogState struct {
-	// Failures is the CONSECUTIVE failed-probe count. It is reset by one
-	// successful probe and by nothing else — in particular not by a restart.
-	Failures int `json:"failures"`
-	// LastRestart is when this watchdog last restarted the unit (unix, 0 =
-	// never). It is what the rate limit reads.
-	LastRestart int64 `json:"last_restart,omitempty"`
-	// LastProbe and LastFailure are for the operator reading the file.
-	LastProbe   int64 `json:"last_probe,omitempty"`
-	LastFailure int64 `json:"last_failure,omitempty"`
-}
 
 // watchdogVerdict is what one run decided. It is a string so a test asserts the
 // decision instead of counting log lines.
@@ -140,7 +120,7 @@ func watchOnce(ctx context.Context, statePath string, d watchdogDeps) (watchdogV
 		out = io.Discard
 	}
 	now := d.now()
-	st, _ := loadWatchdogState(statePath)
+	st, _ := noderuntime.LoadWatchdogState(statePath)
 
 	if err := d.Probe(ctx); err == nil {
 		if st.Failures > 0 {
@@ -149,7 +129,7 @@ func watchOnce(ctx context.Context, statePath string, d watchdogDeps) (watchdogV
 		}
 		st.Failures = 0
 		st.LastProbe = now.Unix()
-		_ = saveWatchdogState(statePath, st)
+		_ = noderuntime.SaveWatchdogState(statePath, st)
 		return VerdictHealthy, nil
 	}
 
@@ -158,7 +138,7 @@ func watchOnce(ctx context.Context, statePath string, d watchdogDeps) (watchdogV
 	st.LastFailure = now.Unix()
 	// Persist BEFORE acting. If the restart is what kills this process, the
 	// count still describes what happened.
-	_ = saveWatchdogState(statePath, st)
+	_ = noderuntime.SaveWatchdogState(statePath, st)
 
 	active, err := d.UnitActive(ctx)
 	if err != nil {
@@ -172,7 +152,7 @@ func watchOnce(ctx context.Context, statePath string, d watchdogDeps) (watchdogV
 		// turn `systemctl stop pmcluster` into a fight.
 		return VerdictInactive, nil
 	}
-	if st.Failures < WatchdogFailuresBeforeRestart {
+	if st.Failures < nodeunits.WatchdogFailuresBeforeRestart {
 		return VerdictRecorded, nil
 	}
 	if age, known := d.UnitAge(ctx); known && age < WatchdogMinUnitAge {
@@ -192,7 +172,7 @@ func watchOnce(ctx context.Context, statePath string, d watchdogDeps) (watchdogV
 		return "", fmt.Errorf("restart pmcluster after %d failed health probes: %w", st.Failures, err)
 	}
 	st.LastRestart = now.Unix()
-	_ = saveWatchdogState(statePath, st)
+	_ = noderuntime.SaveWatchdogState(statePath, st)
 	// ONE line per restart, naming the count: this is the line an operator
 	// greps for when asking "did anything restart my daemon overnight?".
 	fmt.Fprintf(out, "%s pmcluster-watchdog: restarted the unit after %d consecutive failed /health probes (last restart %s)\n",
@@ -206,48 +186,6 @@ func lastRestartWords(at int64, now time.Time) string {
 		return "never"
 	}
 	return now.Sub(time.Unix(at, 0)).Round(time.Second).String() + " ago"
-}
-
-// loadWatchdogState reads the state file. A missing or corrupt file is an empty
-// state, never an error: the watchdog must still work on a node whose data dir
-// was just created, and a corrupt counter costs at most one extra minute of
-// silence.
-func loadWatchdogState(path string) (watchdogState, bool) {
-	var st watchdogState
-	if strings.TrimSpace(path) == "" {
-		return st, false
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return st, false
-	}
-	if err := json.Unmarshal(b, &st); err != nil {
-		return watchdogState{}, false
-	}
-	return st, true
-}
-
-// saveWatchdogState writes the state 0600 via a rename, so a crash mid-write
-// cannot leave a half-written counter that reads as zero.
-func saveWatchdogState(path string, st watchdogState) error {
-	if strings.TrimSpace(path) == "" {
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return fmt.Errorf("create watchdog state dir: %w", err)
-	}
-	b, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return fmt.Errorf("write watchdog state: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("replace watchdog state: %w", err)
-	}
-	return nil
 }
 
 // probeHealth GETs the probe URL with a bounded timeout and accepts only a 2xx.
@@ -401,7 +339,7 @@ update'. Hidden because it is not an operator command.`,
 				return fmt.Errorf("resolve the data dir for the watchdog state: %w", err)
 			}
 			if statePath == "" {
-				statePath = filepath.Join(cfg.DataDir, watchdogStateFile)
+				statePath = filepath.Join(cfg.DataDir, nodeunits.WatchdogStateFile)
 			}
 			if !cmd.Flags().Changed("probe-url") {
 				probeURL = hostLoopbackURL(cfg.ListenAddr)
@@ -420,10 +358,10 @@ update'. Hidden because it is not an operator command.`,
 		// The docker check runs SECOND and its failure never hides the daemon verdict:
 		// the node can have a healthy control plane and a dead dockerd, which is
 		// exactly the state that took nxt-sw-3-w out of the cluster for hours.
-		if watchdogDockerSocket != "" && nodePolicyArmsDocker(watchdogPolicyFile) {
-			dockerState := filepath.Join(filepath.Dir(statePath), dockerWatchStateFile)
-			_, derr := watchDockerOnce(ctx, dockerState, dockerWatchDeps{
-				Probe:       func(ctx context.Context) error { return probeDockerSocket(ctx, watchdogDockerSocket) },
+		if watchdogDockerSocket != "" && noderuntime.NodePolicyArmsDocker(watchdogPolicyFile) {
+			dockerState := filepath.Join(filepath.Dir(statePath), noderuntime.DockerWatchStateFile)
+			dverdict, derr := noderuntime.WatchDockerOnce(ctx, dockerState, noderuntime.DockerWatchDeps{
+				Probe:       func(ctx context.Context) error { return noderuntime.ProbeDockerSocket(ctx, watchdogDockerSocket) },
 				UnitActive:  func(ctx context.Context) (bool, error) { return unitActiveNow(ctx, "docker") },
 				Restart:     func(ctx context.Context) error { return restartUnit(ctx, "docker") },
 				ResetFailed: func(ctx context.Context) error { return resetFailedUnit(ctx, "docker") },
@@ -431,6 +369,20 @@ update'. Hidden because it is not an operator command.`,
 			})
 			if derr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "docker-watch: %v\n", derr)
+			}
+			// A restart of docker steals this node's daemon with it (PartOf), and the
+			// start budget may already be spent by the outage itself. Completing the
+			// action is this run's job: nothing else starts a `failed` unit when docker
+			// comes back.
+			if dverdict == noderuntime.DockerVerdictRestarted || dverdict == noderuntime.DockerVerdictReArmed {
+				if _, herr := noderuntime.HealControlPlaneAfterDockerRestart(ctx, noderuntime.HealDeps{
+					UnitActive:  func(ctx context.Context) (bool, error) { return unitActiveNow(ctx, unit) },
+					ResetFailed: func(ctx context.Context) error { return resetFailedUnit(ctx, unit) },
+					Start:       func(ctx context.Context) error { return restartUnit(ctx, unit) },
+					Out:         cmd.OutOrStdout(),
+				}); herr != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "docker-watch: %v\n", herr)
+				}
 			}
 		}
 		if err != nil {
@@ -446,8 +398,8 @@ update'. Hidden because it is not an operator command.`,
 
 func init() {
 	healthWatchCmd.Flags().StringVar(&watchdogStatePath, "state-file", "",
-		"path to the watchdog state file (default <data_dir>/"+watchdogStateFile+")")
-	healthWatchCmd.Flags().StringVar(&watchdogProbeURL, "probe-url", defaultWatchdogProbeURL,
+		"path to the watchdog state file (default <data_dir>/"+nodeunits.WatchdogStateFile+")")
+	healthWatchCmd.Flags().StringVar(&watchdogProbeURL, "probe-url", nodeunits.DefaultWatchdogProbeURL,
 		"URL probed with a "+WatchdogProbeTimeout.String()+" timeout")
 	healthWatchCmd.Flags().StringVar(&watchdogPolicyFile, "policy-file", "",
 		"node policy document written by the leader's decision; without it the docker "+
@@ -465,11 +417,11 @@ func init() {
 func hostLoopbackURL(listenAddr string) string {
 	addr := strings.TrimSpace(listenAddr)
 	if addr == "" {
-		return defaultWatchdogProbeURL
+		return nodeunits.DefaultWatchdogProbeURL
 	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return defaultWatchdogProbeURL
+		return nodeunits.DefaultWatchdogProbeURL
 	}
 	if host == "" || host == "0.0.0.0" {
 		host = "127.0.0.1"

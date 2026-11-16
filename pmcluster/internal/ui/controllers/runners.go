@@ -60,6 +60,12 @@ type runnerRow struct {
 
 	LastJobURL   string
 	LastJobLabel string
+	// CacheWarnings are this node's caches over their ceiling, as the daemon
+	// measured them. Empty for a node that is not this daemon's own.
+	CacheWarnings []string
+	// CacheTotal is every cache on this node added up, so one row can say what the
+	// node is holding without four numbers.
+	CacheTotal string
 	// Reason is why this row is in its state when that is not GitHub's news —
 	// a memory refusal names the node's RAM and the cap.
 	Reason string
@@ -78,7 +84,7 @@ type runnerNode struct {
 	Reason     string
 	Selectable bool
 	// Caution is set on a row that MAY be chosen but carries a cost — the leader with
-	// `github_runner_allow_leader` on, where a job competes with the control plane.
+	// `github_runner_allow_managers` on, where a job competes with the control plane.
 	// Rendered as a warning pill rather than a disabled row, because "allowed and
 	// contended" and "not allowed" are different facts.
 	Caution  string
@@ -120,6 +126,14 @@ type runnersData struct {
 
 	Rows  []runnerRow
 	Nodes []runnerNode
+	// CacheWarnings are the runner caches on any selected node that have passed
+	// their ceiling. Rendered as a loud banner at the top of the page: these volumes
+	// are the only thing the platform never removes, so a full disk is otherwise
+	// discovered by a job that has nothing to do with the cache.
+	CacheWarnings []string
+	// CacheWarningText is the same list joined into one sentence for the banner, which
+	// takes a single Body.
+	CacheWarningText string
 	// Selected is how many nodes are chosen (the capacity model: N nodes = N
 	// runners).
 	Selected int
@@ -127,17 +141,19 @@ type runnersData struct {
 
 func (d *runnersData) fail(key, raw string) { d.ErrKey, d.ErrRaw = key, raw }
 
-// allowLeader reports whether the operator lifted the leader placement rule.
+// allowManagers reports whether the operator lifted the manager placement rule.
 //
 // The picker has to agree with the daemon about this, or the console offers a checkbox
 // the server refuses (or hides one it would accept). Same question, same setting, read
-// here as well as in the daemon.
-func (c Runners) allowLeader(ctx context.Context) bool {
+// here as well as in the daemon — and it covers EVERY manager, not only the leader,
+// because keying it to the leader alone left the other managers unselectable for no
+// reason an operator could see.
+func (c Runners) allowManagers(ctx context.Context) bool {
 	s, err := c.API.ClusterSettings(ctx)
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(s["github_runner_allow_leader"]), "true")
+	return strings.EqualFold(strings.TrimSpace(s["github_runner_allow_managers"]), "true")
 }
 
 // Page renders the panel: the picker, then the table.
@@ -161,7 +177,7 @@ func (c Runners) SaveNodes(g *gin.Context) {
 		c.render(g, d)
 		return
 	}
-	allowLeader := c.allowLeader(g.Request.Context())
+	allowManagers := c.allowManagers(g.Request.Context())
 	chosen := map[string]bool{}
 	for _, n := range g.PostFormArray("node") {
 		chosen[strings.ToLower(strings.TrimSpace(n))] = true
@@ -181,7 +197,7 @@ func (c Runners) SaveNodes(g *gin.Context) {
 		if !chosen[strings.ToLower(n.Hostname)] {
 			continue
 		}
-		if ok, reason := runners.RolesOf(runtimeNode(n), allowLeader); !ok {
+		if ok, reason := runners.RolesOf(runtimeNode(n), allowManagers); !ok {
 			d.fail("runners.err_manager", reason)
 			c.render(g, d)
 			return
@@ -240,7 +256,7 @@ func (c Runners) nodeMemoryOverrides(g *gin.Context, nodes []pmapi.Node) (map[st
 		if !ok {
 			return nil, "runners.err_unknown_node", host
 		}
-		if ok, reason := runners.RolesOf(runtimeNode(node), c.allowLeader(g.Request.Context())); !ok {
+		if ok, reason := runners.RolesOf(runtimeNode(node), c.allowManagers(g.Request.Context())); !ok {
 			return nil, "runners.err_manager", reason
 		}
 		if err := runners.ValidateMemory(raw); err != nil {
@@ -406,6 +422,16 @@ func (c Runners) render(g *gin.Context, d runnersData) {
 	for _, s := range stats {
 		mem[strings.ToLower(s.Hostname)] = s
 	}
+	for _, r := range d.Rows {
+		if r.Node != "" && len(r.CacheWarnings) > 0 {
+			for _, w := range r.CacheWarnings {
+				d.CacheWarnings = append(d.CacheWarnings, r.Node+": "+w)
+			}
+		}
+	}
+	if len(d.CacheWarnings) > 0 {
+		d.CacheWarningText = strings.Join(d.CacheWarnings, " · ")
+	}
 	stateByNode := map[string]string{}
 	reasonByNode := map[string]string{}
 	for _, r := range d.Rows {
@@ -421,7 +447,7 @@ func (c Runners) render(g *gin.Context, d runnersData) {
 		return nodes[i].Hostname < nodes[j].Hostname
 	})
 	for _, n := range nodes {
-		ok, reason := runners.RolesOf(runtimeNode(n), c.allowLeader(g.Request.Context()))
+		ok, reason := runners.RolesOf(runtimeNode(n), c.allowManagers(g.Request.Context()))
 		// A selectable row can still carry a caution: "allowed, and here is the cost".
 		caution := ""
 		if ok {
@@ -456,9 +482,11 @@ func buildRunnerRows(in []pmapi.GitHubRunner) []runnerRow {
 			State: r.State, StateClass: stateClass(r.State),
 			RegisteredAt: r.RegisteredAt, LastSeen: r.LastSeen,
 			ContainerID: r.ContainerID, LastJobURL: r.LastJobURL, Reason: r.Reason,
-			LastJobLabel: lastJobLabel(r.LastJobURL),
-			Age:          ageLabel(r.RegisteredAt),
-			Busy:         r.State == runners.StateBusy,
+			LastJobLabel:  lastJobLabel(r.LastJobURL),
+			Age:           ageLabel(r.RegisteredAt),
+			Busy:          r.State == runners.StateBusy,
+			CacheWarnings: r.CacheWarnings,
+			CacheTotal:    r.CacheTotal,
 		}
 		out = append(out, row)
 	}

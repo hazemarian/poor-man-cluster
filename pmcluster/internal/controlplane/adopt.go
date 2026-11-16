@@ -5,308 +5,222 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/clustersnapshot"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
-// StoreSwapper is the control-plane store as adoption needs it: it closes the
-// live SQLite handle, runs fn with no connection open, then reopens the
-// database at the same path. *store.Store implements it (Store.Swap), and the
-// interface lives here so the predicate and the extraction can be tested without
-// a database.
-type StoreSwapper interface {
-	Swap(fn func() error) error
-}
+// MirrorStaleAfter is how old this node's last successful answer from the leader may be
+// before it refuses to lead from what it has. Three poll intervals, the same number
+// `doctor` uses for its STALE label — one threshold, one meaning.
+const MirrorStaleAfter = 3 * clustersnapshot.PollInterval
 
-// Adoption reports what one leadership-gain check did.
+// Adoption is what one leadership-gain check found.
 type Adoption struct {
-	// Adopted is true when this node replaced its control plane.
-	Adopted bool
-	// Config is the state config the check considered (the newest one).
-	Config string
-	// Revision is the snapshot time of that config.
-	Revision time.Time
-	// PreviousRevision is the marker this node carried before the check
-	// (zero when it had never synced).
-	PreviousRevision time.Time
-	// KeyChanged reports that the adopted encryption key differs from the one
-	// this node had — the caller must reload its Cipher, or every credential
-	// ciphertext in the freshly adopted DB is undecryptable.
-	KeyChanged bool
-	// Files is how many kit files were extracted (0 when nothing was adopted).
-	Files int
-	// Reason names the predicate that fired.
+	// Ready is true when this node may serve as the writer: its store is either the
+	// cluster's own state (a node that has never been a follower) or a mirror confirmed
+	// recently enough to vouch for.
+	Ready bool
+	// Leader is the leader whose state this node mirrored ("" when it never mirrored).
+	Leader string
+	// Version is the mirrored version, 0 when nothing was ever applied.
+	Version int64
+	// Age is how long ago this node last got a successful answer from that leader, on
+	// THIS node's clock (0 when unknown).
+	Age time.Duration
+	// CheckedAt is when that answer arrived.
+	CheckedAt time.Time
+	// Source reports that this node IS the cluster's state (it has never applied a
+	// snapshot), so nothing was mirrored onto it.
+	Source bool
+	// KeyOK / KeyProblem report the encryption-key comparison. Neither is a refusal.
+	KeyOK      bool
+	KeyProblem string
+	// Reason names the fact that decided the answer, for the log.
 	Reason string
 }
 
-// stagingPrefix names the scratch directory an adoption extracts into. It lives
-// inside DataDir so the final rename stays on one filesystem (an atomic
-// rename), and it is excluded from BOTH the kit tarball and the change walk for
-// the same reason the revision marker is: a file this package writes must never
-// make the kit look dirty or end up inside the next snapshot.
-const stagingPrefix = ".adopt-"
+// RefusalError is returned when this node's mirror cannot be vouched for. It carries the
+// numbers an operator needs to act: how old the mirror is and which leader it came from.
+type RefusalError struct {
+	Age    time.Duration
+	Leader string
+	Why    string
+}
 
-// AdoptOnLeadership runs the startup freshness predicate once, on the
-// follower→leader transition, and adopts the newest Raft-replicated kit when it
-// is newer than this node's.
+func (e *RefusalError) Error() string {
+	switch {
+	case e.Leader == "" && e.Age == 0:
+		return "refusing leadership: " + e.Why
+	case e.Leader == "":
+		return fmt.Sprintf("refusing leadership: %s (mirror last confirmed %s ago)", e.Why, e.Age.Truncate(time.Second))
+	default:
+		return fmt.Sprintf("refusing leadership: %s (mirror from %s last confirmed %s ago)", e.Why, e.Leader, e.Age.Truncate(time.Second))
+	}
+}
+
+// Now is the clock the age is measured against. Overridable in tests; production takes
+// this node's clock and never the leader's stamp, because subtracting a remote timestamp
+// from a local one is the cache-report bug.
+var Now = time.Now
+
+// AdoptOnLeadership decides whether this node may act as the cluster's writer after a
+// leadership gain, using the store it ALREADY HAS.
 //
-// The startup path (serve, before store.Open) and this one decide with the same
-// predicates — no key, a missing or older `.state_revision`, or a different
-// encryption key — so the two can never disagree. What differs is the store:
-// here the daemon is already serving, so a restore must close its SQLite
-// connection, replace `data.db` and `.encryption_key`, and reopen. That is what
-// StoreSwapper.Swap provides, and it is why this is NOT wired to a tick: a node
-// that stays leader must not keep closing its store.
+// It copies nothing. That is the whole change: every manager mirrors the cluster's state
+// continuously (internal/noderuntime/snapshot_mirror.go), so a promoted node is already
+// holding it, and the old path — stage a kit out of a Raft config, close the store, rename
+// a data.db and an .encryption_key into place, reopen — existed only because the mirror was
+// a projection that could not be served from. See ADR 0005.
 //
-// Call it on every leadership GAIN (and only then). It is safe to call when
-// nothing needs doing: it checks, finds the node current, and returns without
-// touching a file.
+// The check is about TRUST in the rows the node is about to answer for, and the operator
+// settled where the line sits:
 //
-// Failure is contained by design. An unreadable kit, a state config whose key
-// config is missing, or a payload that does not extract leaves the current
-// database in place and serving; the error is logged at error level and
-// returned so the caller can decide, but nothing is half-written: the kit is
-// extracted into a staging directory and renamed into place, with `data.db`
-// renamed last.
-func (k *Kit) AdoptOnLeadership(ctx context.Context, swap StoreSwapper) (Adoption, error) {
-	if k.Docker == nil {
-		return Adoption{}, nil // standalone/local: no Raft configs to adopt from
+//   - A STALE mirror is SERVED. A node whose snapshot is a few minutes old is promoted and
+//     keeps serving it; refusing would turn a failover into an outage over a number the
+//     operator decided is acceptable. The cost is made visible instead of hidden: the age
+//     and the version are logged as the adoption happens ("adopting mirror version N, age
+//     Ts"), so a leader that took over on old data says so once and forever in the journal.
+//   - The ONE hard refusal is "nothing to serve": a node that has never applied a snapshot
+//     AND whose store holds no cluster state (no setting, user, stack, secret or config) is
+//     an empty control plane. That is not a stale copy, it is no copy, and a leader answering
+//     from it would report a cluster with no users, no stacks and no settings as the truth.
+//     The two cases must not share a code path — one is an age, the other is an absence.
+//   - A node that has never applied a snapshot but DOES hold data is the cluster's source:
+//     the first leader after `cluster up`, or a standalone box. It adopts itself.
+//   - The encryption key is reported, not enforced here. A key that differs from the
+//     cluster's means the secret ciphertext cannot be decrypted, and that is a loud WARN
+//     (and a problem in `cluster mirror verify`), not a second way to end up with no leader.
+//     The key still comes from its own config for now: the join-time key route is a separate
+//     change.
+//
+// mirrored reports whether THIS process ran the mirror loop before the transition. It
+// separates "never a follower" from "a follower whose polls never landed".
+func (k *Kit) AdoptOnLeadership(ctx context.Context, st *store.Store, mirrored bool) (Adoption, error) {
+	if k.Standalone {
+		// No swarm, no peer, no mirror. This node is its own source.
+		return Adoption{Ready: true, Source: true, Reason: "standalone: this node is its own source"}, nil
+	}
+	if st == nil {
+		return Adoption{}, errors.New("cannot verify this node's cluster state: no store handle")
 	}
 	log := k.Log.With().Str("component", "controlplane").Logger()
 
-	snap, err := k.newestSnapshot(ctx)
+	adoption := Adoption{}
+	state, err := st.SyncState(ctx)
 	switch {
-	case errors.Is(err, ErrNoSnapshots):
-		log.Debug().Msg("no control-plane state config; nothing to adopt on leadership gain")
-		return Adoption{}, nil
+	case errors.Is(err, store.ErrNeverSynced):
+		state = nil
 	case err != nil:
-		if IsSwarmUnavailable(err) {
-			// A worker, or a swarm without a Raft leader right now. Nothing to
-			// read, nothing to adopt, nothing to crash: the next leadership
-			// transition retries.
-			log.Warn().Err(err).Msg("swarm unavailable; skipping control-plane adoption on leadership gain")
-			return Adoption{}, nil
+		return Adoption{}, fmt.Errorf("read this node's mirror state: %w", err)
+	}
+
+	if state == nil {
+		hasData, err := st.HasData(ctx)
+		if err != nil {
+			return Adoption{}, err
 		}
-		log.Error().Err(err).Msg("control-plane adoption check failed on leadership gain; still serving the CURRENT database")
-		return Adoption{}, err
+		if !hasData {
+			err := &RefusalError{Why: "no snapshot has ever been applied here and this node's store holds no cluster state — there is nothing to serve, which is not the same as serving something old"}
+			log.Error().Err(err).Bool("mirrored", mirrored).
+				Msg("control-plane adoption REFUSED on leadership gain: this node has nothing to serve")
+			return adoption, err
+		}
+		adoption.Ready = true
+		adoption.Source = true
+		adoption.Reason = "this node holds the cluster's own state (no snapshot has ever been applied here)"
+		log.Info().Bool("mirrored", mirrored).
+			Msg("adopting this node's own store: it is the cluster's source, nothing to mirror")
+	} else {
+		adoption.Leader = state.Leader
+		adoption.Version = state.Version
+		age := Now().Sub(time.Unix(state.CheckedAt, 0))
+		if age < 0 {
+			// A backwards clock must not read as "fresh in the future".
+			age = 0
+		}
+		adoption.Age = age
+		adoption.CheckedAt = time.Unix(state.CheckedAt, 0)
+		adoption.Ready = true
+		adoption.Reason = fmt.Sprintf("serving mirror version %d from %s, age %s", state.Version, state.Leader, age.Truncate(time.Second))
+		if age > MirrorStaleAfter {
+			// Accepted, and said out loud. This is the operator's trade: a promotion on a
+			// few-minutes-old snapshot beats no leader, and the journal carries the cost.
+			log.Warn().Str("leader", state.Leader).Int64("version", state.Version).
+				Dur("age", age).Dur("stale-after", MirrorStaleAfter).
+				Msg("adopting the mirror anyway: it is older than three polls — serving it is accepted, but writes made elsewhere in that window are not here")
+		} else {
+			log.Info().Str("leader", state.Leader).Int64("version", state.Version).
+				Dur("age", age).
+				Msg("adopting mirror version " + strconv.FormatInt(state.Version, 10) + ", age " + age.Truncate(time.Second).String())
+		}
 	}
 
-	// Never adopt a snapshot this node published itself. The revision marker
-	// written by Snapshot already makes the predicate a no-op; this covers the
-	// case where that marker write failed, which would otherwise close and
-	// re-extract a store that is already the source of the snapshot.
-	if own := k.publishedConfig(); own != "" && snap.stateConfig == own {
-		log.Debug().Str("config", snap.stateConfig).
-			Msg("newest control-plane snapshot is this node's own publication; nothing to adopt")
-		return Adoption{Config: snap.stateConfig, Revision: snap.at}, nil
+	if err := k.checkLocalKey(ctx, st); err != nil {
+		// A warning, never a refusal: ending up with no leader over a key the operator is
+		// about to copy into place is the wrong trade. Saying it loudly is what makes the
+		// copy happen before the next failover.
+		adoption.KeyProblem = err.Error()
+		log.Warn().Err(err).
+			Msg("this node's encryption key is not the cluster's: the secret ciphertext it mirrors cannot be decrypted until it holds the right key file")
+	} else {
+		adoption.KeyOK = true
 	}
 
-	// A cluster whose newest state config has no key config is broken even when
-	// this node happens to be current: say so, once per transition.
-	if snap.keyErr != nil {
-		log.Warn().Err(snap.keyErr).Str("config", snap.stateConfig).Str("key-config", snap.keyConfig).
-			Msg("newest control-plane state config has no readable key config (security split broken); an adoption would be refused")
-	}
-
-	f := k.freshnessOf(snap)
-	if !f.need {
-		log.Info().Str("config", snap.stateConfig).
-			Str("revision", snap.at.Format(time.RFC3339Nano)).
-			Str("local-revision", formatRevision(f.localRev)).
-			Msg("control plane is already at the newest snapshot; no adoption on leadership gain")
-		return Adoption{Config: snap.stateConfig, Revision: snap.at, PreviousRevision: f.localRev}, nil
-	}
-
-	// A data kit without its key is a control plane that cannot decrypt its own
-	// credentials. Refuse before the store is touched at all.
-	if snap.keyErr != nil {
-		err := fmt.Errorf("state config %s exists but its key config %s is unreadable (%w) — refusing to adopt a ciphertext without its key (security split); keeping the CURRENT database", snap.stateConfig, snap.keyConfig, snap.keyErr)
-		log.Error().Err(err).Str("config", snap.stateConfig).Str("key-config", snap.keyConfig).
-			Msg("control-plane adoption REFUSED on leadership gain")
-		return Adoption{Config: snap.stateConfig, Revision: snap.at, PreviousRevision: f.localRev}, err
-	}
-	if swap == nil {
-		err := errors.New("cannot adopt control-plane state: no store handle supplied")
-		log.Error().Err(err).Msg("control-plane adoption refused on leadership gain")
-		return Adoption{}, err
-	}
-
-	// Extract alongside the live data dir first. Nothing under DataDir changes
-	// until the kit is fully extracted and validated, so an unreadable payload
-	// cannot leave a truncated data.db behind.
-	files, staged, err := k.stageKit(snap.kit, snap.at)
-	if err != nil {
-		log.Error().Err(err).Str("config", snap.stateConfig).
-			Msg("control-plane adoption REFUSED on leadership gain: kit not usable; still serving the CURRENT database")
-		return Adoption{Config: snap.stateConfig, Revision: snap.at, PreviousRevision: f.localRev}, err
-	}
-	defer func() { _ = os.RemoveAll(staged) }()
-
-	// Close the store, rename the staged kit into place (data.db last, so it is
-	// one atomic rename), reopen. If promoteStaged fails the handle is still
-	// reopened over the untouched database and the daemon keeps serving it.
-	if err := swap.Swap(func() error { return k.promoteStaged(staged, snap) }); err != nil {
-		log.Error().Err(err).Str("config", snap.stateConfig).
-			Msg("control-plane adoption failed on leadership gain; still serving the CURRENT database")
-		return Adoption{Config: snap.stateConfig, Revision: snap.at, PreviousRevision: f.localRev}, err
-	}
-
-	adoption := Adoption{
-		Adopted:          true,
-		Config:           snap.stateConfig,
-		Revision:         snap.at,
-		PreviousRevision: f.localRev,
-		KeyChanged:       f.keyChanged,
-		Files:            files,
-		Reason:           f.reason,
-	}
 	log.Info().
-		Str("config", adoption.Config).
-		Str("revision", adoption.Revision.Format(time.RFC3339Nano)).
-		Str("previous-revision", formatRevision(adoption.PreviousRevision)).
+		Bool("ready", adoption.Ready).
 		Str("reason", adoption.Reason).
-		Bool("key-adopted", adoption.KeyChanged).
-		Int("files", adoption.Files).
-		Msg("control-plane data ADOPTED on leadership gain: store closed, data.db + .encryption_key replaced, store reopened, revision advanced")
+		Str("leader", adoption.Leader).
+		Int64("version", adoption.Version).
+		Dur("age", adoption.Age).
+		Msg("this node is the cluster's writer, serving the store it already holds")
 	return adoption, nil
 }
 
-// formatRevision renders a revision marker for logs ("never" for the zero time).
-func formatRevision(at time.Time) string {
-	if at.IsZero() {
-		return "never"
-	}
-	return at.Format(time.RFC3339Nano)
-}
-
-// publishedConfig returns the name of the newest state config this Kit created,
-// or "" when it has not published one in this process.
-func (k *Kit) publishedConfig() string {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	return k.published
-}
-
-// setPublishedConfig records the state config this Kit just created.
-func (k *Kit) setPublishedConfig(name string) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	k.published = name
-}
-
-// stageKit extracts a kit payload into a fresh staging directory inside DataDir
-// and validates that it carries a data.db. It returns the file count and the
-// staging path; the caller owns the directory.
-func (k *Kit) stageKit(payload []byte, at time.Time) (int, string, error) {
-	if err := os.MkdirAll(k.DataDir, 0o755); err != nil {
-		return 0, "", fmt.Errorf("ensure data dir: %w", err)
-	}
-	k.clearStaging()
-	staged := filepath.Join(k.DataDir, stagingPrefix+strconv.FormatInt(time.Now().UnixNano(), 10))
-	if err := os.MkdirAll(staged, 0o700); err != nil {
-		return 0, "", fmt.Errorf("create staging dir: %w", err)
-	}
-	n, err := k.extractKitTo(staged, payload, at)
-	if err != nil {
-		_ = os.RemoveAll(staged)
-		return 0, "", fmt.Errorf("extract control-plane kit: %w", err)
-	}
-	if _, err := os.Stat(filepath.Join(staged, "data.db")); err != nil {
-		_ = os.RemoveAll(staged)
-		return 0, "", fmt.Errorf("control-plane kit carries no data.db: %w", err)
-	}
-	return n, staged, nil
-}
-
-// clearStaging removes staging directories a previous adoption left behind
-// (interrupted after extraction, before the rename).
-func (k *Kit) clearStaging() {
-	entries, err := os.ReadDir(k.DataDir)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), stagingPrefix) {
-			_ = os.RemoveAll(filepath.Join(k.DataDir, e.Name()))
-		}
-	}
-}
-
-// promoteStaged moves a fully extracted kit from the staging directory into
-// DataDir. Every entry is a rename on the same filesystem; `data.db` is renamed
-// LAST so that a crash or a failure part-way through leaves the previous
-// database in place and intact rather than a truncated one.
+// checkLocalKey proves this node's key is the one the cluster's ciphertext was written
+// with — by decrypting what the store actually holds.
 //
-// The encryption key is written from the key config and renamed into place the
-// same way. It is always adopted with the DB: a cluster DB beside a foreign key
-// (or the reverse) leaves every credential ciphertext unreadable.
-func (k *Kit) promoteStaged(staged string, snap *snapshot) error {
-	base, err := filepath.Abs(k.DataDir)
+// There is no config to compare against any more (ADR 0006 deleted it), and comparing bytes
+// was only ever a proxy for this question anyway. A bounded sample is enough: one secret that
+// opens proves the key, and the check runs on a leadership gain where "all 200 secrets" would
+// be work nobody asked for. A store with no secrets has nothing to disagree with.
+//
+// A missing cipher is NOT a key problem to report here — a node with no key file has no
+// cipher either, and the first branch names the file the operator has to copy.
+func (k *Kit) checkLocalKey(ctx context.Context, st *store.Store) error {
+	if _, err := os.Stat(k.KeyPath()); err != nil {
+		return fmt.Errorf("no encryption key at %s: copy it from the node that initialised the cluster (same path), or the join route delivers it on the next start — secrets mirrored here cannot be decrypted without it", k.KeyPath())
+	}
+	if k.Cipher == nil {
+		return fmt.Errorf("the key at %s could not be loaded", k.KeyPath())
+	}
+	rows, err := st.ListSecrets(ctx, "", "")
 	if err != nil {
-		return err
+		return fmt.Errorf("list secrets to check the key: %w", err)
 	}
-	var dbSrc string
-	err = filepath.Walk(staged, func(path string, fi os.FileInfo, err error) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	const sampleSize = 4
+	if len(rows) > sampleSize {
+		rows = rows[:sampleSize]
+	}
+	var broken []string
+	for _, meta := range rows {
+		row, err := st.Secret(ctx, meta.Name)
 		if err != nil {
-			return err
+			return fmt.Errorf("read secret %s to check the key: %w", meta.Name, err)
 		}
-		rel, err := filepath.Rel(staged, path)
-		if err != nil {
-			return err
+		if _, err := k.Cipher.Decrypt(row.Payload); err != nil {
+			broken = append(broken, meta.Name)
 		}
-		if rel == "." {
-			return nil
-		}
-		dst := filepath.Join(base, rel)
-		if fi.IsDir() {
-			return os.MkdirAll(dst, 0o755)
-		}
-		if !fi.Mode().IsRegular() {
-			return nil
-		}
-		switch rel {
-		case "data.db":
-			// Last: the single atomic step that swaps the live database.
-			dbSrc = path
-			return nil
-		case ".encryption_key", ".state_revision":
-			// Never taken from the kit: the key has its own config (security
-			// split) and the revision is this node's own bookkeeping, written
-			// after the swap succeeds.
-			return nil
-		}
-		return os.Rename(path, dst)
-	})
-	if err != nil {
-		return fmt.Errorf("promote control-plane kit files: %w", err)
 	}
-	if dbSrc == "" {
-		return errors.New("promote control-plane kit: staged kit has no data.db")
-	}
-
-	// Stage the key beside the kit and rename it in before data.db, so the pair
-	// a crash could expose is (new key, new DB) or (old key, old DB) — both
-	// consistent — never a new key beside the old DB.
-	keyTmp := filepath.Join(staged, ".encryption_key")
-	if err := os.WriteFile(keyTmp, snap.key, 0o600); err != nil {
-		return fmt.Errorf("stage adopted encryption key: %w", err)
-	}
-	if err := os.Rename(keyTmp, k.KeyPath()); err != nil {
-		return fmt.Errorf("adopt encryption key: %w", err)
-	}
-	if err := os.Chtimes(k.KeyPath(), snap.at, snap.at); err != nil {
-		return fmt.Errorf("timestamp adopted encryption key: %w", err)
-	}
-	if err := os.Rename(dbSrc, k.DBPath()); err != nil {
-		return fmt.Errorf("adopt data.db: %w", err)
-	}
-	if err := os.Chtimes(k.DBPath(), snap.at, snap.at); err != nil {
-		return fmt.Errorf("timestamp adopted data.db: %w", err)
-	}
-	if err := k.writeRevision(snap.at); err != nil {
-		return fmt.Errorf("record adopted control-plane revision: %w", err)
+	if len(broken) > 0 {
+		return fmt.Errorf("%d of %d sampled secret(s) do not decrypt with this node's key (%s): the file at %s is not the cluster's",
+			len(broken), len(rows), strings.Join(broken, ", "), k.KeyPath())
 	}
 	return nil
 }

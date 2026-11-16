@@ -158,9 +158,9 @@ type Reconciler struct {
 	syncErrMu    sync.Mutex
 	lastSyncErrs map[string]string    // stack -> last logged/recorded error string
 	lastSyncWarn map[string]time.Time // stack -> last "still failing" heartbeat WRN
-	// Stacks already reported as having no stored revision (a slim
-	// control-plane kit adopted on promotion). Per-process, because the
-	// condition only changes when the stack is re-deployed.
+	// Stacks already reported as having no stored revision (a node promoted on a
+	// mirror that predates the revision). Per-process, because the condition only
+	// changes when the stack is re-deployed.
 	noRevSeen map[string]bool
 
 	// Per-stack "storage node down" warning state, throttled the same way as
@@ -267,8 +267,8 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 		switch {
 		case errors.Is(serr, store.ErrRevisionNotFound):
 			// This node holds the stack LIST but not this stack's revision:
-			// either it was deployed after the kit snapshot, or its revision
-			// fell out of the kit's five-revision window. There is nothing to
+			// either it was deployed after this node's last poll, or the mirror
+			// predates the row. There is nothing to
 			// re-render, and nothing is broken: do not record a stack error,
 			// do not mark the stack errored, and say so once rather than on
 			// every pass.
@@ -354,12 +354,10 @@ func (r *Reconciler) handleSyncError(ctx context.Context, stackName string, revi
 }
 
 // noteNoStoredRevision reports a stack this node has a row for but no revision
-// of. After a promoted leader adopts the control-plane kit this is unusual: the
-// kit carries each stack's newest five revisions plus the one current_revision
-// points at, so the common case reconciles normally. It remains reachable for a
-// revision outside that window — a stack deployed after the last snapshot, or a
-// rollback target older than the window — and it must not be treated as
-// damage when it happens.
+// of. The mirror carries the whole revision history, so a promoted leader
+// normally has the row current_revision points at and reconciles normally. It
+// remains reachable — a stack deployed after the last poll, or a mirror that
+// predates the row — and it must not be treated as damage when it happens.
 //
 // It is deliberately NOT handleSyncError: there is no failure, so nothing is
 // recorded on the stack and its status is left to the health snapshot (which
@@ -379,7 +377,7 @@ func (r *Reconciler) noteNoStoredRevision(stackName string, log zerolog.Logger) 
 		return
 	}
 	log.Info().Str("stack", stackName).
-		Msg("reconcile — no stored revision on this node (outside the kit's revision window): drift check skipped until the stack is re-deployed; the stack row, its configs and secrets are intact")
+		Msg("reconcile — no stored revision on this node (the mirror predates it, or the stack was deployed after the last poll): drift check skipped until the stack is re-deployed; the stack row, its configs and secrets are intact")
 }
 
 // logStoragePaused logs the "storage node down; pausing app sync" warning the

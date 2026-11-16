@@ -1031,6 +1031,55 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BackupStarted"
+  /api/backups/platform:
+    post:
+      summary: Export the leader's control plane (database + encryption key) offsite
+      description: |
+        Writes one archive of THIS node's control-plane database and encryption key and ships
+        it to the offsite bucket. This is the restore point for losing every manager at once;
+        the mTLS mirror only covers losing one. It is manual by design: no schedule produces a
+        control-plane archive (ADR 0007). The archive deliberately carries the key, because an
+        export without it cannot decrypt the secrets it contains.
+
+        Answers 409 when this node is not the swarm leader — the export is the leader's store,
+        and a follower's copy is a mirror with no provenance worth restoring.
+      operationId: exportPlatform
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Archive written (and uploaded when an offsite destination is configured)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                  archive:
+                    type: string
+                  bytes:
+                    type: integer
+                  offsite_key:
+                    type: string
+                    description: Object key written to the offsite bucket; empty when no destination is configured
+                  members:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name:
+                          type: string
+                        sha256:
+                          type: string
+                        bytes:
+                          type: integer
+                        mode:
+                          type: string
+        "409":
+          description: This node is not the swarm leader
+        "502":
+          description: The export or the upload failed
   /api/stacks/{name}/backups:
     get:
       summary: Backups for one stack
@@ -1407,6 +1456,15 @@ paths:
                     type: object
                     additionalProperties:
                       type: string
+                  secret_set:
+                    type: object
+                    additionalProperties:
+                      type: boolean
+                    description: |
+                      For each secret-ish key, whether a value is stored. The values themselves are
+                      never returned — not even to an admin bearer — because the console is a browser
+                      and nobody needs to read back a secret they already set. A masked or empty value
+                      on write means "leave it alone".
     put:
       summary: Update cluster settings
       description: >-

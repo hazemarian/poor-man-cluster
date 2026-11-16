@@ -61,19 +61,12 @@ func (a *Agent) cooldown() time.Duration {
 // AgentRecord is what this node last applied — the doctor's view on a worker,
 // and the reason a restart re-applies the same decision without re-registering.
 type AgentRecord struct {
-	Node        string `json:"node"`
-	Enabled     bool   `json:"enabled"`
-	Org         string `json:"org"`
-	Group       string `json:"group"`
-	RunnerName  string `json:"runner_name"`
-	SocketPath  string `json:"socket_path"`
-	SocketProxy bool   `json:"socket_proxy"`
-	// DinD: the job gets a docker daemon of its own inside a privileged sibling
-	// container, instead of the platform's filtered socket. It is the mode that
-	// makes ordinary CI work (`docker compose`, testcontainers, exec), and it is
-	// carried in the assignment so a worker never decides it for itself.
-	DinD      bool   `json:"dind"`
-	Container string `json:"container"`
+	Node       string `json:"node"`
+	Enabled    bool   `json:"enabled"`
+	Org        string `json:"org"`
+	Group      string `json:"group"`
+	RunnerName string `json:"runner_name"`
+	Container  string `json:"container"`
 	// Memory is the cap this node last applied (or was refused for). It is what
 	// `pmcluster doctor` compares against THIS machine's RAM on a worker, which
 	// has no store and cannot ask the leader.
@@ -156,15 +149,13 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 	var res Result
 	name := RunnerName(a.Node)
 	rec := AgentRecord{
-		Node:        a.Node,
-		RunnerName:  name,
-		Enabled:     as.Enabled,
-		Org:         as.Org,
-		Group:       as.Group,
-		SocketPath:  as.SocketPath,
-		SocketProxy: as.SocketProxy,
-		Memory:      as.Memory,
-		AppliedAt:   a.now().Unix(),
+		Node:       a.Node,
+		RunnerName: name,
+		Enabled:    as.Enabled,
+		Org:        as.Org,
+		Group:      as.Group,
+		Memory:     as.Memory,
+		AppliedAt:  a.now().Unix(),
 	}
 	if as.Refused {
 		rec.Refused, rec.RefusedReason = true, as.Reason
@@ -259,13 +250,6 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 		return res, nil
 	}
 
-	if !as.SocketProxy {
-		// The fallback is legal and documented; it must be loud, because the
-		// container now holds root on this host.
-		a.Log.Warn().Str("runner", name).
-			Msg("runners — assignment asks for the RAW docker socket: the container has root-equivalent access to this host")
-	}
-
 	// 2. Enabled and already running: nothing to do. The container registered
 	//    itself with the token it was created with.
 	if exists && local.Running() {
@@ -303,15 +287,12 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 	}
 
 	spec := Spec{
-		Org:         as.Org,
-		Group:       as.Group,
-		RunnerName:  name,
-		Image:       DefaultImage,
-		Memory:      as.Memory,
-		Token:       as.RegistrationToken,
-		SocketProxy: as.SocketProxy,
-		SocketPath:  as.SocketPath,
-		DinD:        as.DinD,
+		Org:        as.Org,
+		Group:      as.Group,
+		RunnerName: name,
+		Image:      DefaultImage,
+		Memory:     as.Memory,
+		Token:      as.RegistrationToken,
 	}
 	if _, err := spec.Argv(); err != nil {
 		rec.Container, rec.LastError = "absent", err.Error()
@@ -328,15 +309,8 @@ func (a *Agent) Apply(ctx context.Context, as Assignment) (Result, error) {
 	rec.RegisteredAt = a.now().Unix()
 	a.save(rec)
 	res.Registered = append(res.Registered, as.Org)
-	mount := "socket proxy"
-	switch {
-	case as.DinD:
-		mount = "dind (private daemon, removed with the job)"
-	case !as.SocketProxy:
-		mount = "raw docker socket (debug fallback)"
-	}
 	a.Log.Info().Str("org", as.Org).Str("runner", name).Str("group", as.Group).
-		Str("memory", as.Memory).Str("docker_access", mount).
+		Str("memory", as.Memory).Str("docker_access", dockerAccess).
 		Msg("runners — started this node's runner from the leader's assignment")
 	return res, nil
 }

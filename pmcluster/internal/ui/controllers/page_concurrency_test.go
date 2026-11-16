@@ -25,8 +25,16 @@ type gate struct {
 	mu       sync.Mutex
 	inflight int
 	peak     int
-	delay    time.Duration
-	calls    int
+	// waves counts how many times a read STARTED while nothing else was in
+	// flight. It is the shape a wall-clock budget was trying to measure: five
+	// reads issued together are ONE wave; five issued one after another are five.
+	// Time was the wrong instrument — on a loaded CI runner a single
+	// descheduling event inside one correct wave reads as a waterfall (two 80ms
+	// reads took 168ms), and a budget that survives that is too loose to catch
+	// anything.
+	waves int
+	delay time.Duration
+	calls int
 	// shared counts every read held by ANY gate in the test, so "did the two
 	// families overlap" is one number instead of a guess from two peaks.
 	shared *gate
@@ -34,6 +42,9 @@ type gate struct {
 
 func (g *gate) enter() {
 	g.mu.Lock()
+	if g.inflight == 0 {
+		g.waves++
+	}
 	g.inflight++
 	g.calls++
 	if g.inflight > g.peak {
@@ -66,6 +77,13 @@ func (g *gate) snapshot() (peak, calls int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.peak, g.calls
+}
+
+// waveCount is how many separate bursts of reads the gate saw.
+func (g *gate) waveCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.waves
 }
 
 // slowTelemetry is every telemetry trait the observability page consumes, behind
@@ -203,7 +221,7 @@ func TestOverviewFragmentIssuesItsReadsTogether(t *testing.T) {
 	const delay = 60 * time.Millisecond
 	engine, apiGate, _ := pageHarness(t, delay, false)
 
-	elapsed := doGet(t, engine, "/web/overview")
+	doGet(t, engine, "/web/overview")
 	peak, calls := apiGate.snapshot()
 
 	if calls < 4 {
@@ -212,8 +230,11 @@ func TestOverviewFragmentIssuesItsReadsTogether(t *testing.T) {
 	if peak < 4 {
 		t.Fatalf("peak concurrent daemon reads = %d, want >= 4 (the fragment is a waterfall)", peak)
 	}
-	if elapsed > 3*delay {
-		t.Fatalf("overview took %v for %d reads of %v each: looks sequential", elapsed, calls, delay)
+	// One burst, not four. This replaced an elapsed budget (3*delay): on a loaded
+	// runner one correct wave can take longer than several sequential ones on an
+	// idle one, so the budget measured the machine. The gate counts bursts.
+	if waves := apiGate.waveCount(); waves != 1 {
+		t.Fatalf("the %d reads arrived in %d waves, want 1: they are issued one after another", calls, waves)
 	}
 }
 
@@ -223,13 +244,16 @@ func TestStacksIndexReadsStacksAndServicesTogether(t *testing.T) {
 	const delay = 80 * time.Millisecond
 	engine, apiGate, _ := pageHarness(t, delay, false)
 
-	elapsed := doGet(t, engine, "/web/stacks")
-	peak, _ := apiGate.snapshot()
+	doGet(t, engine, "/web/stacks")
+	peak, calls := apiGate.snapshot()
 	if peak < 2 {
 		t.Fatalf("peak concurrent daemon reads = %d, want >= 2 (stacks and services ran in series)", peak)
 	}
-	if elapsed > 2*delay {
-		t.Fatalf("stacks index took %v for two %v reads: looks sequential", elapsed, delay)
+	// The wall-clock version of this assertion failed on a loaded CI runner with
+	// "took 168ms for two 80ms reads: looks sequential" while both reads were in
+	// flight — one descheduling event, read as a waterfall. Waves cannot lie.
+	if waves := apiGate.waveCount(); waves != 1 {
+		t.Fatalf("the %d reads arrived in %d waves, want 1: stacks and services are serialised", calls, waves)
 	}
 }
 
@@ -241,7 +265,7 @@ func TestObservabilityPageOverlapsHealthAndTabReads(t *testing.T) {
 	const delay = 60 * time.Millisecond
 	engine, apiGate, telemetryGate := pageHarness(t, delay, true)
 
-	elapsed := doGet(t, engine, "/web/observability")
+	doGet(t, engine, "/web/observability")
 	_, apiCalls := apiGate.snapshot()
 	_, telemetryCalls := telemetryGate.snapshot()
 
@@ -253,15 +277,16 @@ func TestObservabilityPageOverlapsHealthAndTabReads(t *testing.T) {
 	if peak, _ := apiGate.shared.snapshot(); peak < 7 {
 		t.Fatalf("peak simultaneous reads across both families = %d, want >= 7 (health and tab read in separate waves)", peak)
 	}
-	// One wave is max(api, telemetry) plus render; two waves would be ~2x.
-	// The peak assertion above is the structural one; this is the coarse guard
-	// against the old two-wave shape, so it carries an explicit render budget
-	// instead of pretending a template render costs nothing. Without it the
-	// test flakes on a loaded CI box at 3*delay (60ms reads → 180ms budget,
-	// observed 181ms with the page correctly in one wave).
-	const renderBudget = 150 * time.Millisecond
-	if elapsed > 3*delay+renderBudget {
-		t.Fatalf("page took %v with %v reads in two families: looks like two waves", elapsed, delay)
+	// The old two-wave shape was detected by a wall clock with an explicit render
+	// budget, and it flaked on a loaded CI box (181ms against a 180ms budget with
+	// the page correctly in one wave). Wave counts state the same thing without
+	// measuring the runner: this page makes one burst of api reads and one burst of
+	// telemetry reads, and both are in flight together (the shared peak above).
+	if waves := telemetryGate.waveCount(); waves > 1 {
+		t.Fatalf("the %d telemetry reads arrived in %d waves, want 1: the tab's reads are serialised", telemetryCalls, waves)
+	}
+	if waves := apiGate.waveCount(); waves > 2 {
+		t.Fatalf("the %d api reads arrived in %d waves: the health block and the tab are in series", apiCalls, waves)
 	}
 }
 

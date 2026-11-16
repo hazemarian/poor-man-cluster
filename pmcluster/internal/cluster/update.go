@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,7 +26,11 @@ import (
 // read back from the persisted install state so update needs no re-bootstrap.
 type UpdateInput struct {
 	ConfigDir string
-	Version   string
+	// ConfigPath is the config.yaml this node was started with. The backup agent's policy is
+	// written from it, and a storage node must not be left without an agent just because
+	// nobody ran `backup-agent install` by hand (ADR 0008).
+	ConfigPath string
+	Version    string
 
 	// Source names the caller in the apply record: "update" for an operator run
 	// (`cluster update` or the API), "reconcile" for the daemon's leader-only
@@ -40,6 +45,10 @@ type UpdateInput struct {
 	// configs are still re-ensured idempotently.
 	Force bool
 }
+
+// localHostnameFn is this node's hostname, as a seam: a test pins it to the fake swarm's node
+// instead of the machine the test happens to run on.
+var localHostnameFn = os.Hostname
 
 // UpdateResult reports which configs/secrets were rotated and which stacks
 // were re-deployed on this update. A no-op update (nothing changed) returns
@@ -96,6 +105,11 @@ type UpdateDeps struct {
 	// CLI applies the stored registry credential there so
 	// `--with-registry-auth` has something valid to freeze. Nil is a no-op.
 	BeforeDeploy func(ctx context.Context)
+
+	// EnsureBackupAgent installs this node's hourly backup unit and policy, so a node that is
+	// a storage node ends every update with a working agent (ADR 0008). Injected because
+	// `internal/nodeunits` imports this package. Nil is reported, not ignored.
+	EnsureBackupAgent func(out io.Writer, configPath string) error
 }
 
 // Update re-provisions the OTel collector + Traefik dynamic configs and the
@@ -347,11 +361,13 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// not a fatal: every other stack in this reconcile is healthy and
 		// aborting the run would leave them unrepaired. The warning names the
 		// path and the reason, and reaches the apply record through the sink.
-		if err := ensurePlatformHostDirs(); err != nil {
+		// render.VolumeRoot, not the default: the collector's bind source is rendered
+		// from the same value, so the mkdir and the mount cannot disagree.
+		if err := ensurePlatformHostDirs(render.VolumeRoot); err != nil {
 			fmt.Fprintf(out, "  ⚠ %v\n", err)
 			return nil
 		}
-		for _, dir := range platformHostDirs() {
+		for _, dir := range platformHostDirs(render.VolumeRoot) {
 			fmt.Fprintf(out, "  ✓ %s ready\n", dir)
 		}
 		return nil
@@ -645,6 +661,27 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 				prevRender[s] = []byte(row.RenderedContent)
 			}
 			switch {
+			case len(composeServices(fresh)) == 0:
+				// A platform stack can legitimately render no services — the backup
+				// stack on a cluster with neither an object store nor a data
+				// directory. There is nothing to deploy and nothing to remember, and
+				// recording a hash for an empty document made every later update
+				// report "deployed" for a stack that has no services at all.
+				//
+				// BUT an empty render over a LIVE stack means the render just lost its
+				// last service — a retired one. Skipping there leaves it running
+				// forever: measured on wafaa, where `backup` rendered nothing after
+				// `control-plane-backup` was deleted from the template and the service
+				// stayed 1/1 across the update that removed it. The render is the
+				// statement of what should exist, so an empty one removes the stack.
+				pruned, err := pruneEmptyPlatformStack(ctx, out, deps.Docker, deps.Deployer, s, fresh)
+				if err != nil {
+					return err
+				}
+				if pruned {
+					res.StacksDeployed = append(res.StacksDeployed, string(s))
+				}
+				continue
 			case forceAll:
 				reasons[s] = "forced"
 			case row == nil || row.RenderedHash != store.ConfigHash(string(fresh)):
@@ -672,14 +709,6 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		redeployed := map[string]bool{}
 		for _, s := range redeploy {
 			fmt.Fprintf(out, "  ▶ %s %s → re-deploying\n", string(s), reasons[s])
-			if s == StackObservability {
-				// The collector is pinned to pmcluster.leader with a hard
-				// constraint. Deploying without a labelled node would leave it
-				// at 0/1 with no task logs, so the condition is named here.
-				if err := RequireLeaderLabel(ctx, deps.Docker); err != nil {
-					return err
-				}
-			}
 			if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
 				return err
 			}
@@ -798,10 +827,17 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 		// leader. Pinning platform services to the leader (the API host) keeps
 		// them on a node that can serve them. An operator-set value is left
 		// untouched.
+		//
+		// NOT an early return when the setting is empty. It used to be, and that quietly
+		// disabled the whole function on every cluster that never designated a storage node
+		// — which is every fresh install: the leader rule below (and the label stamping that
+		// makes `doctor`'s backup-coverage check agree) sat AFTER the return and never ran.
+		// Measured on wafaa: one manager, hourly verified backups, `storage_nodes` empty,
+		// no `pmcluster.storage` label, and a failing coverage check that read like
+		// "your data is not backed up" while it was. An empty setting means "nothing
+		// designated yet", not "designation disabled" — the prune and adoption passes below
+		// are all no-ops on an empty value, so falling through is safe.
 		raw := deps.Store.SettingDefault(ctx, SettingStorageNodes(), "")
-		if raw == "" {
-			return nil
-		}
 		// A storage node must be a MANAGER. Only a manager can read the control
 		// plane — settings, credentials, the stack list — and the backup agent on a
 		// worker cannot even ship (measured: its policy file carries no S3
@@ -830,7 +866,10 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 			}
 		}
 		if leaderHost != "" && !containsStorageNode(splitStorageNodes(raw), leaderHost) {
-			raw = raw + "," + leaderHost
+			// appendStorageNode, not raw+","+host: the empty case is the common one (a fresh
+			// install), and it used to persist ",idlib-wafaa" — a leading comma in a setting
+			// the console shows verbatim.
+			raw = appendStorageNode(raw, leaderHost)
 			if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), raw); err != nil {
 				return fmt.Errorf("persist storage_nodes: %w", err)
 			}
@@ -868,11 +907,30 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 					n.Hostname, runtime.StorageNodeLabel, n.Hostname)
 				continue
 			}
-			raw = raw + "," + n.Hostname
+			raw = appendStorageNode(raw, n.Hostname)
 			if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), raw); err != nil {
 				return fmt.Errorf("persist storage_nodes: %w", err)
 			}
 			fmt.Fprintf(out, "  ⚠ adopted %s into storage_nodes (it carries the %s label)\n", n.Hostname, runtime.StorageNodeLabel)
+		}
+		// THE AGENT IS PART OF BEING A STORAGE NODE.
+		//
+		// It used to be opt-in per node with this reconcile as the only thing that knew a node
+		// had been adopted — and nothing installed it. Measured on production 2026-11-16: a
+		// storage node with a live stack held its data for weeks with no unit, no timer and no
+		// policy, and every check said the cluster was fine. Installing here means the two
+		// paths that make a node a storage node (this reconcile, and the update an operator
+		// runs after `node promote`) both end with a working agent.
+		if host, herr := localHostnameFn(); herr == nil && in.ConfigPath != "" &&
+			containsStorageNode(splitStorageNodes(raw), host) {
+			if deps.EnsureBackupAgent == nil {
+				fmt.Fprintf(out, "  ⚠ this node is a storage node but no backup-agent installer is wired (run `pmcluster backup-agent install`)\n")
+			} else if aerr := deps.EnsureBackupAgent(out, in.ConfigPath); aerr != nil {
+				// A warning, not a failure: the platform stacks are already deployed at this
+				// point, and an agent that cannot install is a thing to report, not a reason to
+				// leave the cluster half-applied.
+				fmt.Fprintf(out, "  ⚠ the backup agent is NOT installed on this node: %v — run `pmcluster backup-agent install`\n", aerr)
+			}
 		}
 		return nil
 	})
@@ -1289,6 +1347,55 @@ func checkBackupOffsite(ctx context.Context, deps UpdateDeps) error {
 // composeServices returns the service keys of a rendered compose document. It is
 // deliberately forgiving: the only question it answers is "is there anything to
 // deploy", and a parse problem is LoadComposeFile's job to report.
+// pruneEmptyPlatformStack reconciles "this platform stack renders no services" against what
+// swarm actually runs: nothing live is a no-op, anything live is a stack that just lost its
+// last service and must stop running it.
+//
+// The case it exists for, measured on wafaa: `control-plane-backup` was deleted from the backup
+// template, the stack now renders an empty document, and the reconcile's empty-render rule
+// skipped it — so the retired service stayed 1/1 across the very update that removed it.
+//
+// It PRUNES rather than removing the stack, and that distinction was learned the hard way:
+// `docker stack rm` tears the stack's network down asynchronously, so when the render legitimately
+// becomes non-empty again a moment later (a fresh `cluster up` sets its store, the backup stack
+// gets a service) the deploy fails with `network backup_net not found`. Pruning removes exactly
+// the services the render dropped and leaves the network where a later deploy expects it.
+func pruneEmptyPlatformStack(ctx context.Context, out io.Writer, dc runtime.Client, dep runtime.StackDeployer, s stackName, fresh []byte) (bool, error) {
+	live := liveStackServices(ctx, dc, string(s))
+	if live == 0 {
+		return false, nil
+	}
+	fmt.Fprintf(out, "  ▶ %s renders no services, %d still live → pruning them\n", string(s), live)
+	if err := dep.PruneStack(ctx, string(s), fresh); err != nil {
+		return false, fmt.Errorf("prune empty platform stack %s: %w", s, err)
+	}
+	return true, nil
+}
+
+// liveStackServices counts the services swarm currently runs for a stack. Used by
+// the reconcile's empty-render case: "this stack should have nothing" is only a
+// no-op when the swarm agrees.
+//
+// A docker error returns 0 — the same conservative choice the drift check makes
+// (never let a flaky API cause a destructive action): the stack is left alone and
+// the next pass tries again.
+func liveStackServices(ctx context.Context, dc runtime.Client, stack string) int {
+	if dc == nil {
+		return 0
+	}
+	svcs, err := dc.ServiceList(ctx)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, svc := range svcs {
+		if svc.Stack == stack {
+			n++
+		}
+	}
+	return n
+}
+
 func composeServices(composeYAML []byte) []string {
 	var doc struct {
 		Services map[string]any `yaml:"services"`

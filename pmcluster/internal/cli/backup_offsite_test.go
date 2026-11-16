@@ -76,3 +76,22 @@ func TestRecordOffsiteCheckKeepsTheLastTwoWeeks(t *testing.T) {
 		t.Fatal("last record missing")
 	}
 }
+
+// TestPlatformExportIsCheckedOffsiteOnly pins the rule the first export taught us: a platform
+// export is a DR artifact that goes to the bucket and nowhere inside the cluster, so the
+// in-cluster store reporting it "missing" turned doctor red for a file exactly where it should be.
+func TestPlatformExportIsCheckedOffsiteOnly(t *testing.T) {
+	cases := []struct {
+		name, target string
+		want         bool
+	}{
+		{"pmcluster-platform-20261116T001654Z.tar.gz", "store:pmcluster-backups", false},
+		{"pmcluster-platform-20261116T001654Z.tar.gz", "s3:pmclusterbackup", true},
+		{"backup-abc-2026-11-16T00-00-00-stack-shop.tar.gz", "store:pmcluster-backups", true},
+	}
+	for _, c := range cases {
+		if got := artifactIsCheckedOn(c.name, c.target); got != c.want {
+			t.Errorf("artifactIsCheckedOn(%q, %q) = %v, want %v", c.name, c.target, got, c.want)
+		}
+	}
+}

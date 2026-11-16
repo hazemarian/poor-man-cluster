@@ -52,6 +52,17 @@ func effectiveVolumeRoot(v string) string {
 // hostname list (comma-separated, whitespace-trimmed). Kept in the cluster
 // package — importing stacks would create an import cycle (stacks imports
 // cluster).
+// appendStorageNode adds host to the comma-separated storage_nodes setting, leaving no
+// leading or doubled comma. The empty case is not hypothetical: it is every fresh install,
+// where the reconcile designates the leader into a setting nobody has written yet.
+func appendStorageNode(raw, host string) string {
+	parts := splitStorageNodes(raw)
+	if containsStorageNode(parts, host) {
+		return strings.Join(parts, ",")
+	}
+	return strings.Join(append(parts, host), ",")
+}
+
 func splitStorageNodes(raw string) []string {
 	var out []string
 	seen := map[string]bool{}
@@ -99,7 +110,12 @@ var ensureStorageDirs = func(volumeRoot string) error {
 // logical volume made `cluster update` refuse on a node whose data volume was
 // perfectly healthy.
 func verifyVolumeRootMounted(volumeRoot string) error {
-	if _, err := os.Stat(storage.DefaultImagePath); err != nil {
+	// The image path follows the configured root (storage.ImagePathFor): a cluster that keeps
+	// its volumes under a custom tree provisions a sibling image, and checking the stock path
+	// would find nothing there — reporting "never provisioned" for a node whose volume is
+	// provisioned but unmounted, which is the exact case this guard exists to catch.
+	imagePath := storage.ImagePathFor(volumeRoot)
+	if _, err := os.Stat(imagePath); err != nil {
 		return nil // never provisioned: nothing to be inconsistent with
 	}
 	st, derr := storage.Detect(context.Background(), storage.Spec{VolumeRoot: volumeRoot})
@@ -107,7 +123,7 @@ func verifyVolumeRootMounted(volumeRoot string) error {
 		return fmt.Errorf("inspect app-data volume: %w", derr)
 	}
 	if !st.Provisioned() {
-		return fmt.Errorf("%s is not mounted even though %s exists — deploying now would run every stack on an empty directory; run `pmcluster storage status` and fix the mount first", volumeRoot, storage.DefaultImagePath)
+		return fmt.Errorf("%s is not mounted even though %s exists — deploying now would run every stack on an empty directory; run `pmcluster storage status` and fix the mount first", volumeRoot, imagePath)
 	}
 	return nil
 }
@@ -154,7 +170,15 @@ type UpDeps struct {
 	Cipher   *credentials.Cipher
 	Docker   runtime.Client
 	Deployer StackDeployer
-	Stdout   io.Writer
+	// EnsureBackupAgent installs this node's hourly backup unit and policy, when the reconcile
+	// finds this node is a storage node.
+	//
+	// Injected rather than imported: `internal/nodeunits` imports this package, so referencing
+	// it here is an import cycle — and the layering is right either way (nodeunits owns the
+	// units, cluster owns reconciliation). Nil means "nobody wired it", which the reconcile
+	// reports instead of silently leaving a storage node without an agent (ADR 0008).
+	EnsureBackupAgent func(out io.Writer, configPath string) error
+	Stdout            io.Writer
 	// BeforeDeploy runs once, before the first stack deploy of the run: the
 	// CLI applies the stored registry credential there so
 	// `--with-registry-auth` has something valid to freeze. Nil is a no-op.
@@ -242,11 +266,11 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	// no task logs. This is fatal on a fresh install on purpose — there is no
 	// healthy cluster to preserve, and deploying anyway would fail later at the
 	// health wait with a message that names the service, not the path.
-	wf.Add("Ensuring platform host directories ("+NodeStatHostDir+")", func(ctx context.Context) error {
-		if err := ensurePlatformHostDirs(); err != nil {
+	wf.Add("Ensuring platform host directories ("+NodeStatHostDirFor(in.VolumeRoot)+")", func(ctx context.Context) error {
+		if err := ensurePlatformHostDirs(in.VolumeRoot); err != nil {
 			return err
 		}
-		for _, dir := range platformHostDirs() {
+		for _, dir := range platformHostDirs(in.VolumeRoot) {
 			fmt.Fprintf(out, "  ✓ %s ready\n", dir)
 		}
 		return nil
@@ -287,16 +311,6 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	// claimed it yet and the collector would be unschedulable from the first
 	// deploy. Claim it here for the current leader; the daemon re-asserts the
 	// same value on every leader tick.
-	wf.Add("Claiming the leader label ("+runtime.LeaderNodeLabel+"=true)", func(ctx context.Context) error {
-		node, err := ClaimLeaderLabel(ctx, deps.Docker)
-		if err != nil {
-			return err
-		}
-		if node != "" {
-			fmt.Fprintf(out, "  ✓ %s carries %s=true\n", node, runtime.LeaderNodeLabel)
-		}
-		return nil
-	})
 	// Default the platform node (the leader) BEFORE the platform stacks are
 	// Platform placement is per-stack, not one global node: the observability
 	// stack follows the storage round-robin (Parseable holds a host-path store),
@@ -489,14 +503,6 @@ func Up(ctx context.Context, deps UpDeps, in UpInput) (*UpResult, error) {
 	wf.Add("Deploying stacks (infra → edge → observability → backup)", func(ctx context.Context) error {
 		stacks := platformStacks(sso.Enabled)
 		for _, s := range stacks {
-			if s == StackObservability {
-				// Belt to the claim step's braces: the collector's constraint
-				// matches nothing without the label, and a 0/1 service explains
-				// itself far worse than this sentence does.
-				if err := RequireLeaderLabel(ctx, deps.Docker); err != nil {
-					return err
-				}
-			}
 			if err := deployStack(ctx, out, deps.Deployer, s, render); err != nil {
 				return err
 			}

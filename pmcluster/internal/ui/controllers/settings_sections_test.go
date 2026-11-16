@@ -405,6 +405,7 @@ func TestChangedClusterSections(t *testing.T) {
 		"backup_retention_days":      "3",
 		"github_runner_socket_proxy": "true",
 		"backup_enabled":             "true",
+		"node_docker_restart":        "false",
 	}
 	if got := changedClusterSections(before, same); len(got) != 0 {
 		t.Fatalf("a no-op save reported changes: %v", got)
@@ -497,5 +498,60 @@ func TestControllers_SettingsRendersInArabic(t *testing.T) {
 		if i := strings.Index(body, prefix); i >= 0 {
 			t.Errorf("an unresolved translation key reached the Arabic page: %s", body[i+1:i+50])
 		}
+	}
+}
+
+// TestNodeDockerRestartIsAConsoleSwitch pins the watchdog switch as part of the
+// console form. It was CLI-only for a release: the daemon allowlisted the key,
+// the service validated it, and nothing in the UI carried it, so an operator had
+// to know the key name to arm the only mechanism that recovers a node whose
+// docker died.
+func TestNodeDockerRestartIsAConsoleSwitch(t *testing.T) {
+	const key = "node_docker_restart"
+	found := false
+	for _, k := range clusterSettingKeys {
+		if k == key {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("%s is not in the console form; the daemon would accept it and the operator could not set it", key)
+	}
+	if !clusterBoolSettings[key] {
+		t.Errorf("%s must be a flag: a cleared checkbox sends nothing and the form would store \"\"", key)
+	}
+	if got := clusterSectionOf(key); got != "advanced" {
+		t.Errorf("section = %q, want advanced — it sits with the other node-level knobs", got)
+	}
+	// A cleared checkbox and an absent row must read the same, or every save
+	// reports the advanced section as changed.
+	if got := clusterSettingDefault(key); got != "false" {
+		t.Errorf("default = %q, want false", got)
+	}
+}
+
+// TestControllers_DockerRestartSwitchRendersInAdvanced reads the page an operator
+// actually sees. The unit assertions above pin the key lists; this one catches the
+// template half, which is the half that was missing for a release.
+func TestControllers_DockerRestartSwitchRendersInAdvanced(t *testing.T) {
+	h := settingsPageAs(t, store.RoleAdmin)
+	rr := h.get(t, "/web/settings/cluster")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /web/settings/cluster = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, `name="node_docker_restart"`) {
+		t.Fatal("the Advanced section renders no node_docker_restart input")
+	}
+	if !strings.Contains(body, "Restart docker automatically") {
+		t.Error("the switch has no label")
+	}
+	// The hint is the only place the operator is told what the cure costs, so it
+	// has to be on the page next to the switch.
+	if !strings.Contains(body, "three failed probes") {
+		t.Error("the switch renders without its consequence")
+	}
+	if !strings.Contains(body, `id="sect-advanced"`) {
+		t.Fatal("no advanced section")
 	}
 }

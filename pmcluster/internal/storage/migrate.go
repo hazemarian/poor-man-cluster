@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -137,8 +138,16 @@ func writersOnVolume(ctx context.Context, spec Spec) error {
 	return nil
 }
 
-// copyTree copies dir → dst, preserving modes, mtimes and symlinks. Sockets and
-// fifos are skipped: they cannot be copied and carry no data.
+// copyTree copies dir → dst, preserving modes, mtimes, ownership and symlinks.
+// Sockets and fifos are skipped: they cannot be copied and carry no data.
+//
+// Ownership is not a nicety here. This is the copy that moves stack data onto the
+// snapshot-capable volume when a node is adopted, and it runs as root. Dropping
+// uid/gid turns every app-data directory root-owned, so an app whose image runs
+// as a non-root user can no longer write its own database — it exits on startup,
+// swarm restarts it every few seconds, and each restart tears down and rebuilds
+// the task's network sandbox. That is a saturation incident disguised as a
+// permission error, and it outlives the adoption by however long nobody looks.
 func copyTree(src, dst string) (files int, bytes int64, err error) {
 	err = filepath.Walk(src, func(p string, info os.FileInfo, werr error) error {
 		if werr != nil {
@@ -149,19 +158,29 @@ func copyTree(src, dst string) (files int, bytes int64, err error) {
 			return rerr
 		}
 		target := filepath.Join(dst, rel)
+		uid, gid := ownerOf(info)
 		switch {
 		case info.IsDir():
-			return os.MkdirAll(target, info.Mode().Perm())
+			if err := os.MkdirAll(target, info.Mode().Perm()); err != nil {
+				return err
+			}
+			return ownPath(target, uid, gid, info.ModTime())
 		case info.Mode()&os.ModeSymlink != 0:
 			link, lerr := os.Readlink(p)
 			if lerr != nil {
 				return lerr
 			}
-			return os.Symlink(link, target)
+			if err := os.Symlink(link, target); err != nil {
+				return err
+			}
+			return ownPath(target, uid, gid, info.ModTime())
 		case !info.Mode().IsRegular():
 			return nil // sockets, devices, fifos
 		}
 		if err := copyFile(p, target, info.Mode().Perm()); err != nil {
+			return err
+		}
+		if err := ownPath(target, uid, gid, info.ModTime()); err != nil {
 			return err
 		}
 		files++
@@ -169,6 +188,26 @@ func copyTree(src, dst string) (files int, bytes int64, err error) {
 		return nil
 	})
 	return files, bytes, err
+}
+
+// ownerOf reads uid/gid off a FileInfo where the platform exposes them.
+func ownerOf(info os.FileInfo) (uid, gid int) {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return int(st.Uid), int(st.Gid)
+	}
+	return -1, -1
+}
+
+// ownPath restores ownership and mtime. A -1 uid/gid means "unknown on this
+// platform", in which case only the mtime is set: failing the whole migration
+// because a stat had no ownership would be worse than carrying the copy as root.
+func ownPath(path string, uid, gid int, mod time.Time) error {
+	if uid >= 0 && gid >= 0 {
+		if err := os.Lchown(path, uid, gid); err != nil {
+			return err
+		}
+	}
+	return os.Chtimes(path, mod, mod)
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {

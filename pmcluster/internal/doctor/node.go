@@ -2,15 +2,20 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/clustersnapshot"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
 // The node-local report.
@@ -22,9 +27,15 @@ import (
 // left with no way to ask a worker why its runner never started — which is
 // exactly the question that stayed unanswered for a whole release.
 //
-// So the worker gets an honest subset: what THIS machine can answer, plus one line
-// naming each thing it cannot (and where to ask instead). Nothing here reads the
-// store, so it cannot answer from a stale copy.
+// So a non-leader gets an honest subset: what THIS machine can answer, plus one line
+// naming each thing it cannot (and where to ask instead).
+//
+// Since ADR 0003's slice 3 it also answers the cluster questions the follower MIRRORS:
+// the settings/secrets/users breadth, whose leader it came from, and how long ago it was
+// applied. That is a deliberate change of the old rule — the report used to refuse the
+// store entirely to avoid answering from a stale copy. Labelling the answer with its age
+// is what makes reading it safe: a stale answer an operator can see is worth more than a
+// blank one, and a blank one is what sent people to the wrong node.
 
 // NodeInput is everything the node-local checks read.
 type NodeInput struct {
@@ -46,8 +57,21 @@ type NodeInput struct {
 	// compared against the machine that would have to survive it. 0 means unknown
 	// (the check is then skipped, never guessed).
 	MemTotalMiB int64
-	// Now is the clock (tests).
+	// Store is this node's control-plane database, which on a follower manager holds the
+	// MIRROR of the leader's settings/secrets/users (ADR 0003, slice 3). Nil on a worker:
+	// a worker has no store, and a missing store is reported as such rather than opening
+	// one, which would seed an empty database whose answers look plausible.
+	Store *store.Store
+	// Role is "manager" or "worker", from the live swarm node spec. It decides what the
+	// swarm line can honestly claim: a follower MANAGER can read the node list, a worker
+	// cannot.
+	Role string
+	// Now is the clock (tests). It also ages the mirror.
 	Now time.Time
+	// Runtime is this node's container runtime, used only by the app-data
+	// ownership check: which services run here, and which user their images
+	// declare. Nil skips that check rather than guessing.
+	Runtime runtime.Client
 }
 
 // RunNodeLocal produces the worker's report: four measurements it can make, the
@@ -58,16 +82,24 @@ func RunNodeLocal(ctx context.Context, in NodeInput) *Report {
 	add := func(c Check) { rep.Checks = append(rep.Checks, c) }
 
 	add(checkLocalDaemon(ctx, in))
-	add(checkLocalSocketProxy(in))
 	add(checkLocalAssignment(in))
 	add(checkLocalRunner(ctx, in))
 	add(checkLocalRunnerMemory(in))
+	add(checkRunnerCaches(ctx, in))
 	add(checkDisk(Input{VolumeRoot: in.VolumeRoot}))
+	add(checkAppDataOwnership(ctx, in))
 	add(checkSwarmNodeLocal(ctx, in))
+	add(checkMirrorState(ctx, in))
+	// The backup checks answer "is every storage node reporting" and "is anything on this
+	// volume unbacked" — both meaningful from a follower too, and a follower is often where an
+	// operator stands. Measured 2026-11-16: a storage node with no agent at all, invisible
+	// because these checks only existed in the leader view.
+	add(checkBackupAgents(ctx, in.backupView()))
+	add(checkUnbackedData(ctx, in.backupView()))
 	add(Check{
 		Name:   "cluster state",
 		Status: StatusSkip,
-		Detail: "not answered here: secrets, settings, stacks, the last apply and the control-plane kit are only current on the leader. Run `pmcluster doctor` on the leader, or from your own machine with --api-url",
+		Detail: "not answered on this node: secret DECRYPTION (the cipher key is provisioned at join, never carried by the snapshot) and the last apply, which only the leader records. The mirror itself, its age and the rows it carries are reported above (cluster mirror), and pmcluster cluster mirror verify proves a promotion would work from here",
 	})
 
 	rep.OK = true
@@ -125,36 +157,6 @@ func checkLocalDaemon(ctx context.Context, in NodeInput) Check {
 		return Check{"daemon", StatusWarn, fmt.Sprintf("%s answered %d", url, code)}
 	}
 	return Check{"daemon", StatusOK, "answering /health at " + url}
-}
-
-// checkLocalSocketProxy answers "is the filtered docker socket there?", which is
-// the difference between a runner that can build and one that fails every job.
-func checkLocalSocketProxy(in NodeInput) Check {
-	path := strings.TrimSpace(in.SocketPath)
-	// The assignment, when there is one, is the authority: it is the path the
-	// container is actually built to mount.
-	if in.StatePath != "" {
-		if rec, ok := readAgentRecord(in.StatePath); ok && strings.TrimSpace(rec.SocketPath) != "" {
-			path = rec.SocketPath
-		}
-	}
-	if path == "" {
-		path = "/run/pmcluster/docker.sock"
-	}
-	info, err := os.Stat(path)
-	switch {
-	case os.IsNotExist(err):
-		return Check{"socket proxy", StatusWarn, path + " is absent — a runner on this node would fail every build (the runner assignment carries the path to use)"}
-	case err != nil:
-		return Check{"socket proxy", StatusWarn, path + ": " + err.Error()}
-	case info.Mode()&os.ModeSocket == 0:
-		return Check{"socket proxy", StatusWarn, path + " exists but is not a socket"}
-	}
-	upstream := "/var/run/docker.sock"
-	if _, err := os.Stat(upstream); err != nil {
-		return Check{"socket proxy", StatusWarn, fmt.Sprintf("listening on %s but %s (upstream) is missing", path, upstream)}
-	}
-	return Check{"socket proxy", StatusOK, "listening on " + path}
 }
 
 // checkLocalAssignment answers "when did this node last learn what to run, and
@@ -238,13 +240,84 @@ func checkLocalRunnerMemory(in NodeInput) Check {
 		fmt.Sprintf("a %s cap fits this node's %d MB (max %d%%)", rec.Memory, in.MemTotalMiB, runners.MemoryCeilingPercent)}
 }
 
-// checkSwarmNodeLocal reports what a worker can see of the swarm: its own state,
-// never the manager set (which is a manager-only call).
-func checkSwarmNodeLocal(_ context.Context, _ NodeInput) Check {
+// checkMirrorState answers what a follower DOES hold: the leader's settings, secrets and
+// tokens, as of an age this node measured itself.
+//
+// The age is the point of the check. "The mirror is 4 minutes old" is a finding an
+// operator can act on; a green tick next to a copy nobody has refreshed since the leader
+// died is the failure mode this replaces. Stale is a WARN, not a FAIL: the data is real,
+// just old, and the cluster may be mid-failover.
+func checkMirrorState(ctx context.Context, in NodeInput) Check {
+	// Role first, and before the store: a worker HAS a data.db (join creates it), so a
+	// store-based check answers "never synced" and warns about a mirror a worker will never
+	// have. Measured on 6-w after the first deploy: "no snapshot applied on this node yet —
+	// a follower mirrors within one poll", on a node where the poll loop never starts.
+	if strings.EqualFold(strings.TrimSpace(in.Role), "worker") {
+		return Check{
+			Name:   "cluster mirror",
+			Status: StatusSkip,
+			Detail: "this node is a worker: it holds no mirror by design. The leader's settings are mirrored on managers, and a worker is told what to run by its runner assignment",
+		}
+	}
+	if in.Store == nil {
+		return Check{
+			Name:   "cluster mirror",
+			Status: StatusSkip,
+			Detail: "no control-plane database on this node (a worker has none): the mirror exists on managers only, and a worker is told what to run by its assignment",
+		}
+	}
+	now := in.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	m, err := in.Store.MirrorReading(ctx, now)
+	switch {
+	case errors.Is(err, store.ErrNeverSynced):
+		// A follower mirrors within one poll of its daemon starting, so this is either a
+		// brand-new node or a mirror that has never once reached the leader. Both are
+		// worth saying out loud, and neither is the old blank.
+		return Check{
+			Name:   "cluster mirror",
+			Status: StatusWarn,
+			Detail: "no snapshot applied on this node yet: a follower mirrors within one poll (60 s) of its daemon starting — check the daemon log for the `cluster mirror` line",
+		}
+	case err != nil:
+		return Check{Name: "cluster mirror", Status: StatusWarn, Detail: "could not read the mirror: " + err.Error()}
+	}
+	detail := fmt.Sprintf("holds the settings/secrets/users mirror · %s (age_seconds=%d)", m.Human(), m.AgeSeconds)
+	if content := m.ContentAge(); content != "" {
+		detail += " · " + content
+	}
+	// The threshold is on CONTACT, not on content: a 304 every minute is a current mirror.
+	if m.AgeSeconds > int64(mirrorStaleAfter/time.Second) {
+		return Check{
+			Name:   "cluster mirror",
+			Status: StatusWarn,
+			Detail: fmt.Sprintf("%s — STALE: the leader has not ANSWERED for over %s (a poll that reaches it resets this). The values are real but old; the leader it came from was %s", detail, mirrorStaleAfter, m.Leader),
+		}
+	}
+	return Check{Name: "cluster mirror", Status: StatusOK, Detail: detail}
+}
+
+// mirrorStaleAfter is three poll intervals. It is derived from the channel's own constant
+// so the loop and this threshold cannot drift apart.
+const mirrorStaleAfter = 3 * clustersnapshot.PollInterval
+
+// checkSwarmNodeLocal reports what this node can see of the swarm. A follower MANAGER can
+// read the node list and quorum; a worker cannot (the call is manager-only). The old line
+// told both of them the same thing, which was wrong for half the nodes it printed on.
+func checkSwarmNodeLocal(_ context.Context, in NodeInput) Check {
+	if strings.EqualFold(strings.TrimSpace(in.Role), "manager") {
+		return Check{
+			Name:   "swarm",
+			Status: StatusSkip,
+			Detail: "the node list and quorum are readable from a manager, but the authoritative view — which managers are current, and whether quorum survives another loss — is only current on the leader. Run `pmcluster doctor` there, or with --api-url",
+		}
+	}
 	return Check{
 		Name:   "swarm",
 		Status: StatusSkip,
-		Detail: "this node is standing by: the node list and quorum are manager-only calls, so they are answered on the leader",
+		Detail: "this node is a worker: the node list and quorum are manager-only calls, so they are answered on the leader",
 	}
 }
 
@@ -264,4 +337,159 @@ func readAgentRecord(path string) (runners.AgentRecord, bool) {
 		return runners.AgentRecord{}, false
 	}
 	return rec, true
+}
+
+// checkRunnerCaches reports the runner's persistent caches against their ceilings.
+//
+// It reads the numbers from docker itself, on this node, because that is where they are:
+// `docker volume inspect` has no size field and a host `du` would have to know where
+// docker put the volumes. The check only applies where a runner actually exists — the
+// volumes are created with the first job, so "no caches" on a node with no runner is not
+// a finding.
+//
+// WARN, not error: a full cache is a node about to run out of disk, not a cluster that is
+// down. It is the only warning available before a job fails with "no space left on
+// device" somewhere unrelated to the cache.
+func checkRunnerCaches(ctx context.Context, in NodeInput) Check {
+	if in.Docker == nil {
+		return Check{"runner caches", StatusSkip, "no local container runtime"}
+	}
+	name := runners.RunnerName(in.Hostname)
+	if _, ok, err := in.Docker.Inspect(ctx, name); err != nil || !ok {
+		if _, dok, _ := in.Docker.Inspect(ctx, name+"-dind"); err != nil || !dok {
+			return Check{"runner caches", StatusSkip, "no runner container on this node"}
+		}
+	}
+	usage, err := runners.ReadCacheUsage(ctx, in.Docker, name)
+	if err != nil {
+		return Check{"runner caches", StatusWarn, "could not measure the runner caches: " + err.Error()}
+	}
+	if warn := runners.CacheWarnings(usage); len(warn) > 0 {
+		return Check{"runner caches", StatusWarn, strings.Join(warn, "; ")}
+	}
+	parts := make([]string, 0, len(usage))
+	for _, c := range usage {
+		parts = append(parts, c.Name+" "+runners.HumanBytes(c.Bytes))
+	}
+	return Check{"runner caches", StatusOK,
+		strings.Join(parts, " · ") + " · total " + runners.HumanBytes(runners.TotalCacheBytes(usage))}
+}
+
+// imageUserResolver is the optional capability a runtime client can offer:
+// "what uid does this image run as". The doctor only uses it to decide whether a
+// directory owned by root is a problem, so a backend that cannot answer skips.
+type imageUserResolver interface {
+	ImageUserIDs(ctx context.Context, ref string) (uid, gid int, ok bool, err error)
+}
+
+// checkAppDataOwnership answers "can the app that owns this data still write it?".
+//
+// The failure it exists for is quiet and expensive: adoption copies the volume
+// root as root and a restore writes into it as root, so a stack whose image runs
+// as a non-root user ends up unable to create its own database lock. The app
+// exits, swarm restarts it every few seconds, and each restart rebuilds the
+// task's network sandbox — which is how a permission error turns into a node at
+// load 15 with nothing obviously wrong on it.
+func checkAppDataOwnership(ctx context.Context, in NodeInput) Check {
+	const name = "app-data ownership"
+	if in.Runtime == nil {
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "no container runtime handle in this report, so app-data directories were not inspected"}
+	}
+	resolver, _ := in.Runtime.(imageUserResolver)
+	if resolver == nil {
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "this runtime cannot resolve image users, so app-data ownership was not inspected"}
+	}
+	svcs, err := in.Runtime.ServiceList(ctx)
+	if err != nil {
+		if strings.Contains(err.Error(), "not a swarm manager") {
+			return Check{Name: name, Status: StatusSkip,
+				Detail: "a worker cannot list services; app-data ownership is checked on the manager that owns the stack"}
+		}
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "could not list services (" + err.Error() + "), so app-data ownership was not inspected"}
+	}
+	var bad []string
+	checked := 0
+	for _, svc := range svcs {
+		if svc.Node == "" || svc.Node != in.Hostname {
+			continue
+		}
+		ins, ierr := in.Runtime.ServiceInspect(ctx, svc.ID)
+		if ierr != nil {
+			continue
+		}
+		uid, _, known, rerr := resolver.ImageUserIDs(ctx, ins.Image)
+		if rerr != nil {
+			continue
+		}
+		if !known || uid == 0 {
+			continue // the image runs as root: root-owned data is fine
+		}
+		for _, m := range ins.Mounts {
+			path := appDataPath(ctx, in.Runtime, in.VolumeRoot, m)
+			if path == "" {
+				continue
+			}
+			checked++
+			owner, _, oerr := dirOwner(path)
+			if oerr != nil || owner != 0 {
+				continue // missing or already handed over
+			}
+			bad = append(bad, fmt.Sprintf("%s (%s, image user uid %d)", path, svc.Name, uid))
+		}
+	}
+	switch {
+	case len(bad) > 0:
+		return Check{Name: name, Status: StatusFail,
+			Detail: "root-owned app data for a non-root image — the app cannot write it: " +
+				strings.Join(bad, "; ") + ". The daemon's volume repair hands these back within 30s; a directory that keeps returning means the write is happening as root again (a restore, or an adoption copy)"}
+	case checked == 0:
+		return Check{Name: name, Status: StatusSkip,
+			Detail: "no service with a volume is placed on this node"}
+	}
+	return Check{Name: name, Status: StatusOK,
+		Detail: fmt.Sprintf("%d app-data director%s on this node, all writable by their image's user", checked, plural(checked))}
+}
+
+// appDataPath resolves one mount to the host directory behind it, scoped to the
+// managed volume root. Empty means "not app data this check can judge".
+func appDataPath(ctx context.Context, dc runtime.Client, volumeRoot string, m runtime.Mount) string {
+	switch m.Type {
+	case "bind":
+		if !strings.HasPrefix(m.Source, volumeRoot+string(filepath.Separator)) && m.Source != volumeRoot {
+			return ""
+		}
+		return m.Source
+	case "volume":
+		vol, err := dc.VolumeInspect(ctx, m.Source)
+		if err != nil || !vol.Bind {
+			return ""
+		}
+		return vol.Device
+	}
+	return ""
+}
+
+// dirOwner reads a path's uid. A missing path returns an error, which the caller
+// treats as "nothing to report": the repair creates it on the next pass.
+func dirOwner(path string) (uid, gid int, err error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, fmt.Errorf("no ownership for %s on this platform", path)
+	}
+	return int(st.Uid), int(st.Gid), nil
+}
+
+// plural is the "y"/"ies" the check's detail needs and fmt cannot do.
+func plural(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
 }

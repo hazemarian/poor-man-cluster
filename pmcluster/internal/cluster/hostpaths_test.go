@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/manifest"
 )
 
 // withPlatformHostDirs swaps the workflow seam for the duration of a test and
@@ -17,7 +19,7 @@ func withPlatformHostDirs(t *testing.T, fn func() error) *int {
 	orig := ensurePlatformHostDirs
 	t.Cleanup(func() { ensurePlatformHostDirs = orig })
 	calls := 0
-	ensurePlatformHostDirs = func() error {
+	ensurePlatformHostDirs = func(string) error {
 		calls++
 		return fn()
 	}
@@ -157,58 +159,6 @@ func TestNodeStatHostDirIsTheDocumentedPath(t *testing.T) {
 	}
 }
 
-// TestRenderedNodeStatBindSourceIsTheEnsuredHostDir is the anti-drift test: the
-// rendered bind source, the directory the helper is given, and the collector
-// config's exporter path must all be the same value. If any of them is
-// re-spelled by hand, a task is rejected or the JSONL is written outside the
-// mount — both silent on the deploy.
-func TestRenderedNodeStatBindSourceIsTheEnsuredHostDir(t *testing.T) {
-	doc := renderNodeStatStack(t)
-	svc, ok := doc.Services["otel-collector"]
-	if !ok {
-		t.Fatal("rendered stack has no otel-collector service")
-	}
-	var srcs []string
-	for _, v := range svc.Volumes {
-		if strings.Contains(v, "nodestat") {
-			src, _, found := strings.Cut(v, ":")
-			if !found {
-				t.Fatalf("nodestat volume %q has no container target", v)
-			}
-			srcs = append(srcs, src)
-		}
-	}
-	if len(srcs) != 1 {
-		t.Fatalf("otel-collector nodestat binds = %v, want exactly one", svc.Volumes)
-	}
-	if srcs[0] != NodeStatHostDir {
-		t.Fatalf("rendered bind source = %q, want cluster.NodeStatHostDir %q — the mount and the mkdir have drifted",
-			srcs[0], NodeStatHostDir)
-	}
-
-	// The workflow is given exactly that path.
-	if dirs := platformHostDirs(); len(dirs) != 1 || dirs[0] != srcs[0] {
-		t.Fatalf("platformHostDirs() = %v, want [%s] (the rendered bind source)", dirs, srcs[0])
-	}
-
-	// And the exporter writes INSIDE the mounted directory, at the file the
-	// daemon's reader tails.
-	cfg, err := RenderOTelCollectorConfig(RenderInput{
-		ObservabilityAdminEmail: "admin@example.com",
-		ObservabilityBasicAuth:  observabilityBasicAuth("admin@example.com", "pw"),
-	})
-	if err != nil {
-		t.Fatalf("render collector config: %v", err)
-	}
-	want := "path: " + NodeStatHostDir + "/" + NodeStatFileName
-	if !strings.Contains(string(cfg), want) {
-		t.Fatalf("collector config has no %q:\n%s", want, cfg)
-	}
-	if strings.Contains(string(cfg), "[[") {
-		t.Errorf("collector config still contains an unexpanded template action")
-	}
-}
-
 // TestUp_CreatesPlatformHostDirsBeforeTheObservabilityDeploy drives Up far
 // enough to observe the call, and pins the ORDER: a bind source created after
 // the deploy would be created too late to help.
@@ -330,16 +280,16 @@ func TestUpdate_WarnsWhenAPlatformHostDirCannotBeCreated(t *testing.T) {
 }
 
 // TestEnsurePlatformHostDirsRealRunsThePlatformList keeps the seam honest: the
-// workflow's mkdir must walk platformHostDirs() — the same list the drift test
+// workflow's mkdir must walk platformHostDirs("") — the same list the drift test
 // compares against the rendered bind source.
 func TestEnsurePlatformHostDirsRealRunsThePlatformList(t *testing.T) {
 	origMkdir := hostMkdirAll
 	t.Cleanup(func() { hostMkdirAll = origMkdir })
 
 	root := t.TempDir()
-	platDirs := platformHostDirs()
+	platDirs := platformHostDirs("")
 	if len(platDirs) == 0 {
-		t.Fatal("platformHostDirs() is empty — nothing would be created")
+		t.Fatal("platformHostDirs is empty — nothing would be created")
 	}
 
 	var made []string
@@ -350,10 +300,55 @@ func TestEnsurePlatformHostDirsRealRunsThePlatformList(t *testing.T) {
 		}
 		return os.MkdirAll(filepath.Join(root, filepath.Base(path)), mode)
 	}
-	if err := ensurePlatformHostDirsReal(); err != nil {
+	if err := ensurePlatformHostDirsReal(""); err != nil {
 		t.Fatalf("ensurePlatformHostDirsReal: %v", err)
 	}
 	if len(made) != len(platDirs) || made[0] != platDirs[0] {
 		t.Fatalf("the real helper created %v, want the platform list %v", made, platDirs)
+	}
+}
+
+// TestNodeStatHostDirFollowsTheVolumeRoot is the regression this change exists
+// for. The directory used to be the literal /var/stack/nodestat whatever root the
+// cluster was configured with, so a cluster whose root was a temp tree still tried
+// to create a root-owned /var/stack path. On the CI runner that is a permission
+// error, which failed cluster up and took TestClusterUp plus ten downstream e2e
+// tests with it — for eight commits, before anyone read the mkdir's message.
+func TestNodeStatHostDirFollowsTheVolumeRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "stack")
+
+	got := NodeStatHostDirFor(root)
+	if want := filepath.Join(filepath.Dir(root), NodeStatDirName); got != want {
+		t.Fatalf("NodeStatHostDirFor(%q) = %q, want the sibling %q", root, got, want)
+	}
+	if !strings.HasPrefix(got, filepath.Dir(root)) {
+		t.Fatalf("%q is not under the configured tree %q — a non-root host cannot create it", got, filepath.Dir(root))
+	}
+
+	// The stock root must NOT move: every deployed cluster already has a JSONL at
+	// /var/stack/nodestat, and moving it silently abandons that history.
+	if got := NodeStatHostDirFor(""); got != NodeStatHostDir {
+		t.Fatalf("NodeStatHostDirFor(default) = %q, want the documented %q", got, NodeStatHostDir)
+	}
+	if got := NodeStatHostDirFor(manifest.DefaultVolumeRoot); got != NodeStatHostDir {
+		t.Fatalf("NodeStatHostDirFor(%q) = %q, want %q", manifest.DefaultVolumeRoot, got, NodeStatHostDir)
+	}
+	if want := NodeStatHostDir + "/" + NodeStatFileName; NodeStatFilePathFor("") != want {
+		t.Fatalf("NodeStatFilePathFor(default) = %q, want %q", NodeStatFilePathFor(""), want)
+	}
+
+	// The rendered bind source and the mkdir must agree for the SAME root, or the
+	// collector mounts a path this command never created.
+	if got, want := withHostPaths(RenderInput{VolumeRoot: root}).NodeStatDir, got; got != want {
+		t.Fatalf("rendered NodeStatDir = %q, want %q", got, want)
+	}
+
+	// And the workflow can actually create it there without root, which is the
+	// whole point: the e2e runs as an ordinary user.
+	if err := ensurePlatformHostDirs(root); err != nil {
+		t.Fatalf("ensurePlatformHostDirs(%q): %v", root, err)
+	}
+	if st, err := os.Stat(NodeStatHostDirFor(root)); err != nil || !st.IsDir() {
+		t.Fatalf("node-stat dir was not created under the configured root: %v", err)
 	}
 }

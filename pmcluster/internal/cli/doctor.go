@@ -8,6 +8,8 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/nodeunits"
+
 	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/docker"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/doctor"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/githubapp"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/noderuntime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runners"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
@@ -24,14 +27,14 @@ import (
 
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
-	Short: "Check this platform's health: quorum, kit restore, secrets, drills, offsite, disk",
+	Short: "Check this platform's health: quorum, the cluster mirror, secrets, drills, offsite, disk",
 	Long: `Answers "is this platform healthy right now?" from measurements rather than
 assumptions, one line per check:
 
   swarm              manager readiness, and whether quorum survives another loss
   version skew       which managers run a different pmcluster binary
-  control-plane kit  does the newest Raft snapshot actually RESTORE — extracted
-                     into a temp dir, opened, and its secrets decrypted
+  cluster mirror verify  what THIS node would promote on: the version applied, how
+                     old the last answer is, the rows per table, and a key present
   secrets            does every stored secret decrypt with the current key
   github app         can the cluster mint an installation token, and does it grant what it needs
   github runners     are the self-hosted runners registered, running, and permitted
@@ -41,21 +44,33 @@ assumptions, one line per check:
   disk               headroom on the volume root
 
 On a node that is NOT the leader (a worker, or a follower manager) the same
-command answers the NODE-LOCAL subset instead, because cluster state is only
-current on the leader and this command will not read a stale copy:
+command answers the NODE-LOCAL subset instead:
 
   daemon             is this node's daemon listening (its /health)
   socket proxy       is the filtered docker socket present
   runner assignment  when this node last read its runner assignment, and from where
   local runner       this node's runner container, and the docker exposure it has
+  cluster mirror     the cluster state as THIS node mirrors it, with the leader's
+                     name and how old the last answer is
   disk               headroom on the volume root
 
-Every cluster question it cannot answer is printed as a skipped line with the
-reason, so the report is never mistaken for a clean bill of health.
+The mirror line is the answer to "is the state this node would promote on current?",
+and it carries its age on purpose: a mirror that has not been refreshed since the
+leader died is reported as stale (a warning naming the leader), never as current and
+never as blank.
+
+On the LEADER the report also carries "cluster mirror verify" — the check the
+control-plane kit drill used to be, pointed at the mirror: version applied, age of
+the last successful answer, the rows every table carries, and whether a key is
+present. That is the proof that a promotion would work, and it exists on every node
+rather than only where the old kit happened to be published.
+
+Every cluster question a non-leader cannot answer is printed as a skipped line with
+the reason, so the report is never mistaken for a clean bill of health.
 
 Exit status is non-zero when any check fails, so it can gate a deploy or run
-from cron. Nothing here writes: the kit drill extracts to a temporary
-directory, the offsite check only lists, and the rest are reads.`,
+from cron. Nothing here writes: "cluster mirror verify" only reads, the offsite
+check only lists, and the rest are reads.`,
 	Args: cobra.NoArgs,
 	RunE: runDoctor,
 }
@@ -77,22 +92,46 @@ func runDoctor(cmd *cobra.Command, _ []string) error {
 	// what this machine can measure, plus one skipped line per cluster question it
 	// cannot. Refusing outright left an operator with no way to ask a WORKER why
 	// its runner never started.
-	if nodeLocalOnly(cmd.Context()) {
+	if self, onFollower := followerSelf(cmd.Context()); onFollower {
 		host, _ := os.Hostname()
 		socketPath := cluster.DefaultGitHubRunnerSocketPath
 		if p := envOr("PMCLUSTER_RUNNER_SOCKET", ""); p != "" {
 			socketPath = p
 		}
+		// The mirror, if this node has one. openExistingStore never creates a database:
+		// a node that was never initialised must keep saying so, and a worker simply has
+		// nothing here (the check reports that rather than opening an empty one).
+		var mirror *store.Store
+		// Managers only. A worker has a data.db too (join creates one), but no mirror and no
+		// poll loop, so opening it here would only let a check misread absence as staleness.
+		if self.IsManager {
+			if s, err := openExistingStore(cfg.DBPath()); err == nil {
+				mirror = s
+				defer func() { _ = s.Close() }()
+			}
+		}
 		rep := doctor.RunNodeLocal(cmd.Context(), doctor.NodeInput{
 			Hostname:   host,
 			ListenAddr: cfg.ListenAddr,
 			SocketPath: socketPath,
-			StatePath:  agentStatePath(cfg.DataDir),
+			StatePath:  noderuntime.AgentStatePath(cfg.DataDir),
 			VolumeRoot: envOr("PMCLUSTER_VOLUME_ROOT", "/var/stack/data"),
 			Docker:     &runners.CLIDocker{},
+			Store:      mirror,
+			Role:       self.Role,
 			// This machine's RAM, so the runner's cap is checked against the node
 			// that would have to survive it. Unknown (0) skips the check.
-			MemTotalMiB: hostMemTotalMiB(),
+			MemTotalMiB: nodeunits.HostMemTotalMiB(),
+			// The app-data ownership check needs to know which services run here
+			// and what user their images declare. A runtime that cannot be opened
+			// is not an error: the check skips with a line saying so.
+			Runtime: func() runtime.Client {
+				c, err := docker.New()
+				if err != nil {
+					return nil
+				}
+				return c
+			}(),
 		})
 		printReport(cmd, rep)
 		if !rep.OK {
@@ -197,19 +236,24 @@ func printReport(cmd *cobra.Command, rep *doctor.Report) {
 	_ = w.Flush()
 }
 
-// nodeLocalOnly reports whether this node must answer the node-local doctor
-// subset instead of the cluster report. It is deliberately conservative: only a
-// node that PROVES it is a swarm member without leadership qualifies, so an
-// unreachable Docker or a standalone box keeps the full report it always had.
-func nodeLocalOnly(ctx context.Context) bool {
+// followerSelf returns this node's swarm identity when it is a swarm member that is NOT
+// the leader — the one case where this CLI answers from the local MIRROR instead of
+// deferring to the leader (ADR 0003, slice 3).
+//
+// It is deliberately conservative: only a node that PROVES it is a member without
+// leadership qualifies, so an unreachable Docker or a standalone box keeps the full answer
+// it always had. Remote mode is excluded for the opposite reason: the user pointed the CLI
+// at a daemon, and that daemon's own answer is the right one.
+func followerSelf(ctx context.Context) (docker.SelfNode, bool) {
 	if apiURL != "" {
-		// Remote mode: the CLI is pointed at a daemon that is the leader (or at
-		// the edge in front of it), so the full report is the right answer.
-		return false
+		return docker.SelfNode{}, false
 	}
 	self, err := detectSelf(ctx)
 	if err != nil {
-		return false
+		return docker.SelfNode{}, false
 	}
-	return self.SwarmActive && !self.IsLeader
+	if !self.SwarmActive || self.IsLeader {
+		return docker.SelfNode{}, false
+	}
+	return self, true
 }

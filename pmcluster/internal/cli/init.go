@@ -47,9 +47,11 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	st, err := store.Open(cfg.DBPath())
+	// The bootstrap exception to the never-create rule: prepareDataDir has just made
+	// the directory, and this is where the database is meant to come into being.
+	st, err := openOrCreateStore(cfg)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		return err
 	}
 	defer func() { _ = st.Close() }()
 

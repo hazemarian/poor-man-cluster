@@ -174,7 +174,6 @@ func TestRunnerValuesAreValidated(t *testing.T) {
 		{cluster.SettingGitHubRunnerOrg(), "-acme", "a leading hyphen is not a GitHub login"},
 		{cluster.SettingGitHubRunnerGroup(), "a/b", "a slash is not valid in a group name"},
 		{cluster.SettingGitHubRunnerNodes(), "worker 1", "a space is not a hostname"},
-		{cluster.SettingGitHubRunnerSocketPath(), "relative/docker.sock", "the socket path must be absolute"},
 		{cluster.SettingGitHubRunnerMemory(), "lots", "a non-quantity memory limit"},
 		{cluster.SettingGitHubRunnerMemory(), "0", "a zero memory limit"},
 	}
@@ -206,17 +205,18 @@ func TestRunnerSettingDefaultsAreReported(t *testing.T) {
 	if got[cluster.SettingGitHubRunnerGroup()] != cluster.DefaultGitHubRunnerGroup {
 		t.Errorf("group default = %q, want %q", got[cluster.SettingGitHubRunnerGroup()], cluster.DefaultGitHubRunnerGroup)
 	}
-	// The filtered socket is the default: the raw mount is the debug fallback.
-	if got[cluster.SettingGitHubRunnerSocketProxy()] != "true" {
-		t.Errorf("socket proxy default = %q, want true", got[cluster.SettingGitHubRunnerSocketProxy()])
-	}
-	if got[cluster.SettingGitHubRunnerSocketPath()] != cluster.DefaultGitHubRunnerSocketPath {
-		t.Errorf("socket path default = %q, want %q", got[cluster.SettingGitHubRunnerSocketPath()], cluster.DefaultGitHubRunnerSocketPath)
+	// There is no docker-access setting any more: a job always gets its own daemon,
+	// so a key that says otherwise must not exist. Asserting its absence is the point
+	// — a resurrected key would be a control that changes nothing.
+	for _, gone := range []string{"github_runner_socket_proxy", "github_runner_socket_path", "github_runner_dind"} {
+		if _, ok := got[gone]; ok {
+			t.Errorf("%q is back in the settings surface; a job's docker access is not a choice", gone)
+		}
 	}
 	if got[cluster.SettingGitHubRunnerMemory()] != cluster.DefaultGitHubRunnerMemory {
 		t.Errorf("memory default = %q, want %q", got[cluster.SettingGitHubRunnerMemory()], cluster.DefaultGitHubRunnerMemory)
 	}
-	if got[cluster.SettingGitHubRunnerAllowLeader()] != "false" {
-		t.Errorf("allow-leader default = %q, want false", got[cluster.SettingGitHubRunnerAllowLeader()])
+	if got[cluster.SettingGitHubRunnerAllowManagers()] != "false" {
+		t.Errorf("allow-managers default = %q, want false", got[cluster.SettingGitHubRunnerAllowManagers()])
 	}
 }

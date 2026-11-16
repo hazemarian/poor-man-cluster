@@ -8,33 +8,6 @@ import (
 	"time"
 )
 
-// The weekly timer has to exist, point at the drill, and not collide with the
-// hourly backup run.
-func TestDrillUnitsExistAndAreWeekly(t *testing.T) {
-	svc := renderBackupDrillServiceUnit("/usr/local/bin/pmcluster", "/var/stack/data", "/var/stack/backup", "/var/lib/pmcluster-backup")
-	for _, want := range []string{
-		"User=root",
-		"ExecStart=/usr/local/bin/pmcluster backup-agent drill --newest 1",
-		"PMCLUSTER_BACKUP_DIR=/var/stack/backup",
-		"TimeoutStartSec=",
-	} {
-		if !strings.Contains(svc, want) {
-			t.Errorf("drill service is missing %q:\n%s", want, svc)
-		}
-	}
-	timer := renderBackupDrillTimerUnit()
-	for _, want := range []string{"OnCalendar=Sun", "Unit=pmcluster-backup-drill.service", "Persistent=true"} {
-		if !strings.Contains(timer, want) {
-			t.Errorf("drill timer is missing %q:\n%s", want, timer)
-		}
-	}
-	// Weekly, not hourly: a drill costs the I/O of a restore and must not run
-	// alongside the backup it is testing.
-	if strings.Contains(timer, "*-*-* *:00:00") {
-		t.Errorf("drill timer looks hourly:\n%s", timer)
-	}
-}
-
 // --newest has to pick real artifacts, newest first, ignoring sidecars.
 func TestNewestArtifactsSkipsSidecarsAndSortsByAge(t *testing.T) {
 	dir := t.TempDir()

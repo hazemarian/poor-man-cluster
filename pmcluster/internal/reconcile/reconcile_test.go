@@ -66,6 +66,30 @@ func newTestStore(t *testing.T) *store.Store {
 	return st
 }
 
+// waitStackFailover blocks until the durable failover marker for stack exists
+// and returns it. The marker is written by the detached failover goroutine, so
+// it doubles as "that goroutine is finished" — asserting on it (rather than on
+// an in-test slice) is also the behavioural claim: a moved stack is recorded
+// with where it came from and where it went.
+func waitStackFailover(t *testing.T, st *store.Store, stack string) *store.StackFailover {
+	t.Helper()
+	ctx := context.Background()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mark, err := st.StackFailover(ctx, stack)
+		if err != nil {
+			t.Fatalf("StackFailover(%q): %v", stack, err)
+		}
+		if mark != nil {
+			return mark
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no failover marker for %q after 5s", stack)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestServiceStatus(t *testing.T) {
 	cases := []struct {
 		name string
@@ -580,6 +604,11 @@ func TestRunOnce_StorageFailoverMovesToHealthyNode(t *testing.T) {
 
 	var mu sync.Mutex
 	var moves []string
+	// The move runs in a detached goroutine (deliberate: a restore-from-S3 must
+	// not block the converge pass), so the test may not read the result the
+	// instant RunOnce returns — on a single-P run it loses that race every
+	// time. Wait on the goroutine itself instead of on the scheduler.
+	moved := make(chan struct{}, 1)
 	rec := &Reconciler{
 		Store:         st,
 		Docker:        &fakeNodesDocker{nodes: []runtime.Node{{Hostname: other, Status: "ready", Availability: "active"}}},
@@ -588,14 +617,26 @@ func TestRunOnce_StorageFailoverMovesToHealthyNode(t *testing.T) {
 		Log:           zerolog.Nop(),
 		FailoverMove: func(_ context.Context, stackName, targetNode string) error {
 			mu.Lock()
-			defer mu.Unlock()
 			moves = append(moves, stackName+">"+targetNode)
+			mu.Unlock()
+			moved <- struct{}{}
 			return nil
 		},
 	}
 
 	if err := rec.RunOnce(ctx); err != nil {
 		t.Fatalf("RunOnce (failover): %v", err)
+	}
+	select {
+	case <-moved:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("storage failover: the detached move never ran for %q (pinned %q, healthy %q)", "demo", pinned, other)
+	}
+	// The marker is the goroutine's last act: waiting for it means the store is
+	// untouched again before t.Cleanup closes it.
+	mark := waitStackFailover(t, st, "demo")
+	if mark.FromNode != pinned || mark.ToNode != other {
+		t.Fatalf("failover marker = %s>%s, want %s>%s", mark.FromNode, mark.ToNode, pinned, other)
 	}
 	mu.Lock()
 	got := append([]string(nil), moves...)
@@ -855,13 +896,10 @@ func TestRunOnce_StorageFailoverEnabledMovesToHealthyAlternate(t *testing.T) {
 		t.Fatalf("RunOnce: %v", err)
 	}
 
-	want := "demo>" + f.other
-	if got := f.moveCalls(); len(got) != 1 || got[0] != want {
-		t.Fatalf("failover moves = %v, want exactly [%s]", got, want)
-	}
-
-	// The move runs detached; the goroutine records the metric and then the
-	// unacknowledged marker. Poll for the marker.
+	// The move runs detached, so nothing in this pass is visible the instant RunOnce
+	// returns: the goroutine records the metric, then the unacknowledged marker. Poll
+	// for the marker FIRST — it is the goroutine's last act, so its presence means the
+	// move call and the counter are already there too.
 	var fo *store.StackFailover
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -874,6 +912,11 @@ func TestRunOnce_StorageFailoverEnabledMovesToHealthyAlternate(t *testing.T) {
 	if fo == nil {
 		t.Fatal("failover marker was not recorded after the move")
 		return
+	}
+
+	want := "demo>" + f.other
+	if got := f.moveCalls(); len(got) != 1 || got[0] != want {
+		t.Fatalf("failover moves = %v, want exactly [%s]", got, want)
 	}
 	if fo.StackName != "demo" || fo.FromNode != f.pinned || fo.ToNode != f.other || fo.Acked {
 		t.Errorf("marker = %+v, want demo %s→%s unacknowledged", fo, f.pinned, f.other)
@@ -978,7 +1021,9 @@ func TestRunOnce_StackWithoutRevisionIsNotAnError(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
 	notices := 0
 	for _, line := range lines {
-		if strings.Contains(line, "outside the kit's revision window") {
+		// The FIRST notice per stack is the info line; a later pass logs a debug
+		// "still no stored revision" heartbeat, which is deliberate.
+		if strings.Contains(line, "reconcile — no stored revision on this node") {
 			notices++
 			if !strings.Contains(line, `"level":"info"`) {
 				t.Errorf("no-stored-revision notice is not info level: %s", line)

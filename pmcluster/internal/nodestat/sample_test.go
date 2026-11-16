@@ -129,3 +129,67 @@ func TestSampler_SurvivesAPartialProc(t *testing.T) {
 		t.Fatalf("top rss = %+v, want the one readable process", smp.TopRSS)
 	}
 }
+
+// TestSampler_CPUIdleIsADeltaBetweenSamples is the node-utilization half of "move node
+// resources to Parseable". /proc/stat holds counters since boot, so utilization exists
+// only as the difference between two readings: the first sample knows nothing and must
+// say so, and the second must report the idle share of what happened in between —
+// otherwise a node that just started would be charted as either 0% or 100% busy.
+func TestSampler_CPUIdleIsADeltaBetweenSamples(t *testing.T) {
+	files := baseFiles()
+	// user nice system idle iowait irq softirq steal guest guest_nice
+	files["proc/stat"] = "cpu  100 0 100 800 0 0 0 0 0 0\ncpu0 50 0 50 400 0 0 0 0 0 0\n"
+	root := fakeProc(t, files)
+	s := NewSampler(root, "nxt-sw-1-m", "manager")
+	t0 := time.Unix(1_700_000_000, 0)
+
+	first, err := s.Collect(t0)
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if first.CPUIdleKnown {
+		t.Fatalf("the first sample claims to know utilization (%v) — there is no interval yet", first.CPUIdleFrac)
+	}
+
+	// 15 s later: total jiffies 1000 -> 1100, idle 800 -> 825. So 25 of the 100 jiffies
+	// that passed were idle: 25%.
+	if err := os.WriteFile(filepath.Join(root, "proc", "stat"),
+		[]byte("cpu  175 0 100 825 0 0 0 0 0 0\n"), 0o600); err != nil {
+		t.Fatalf("rewrite /proc/stat: %v", err)
+	}
+	second, err := s.Collect(t0.Add(15 * time.Second))
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if !second.CPUIdleKnown {
+		t.Fatal("the second sample has an interval and must report utilization")
+	}
+	if second.CPUIdleFrac < 0.2499 || second.CPUIdleFrac > 0.2501 {
+		t.Fatalf("idle fraction = %v, want 0.25 (25 idle of 100 total jiffies)", second.CPUIdleFrac)
+	}
+}
+
+// TestSampler_CPUIdleSurvivesAStaleOrBackwardsCounter: a fixture that rewrites the file
+// with smaller counters (a reboot between samples, a wrapped value) must report UNKNOWN,
+// not a negative utilization that a dashboard would draw as impossible.
+func TestSampler_CPUIdleSurvivesAStaleOrBackwardsCounter(t *testing.T) {
+	files := baseFiles()
+	files["proc/stat"] = "cpu  100 0 100 800 0 0 0 0 0 0\n"
+	root := fakeProc(t, files)
+	s := NewSampler(root, "nxt-sw-4-m", "manager")
+	t0 := time.Unix(1_700_000_000, 0)
+	if _, err := s.Collect(t0); err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "proc", "stat"),
+		[]byte("cpu  10 0 10 80 0 0 0 0 0 0\n"), 0o600); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	smp, err := s.Collect(t0.Add(15 * time.Second))
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	if smp.CPUIdleKnown {
+		t.Fatalf("a counter that went backwards produced a utilization of %v, want unknown", smp.CPUIdleFrac)
+	}
+}

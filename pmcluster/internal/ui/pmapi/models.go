@@ -482,6 +482,21 @@ type GitHubRunner struct {
 	// Reason explains a row that is offline for a reason other than GitHub
 	// saying so — today: the memory cap does not fit the node.
 	Reason string `json:"reason"`
+	// Caches are this runner's persistent cache volumes with their sizes, measured by
+	// the daemon on its node. Empty for a runner elsewhere: unobservable, not zero.
+	Caches []RunnerCache `json:"caches,omitempty"`
+	// CacheTotal is those sizes added up, already formatted.
+	CacheTotal string `json:"cache_total,omitempty"`
+	// CacheWarnings are the caches past their ceiling, in words for the operator.
+	CacheWarnings []string `json:"cache_warnings,omitempty"`
+}
+
+// RunnerCache is one persistent cache volume behind a runner.
+type RunnerCache struct {
+	Name   string `json:"name"`
+	Volume string `json:"volume"`
+	Bytes  int64  `json:"bytes"`
+	Limit  int64  `json:"limit"`
 }
 
 // GitHubRunners is the list response. Enabled travels with the rows so the panel's

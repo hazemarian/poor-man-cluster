@@ -1,6 +1,7 @@
 package runners
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -54,6 +55,10 @@ type LocalDocker interface {
 	// runner into a socket that is not listening is a job that fails for reasons
 	// nobody can see from the workflow.
 	ExecIn(ctx context.Context, name string, cmd ...string) ([]byte, error)
+	// VolumeSizes reports the size of every volume whose name starts with prefix, as
+	// docker's own accounting has it. The caches a runner keeps between jobs are the
+	// one thing the platform never removes, so they have to be measurable.
+	VolumeSizes(ctx context.Context, prefix string) ([]VolumeSize, error)
 	// RemoveVolume removes a named volume. Idempotent, like Remove: a volume that
 	// is already gone is success, and a DinD teardown that fails on "no such
 	// volume" would leave a runner that can never be cleaned up.
@@ -115,6 +120,38 @@ func (d *CLIDocker) Remove(ctx context.Context, name string) error {
 
 // ExecIn executes `docker exec <name> <cmd…>`. Named ExecIn because CLIDocker
 // already has an Exec field: the injection hook the tests use to record argv.
+// VolumeSizes reads `docker system df -v` and keeps the volumes with the given prefix.
+//
+// `docker volume inspect` has no size field, so the daemon's own accounting is the only
+// place these numbers exist. It is not free — the daemon walks the volumes — which is why
+// this is called on demand (the console page, doctor) and never on every reconcile pass.
+func (d *CLIDocker) VolumeSizes(ctx context.Context, prefix string) ([]VolumeSize, error) {
+	out, err := d.exec(ctx, "system", "df", "-v", "--format", "{{json .Volumes}}")
+	if err != nil {
+		return nil, err
+	}
+	var raw []struct {
+		Name string `json:"Name"`
+		Size string `json:"Size"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &raw); err != nil {
+		return nil, fmt.Errorf("docker system df: %w", err)
+	}
+	sizes := make([]VolumeSize, 0, len(raw))
+	for _, v := range raw {
+		if prefix != "" && !strings.HasPrefix(v.Name, prefix) {
+			continue
+		}
+		n, perr := ParseDockerSize(v.Size)
+		if perr != nil {
+			// One unparsable size must not hide the others: report what can be read.
+			continue
+		}
+		sizes = append(sizes, VolumeSize{Name: v.Name, Bytes: n})
+	}
+	return sizes, nil
+}
+
 func (d *CLIDocker) ExecIn(ctx context.Context, name string, cmd ...string) ([]byte, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, fmt.Errorf("docker exec: empty container name")

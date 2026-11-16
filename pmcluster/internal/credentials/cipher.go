@@ -27,12 +27,12 @@ var ErrInvalidCiphertext = errors.New("invalid or tampered ciphertext")
 
 // Cipher is safe for concurrent use, including across a Reload.
 //
-// The AEAD behind it is held in an atomic pointer because a manager that gains
-// Swarm leadership adopts the cluster's `.encryption_key` together with its
-// data.db; a Cipher still holding the pre-adoption key would fail to decrypt
-// every credential ciphertext in the database it just adopted (and would
-// encrypt new secrets under a key the rest of the fleet cannot read). Reload
-// swaps the key in place so consumers that already hold this *Cipher follow it.
+// The AEAD behind it is held in an atomic pointer because a manager may bring a
+// `.encryption_key` into place under a running daemon — the operator copying it, or the
+// join route delivering it — and a Cipher still holding the old key would fail to decrypt
+// every credential ciphertext in the store (and would encrypt new secrets under a key the
+// rest of the fleet cannot read). Reload swaps the key in place so consumers that already
+// hold this *Cipher follow it.
 type Cipher struct {
 	gcm atomic.Pointer[aead]
 }
@@ -124,16 +124,53 @@ func (c *Cipher) Decrypt(ciphertext []byte) ([]byte, error) {
 	return plain, nil
 }
 
-func loadOrCreateKey(path string) ([]byte, error) {
+// ErrNoKeyFile means the encryption key is not where this node expects it.
+//
+// It is a distinct error rather than a mint because the key is MINTED ONCE, by the node
+// that initialised the cluster, and copied to every other manager by the operator (ADR
+// 0006). A node that cannot find it must say so and stop: generating one here would
+// encrypt new secrets with a key the rest of the cluster cannot use, and — on a manager
+// holding a mirror — leave ciphertext it can never decrypt.
+var ErrNoKeyFile = errors.New("no encryption key file")
+
+// OpenExisting loads the encryption key and FAILS when the file is absent, instead of
+// minting one. Use it on any node that already has a control-plane database: there the
+// key is not this process's to create.
+func OpenExisting(path string) (*Cipher, error) {
+	key, err := loadKey(path)
+	if err != nil {
+		return nil, err
+	}
+	g, err := newGCM(key)
+	if err != nil {
+		return nil, err
+	}
+	c := &Cipher{}
+	c.gcm.Store(&aead{gcm: g})
+	return c, nil
+}
+
+func loadKey(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
-	if err == nil {
-		if len(data) != keyBytes {
-			return nil, fmt.Errorf("key file %s has wrong length (%d, expected %d)", path, len(data), keyBytes)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w at %s — copy it from the node that initialised the cluster (see `pmcluster key path`)", ErrNoKeyFile, path)
 		}
+		return nil, fmt.Errorf("read key file: %w", err)
+	}
+	if len(data) != keyBytes {
+		return nil, fmt.Errorf("key file %s has wrong length (%d, expected %d)", path, len(data), keyBytes)
+	}
+	return data, nil
+}
+
+func loadOrCreateKey(path string) ([]byte, error) {
+	data, err := loadKey(path)
+	if err == nil {
 		return data, nil
 	}
-	if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("read key file: %w", err)
+	if !errors.Is(err, ErrNoKeyFile) {
+		return nil, err
 	}
 
 	key := make([]byte, keyBytes)

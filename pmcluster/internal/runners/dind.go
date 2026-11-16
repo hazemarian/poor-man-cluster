@@ -23,14 +23,6 @@ import (
 // spec asks for one. It returns the error of the first step that fails; the caller
 // records it and the reconcile retries on the next tick.
 func StartRunner(ctx context.Context, d LocalDocker, s Spec) error {
-	if !s.DinD {
-		argv, err := s.Argv()
-		if err != nil {
-			return err
-		}
-		return d.Run(ctx, argv)
-	}
-
 	// Clear anything a previous job left. The volume especially: a stale copy holds
 	// an inner daemon's /var/run, including a socket path that no process owns, and
 	// the new dockerd would have to fight it for the same path.
@@ -50,6 +42,14 @@ func StartRunner(ctx context.Context, d LocalDocker, s Spec) error {
 	if err := waitForDaemon(ctx, d, s.DinDName()); err != nil {
 		_ = StopRunner(ctx, d, s.RunnerName)
 		return fmt.Errorf("the dind daemon in %s never answered: %w", s.DinDName(), err)
+	}
+	// The data directory outlives the job, so the daemon comes up with the previous
+	// job's stopped containers and dangling volumes still in it. Clear those — images
+	// and the build cache are the reason the directory survives at all, and they stay.
+	if err := pruneInnerDaemon(ctx, d, s.DinDName()); err != nil {
+		// Never fatal: a job with a stale container lying around is better than no job.
+		// The next start tries again.
+		_ = err
 	}
 	argv, err := s.Argv()
 	if err != nil {
@@ -114,4 +114,30 @@ func waitForDaemon(ctx context.Context, d LocalDocker, name string) error {
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// buildCacheFloor is how much build cache the inner daemon may keep between jobs. It
+// bounds a directory that now survives the job: without a floor, a repository that
+// builds a large image every hour eventually fills the node, and the failure arrives as
+// "no space left on device" in a job that has nothing to do with the cache.
+const buildCacheFloor = "10GB"
+
+// pruneInnerDaemon clears what a previous job left in the persistent data directory.
+//
+// Only things that cannot be reused: stopped containers, dangling images, anonymous
+// volumes. Named volumes are NOT pruned — a job may legitimately leave one for its next
+// run — and images are kept, because reusing layers is what makes the persistent
+// directory worth having.
+func pruneInnerDaemon(ctx context.Context, d LocalDocker, name string) error {
+	for _, cmd := range [][]string{
+		{"docker", "container", "prune", "-f"},
+		{"docker", "image", "prune", "-f"},
+		{"docker", "volume", "prune", "-f"},
+		{"docker", "builder", "prune", "-f", "--keep-storage", buildCacheFloor},
+	} {
+		if _, err := d.ExecIn(ctx, name, cmd...); err != nil {
+			return fmt.Errorf("prune %s: %w", name, err)
+		}
+	}
+	return nil
 }

@@ -222,9 +222,15 @@ func TestVerifierFailsClosed(t *testing.T) {
 	}
 }
 
-// TestOnlyTheAssignmentRouteIsServed asserts the listener carries ONE route: a
-// certificate-holding caller cannot reach anything else through it.
-func TestOnlyTheAssignmentRouteIsServed(t *testing.T) {
+// TestOnlyTheNodeRoutesAreServed asserts the node listener carries the routes it
+// declares (the runner assignment, the node report, the cluster snapshot) and
+// nothing else: a certificate-holding caller cannot reach any other path through
+// it, because the verifier is mounted per route rather than around the mux.
+//
+// The paths are literals on purpose. Importing the packages that own them would
+// create an import cycle (they all import this one), and the point of the test is
+// the SHAPE — a mounted route answers, an unmounted one is a 404.
+func TestOnlyTheNodeRoutesAreServed(t *testing.T) {
 	const swarmID = "swarm-id"
 	const nodeID = "node-id"
 	ca := swarmtlstest.New(t)
@@ -238,11 +244,19 @@ func TestOnlyTheAssignmentRouteIsServed(t *testing.T) {
 		SwarmID: func(context.Context) (string, error) { return swarmID, nil },
 		Log:     zerolog.Nop(),
 	}
-	// The mux startAssignmentListener builds: one pattern, wrapped by the verifier.
+	// The mux startAssignmentListener builds: the node-facing patterns, each one
+	// wrapped by the verifier, and nothing else.
 	mux := http.NewServeMux()
-	mux.Handle("/api/github/runners/assignment", v.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})))
+	})
+	for _, path := range []string{
+		"/api/github/runners/assignment",
+		"/internal/api/cluster/report",
+		"/internal/api/cluster/snapshot",
+	} {
+		mux.Handle(path, v.Middleware(ok))
+	}
 
 	srv := httptest.NewUnstartedServer(mux)
 	srv.TLS = serverTLS(ca, serverPair.Pair)
@@ -250,14 +264,14 @@ func TestOnlyTheAssignmentRouteIsServed(t *testing.T) {
 	defer srv.Close()
 
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: clientTLS(ca, &clientPair.Pair)}, Timeout: 5 * time.Second}
-	for _, path := range []string{"/", "/health", "/api/doctor", "/metrics", "/api/cluster/settings", "/api/github/runners"} {
+	for _, path := range []string{"/", "/health", "/api/doctor", "/metrics", "/api/cluster/settings", "/api/github/runners", "/internal/api/cluster"} {
 		resp, err := client.Get(srv.URL + path)
 		if err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusNotFound {
-			t.Fatalf("%s answered %d through the assignment listener; only the assignment route may be served there", path, resp.StatusCode)
+			t.Fatalf("%s answered %d through the node listener; only the declared routes may be served there", path, resp.StatusCode)
 		}
 	}
 }

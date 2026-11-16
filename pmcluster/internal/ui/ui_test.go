@@ -846,6 +846,43 @@ func TestServicesUI(t *testing.T) {
 	}
 }
 
+// TestHistoryRestoreRendersAppShell covers the page that came back as raw HTML:
+// when the operator pressed Back, HTMX re-requested the pushed URL WITH
+// HX-Request set and replaced the whole document — so a fragment response
+// produced a page with no <head>, no stylesheets and no sidebar. Measured on
+// 2026-11-16 at /web/overview. History restore must be answered with a full page.
+func TestHistoryRestoreRendersAppShell(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	jar := map[string]*http.Cookie{}
+
+	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
+	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
+
+	for _, path := range []string{"/web/overview", "/web/stacks", "/web/settings"} {
+		req := httptest.NewRequest(http.MethodGet, "http://x"+path, nil)
+		// Both headers, exactly as HTMX sends them on Back/Forward.
+		req.Header.Set("HX-Request", "true")
+		req.Header.Set("HX-History-Restore-Request", "true")
+		if ck, ok := jar[app.Auth.CookieName()]; ok {
+			req.AddCookie(ck)
+		}
+		rr := httptest.NewRecorder()
+		app.Handler().ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("history restore on %s = %d, want 200", path, rr.Code)
+		}
+		body := rr.Body.String()
+		for _, want := range []string{"<html", "web/static/base.css", `id="view"`} {
+			if !strings.Contains(body, want) {
+				t.Errorf("history restore on %s is not a full page: missing %q (got %d bytes starting %q)",
+					path, want, len(body), body[:min(len(body), 80)])
+			}
+		}
+	}
+}
+
 // TestFragmentRefreshRendersAppShell covers the deep-link refresh bug: a
 // browser refresh on an HTMX fragment URL (e.g. /stacks) is a full page load
 // (no HX-Request header) and must return the app shell with the fragment

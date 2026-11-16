@@ -1,0 +1,203 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+)
+
+// ErrNeverSynced is returned by SyncState on a node that has never applied a
+// snapshot. It is not an error condition: a leader, a worker and a fresh follower
+// all answer it, and each read surface says "no age yet" rather than inventing one.
+var ErrNeverSynced = errors.New("this node has never applied a cluster snapshot")
+
+// SyncState is the last snapshot a follower applied: which leader's state, at which
+// version, when the leader stamped it, when this node wrote it, and when this node last
+// got a SUCCESSFUL answer for it.
+//
+// The three timestamps answer different questions and are not interchangeable:
+//
+//   - GeneratedAt came from the leader: provenance only, never a basis for an age.
+//   - AppliedAt is this node's clock and moves only when rows are written — so it ages
+//     without bound on a quiet cluster, where every poll is a 304.
+//   - CheckedAt is this node's clock and moves on every successful poll, 304 included.
+//     That is the only sound basis for "how current is this mirror".
+type SyncState struct {
+	Leader      string
+	Version     int64
+	GeneratedAt int64
+	AppliedAt   int64
+	CheckedAt   int64
+}
+
+// SyncState reads the mirror's state. Returns ErrNeverSynced when this node has
+// never applied a snapshot.
+func (s *Store) SyncState(ctx context.Context) (*SyncState, error) {
+	var st SyncState
+	err := s.conn().QueryRowContext(ctx,
+		`SELECT leader, version, generated_at, applied_at, checked_at FROM sync_state WHERE id = 1`).
+		Scan(&st.Leader, &st.Version, &st.GeneratedAt, &st.AppliedAt, &st.CheckedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNeverSynced
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read sync state: %w", err)
+	}
+	return &st, nil
+}
+
+// ApplySnapshot replaces this node's mirrored tables with snap, in ONE transaction:
+// the document's tables are cleared and re-inserted, then the version is recorded.
+// leader is the hostname the response named (the ETag this node sends back must name the
+// pair it applied, so an anonymous apply is refused), and appliedAt is this node's clock
+// (unix seconds), stamped onto every row that carries mirrored_at and onto sync_state.
+//
+// A full replacement, not a delta: a row absent from the snapshot is deleted here, which
+// a delta could not express without tombstones. That is also why the endpoint always
+// sends every table as an array — an empty table means "delete them all", and the call
+// must be able to tell that apart from "the leader did not send it".
+//
+// Two shapes are accepted:
+//
+//   - snap.Tables — the whole document (ADR 0005). Every table in it is cleared and
+//     re-inserted with the leader's rows verbatim, ids and all, because a rollback names
+//     a config version by id and a stack names its revision. Tables the document does not
+//     name are left ALONE, which is what keeps a follower current during a rolling
+//     upgrade against a leader that still sends three tables.
+//   - the pre-document projection (Settings, Secrets, Users) — applied per table the way
+//     slice 2 did it, for a caller or a leader that predates the document.
+//
+// sync_state stays local: it says which leader's version THIS node applied, and a node
+// that adopted another node's row would be claiming freshness it never observed.
+func (s *Store) ApplySnapshot(ctx context.Context, snap *Snapshot, leader string, appliedAt int64) error {
+	if snap == nil {
+		return errors.New("apply snapshot: nil snapshot")
+	}
+	if strings.TrimSpace(leader) == "" {
+		// Without the leader the recorded state cannot produce the ETag the next poll
+		// sends, so this node would re-download the same version forever while looking
+		// synced. Refuse instead of recording a half-identity.
+		return errors.New("apply snapshot: no leader named (the response must say whose state this is)")
+	}
+	tx, err := s.conn().BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("apply snapshot: begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if len(snap.Tables) > 0 {
+		if err := applyMirrorTables(ctx, tx, snap.Tables, appliedAt); err != nil {
+			return err
+		}
+	} else {
+		if err := applySettings(ctx, tx, snap.Settings, appliedAt); err != nil {
+			return err
+		}
+		if err := applySecrets(ctx, tx, snap.Secrets, appliedAt); err != nil {
+			return err
+		}
+		if err := applyUsers(ctx, tx, snap.Users, appliedAt); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO sync_state (id, leader, version, generated_at, applied_at, checked_at)
+		 VALUES (1, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		   leader = excluded.leader,
+		   version = excluded.version,
+		   generated_at = excluded.generated_at,
+		   applied_at = excluded.applied_at,
+		   checked_at = excluded.checked_at`,
+		leader, snap.Version, snap.GeneratedAt, appliedAt, appliedAt); err != nil {
+		return fmt.Errorf("apply snapshot: record sync state: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("apply snapshot: commit: %w", err)
+	}
+	return nil
+}
+
+func applySettings(ctx context.Context, tx *sql.Tx, rows []SnapshotSetting, appliedAt int64) error {
+	keys := make([]any, 0, len(rows))
+	for _, r := range rows {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO cluster_settings (key, value, mirrored_at) VALUES (?, ?, ?)
+			 ON CONFLICT(key) DO UPDATE SET value = excluded.value, mirrored_at = excluded.mirrored_at`,
+			r.Key, r.Value, appliedAt); err != nil {
+			return fmt.Errorf("apply snapshot: upsert setting %s: %w", r.Key, err)
+		}
+		keys = append(keys, r.Key)
+	}
+	return deleteAbsent(ctx, tx, "cluster_settings", "key", keys)
+}
+
+func applySecrets(ctx context.Context, tx *sql.Tx, rows []SnapshotSecret, appliedAt int64) error {
+	names := make([]any, 0, len(rows))
+	for _, r := range rows {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO secrets (id, scope, stack, name, payload, hash, created_at, swarm_rev, mirrored_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(name) DO UPDATE SET
+			   scope = excluded.scope, stack = excluded.stack, payload = excluded.payload,
+			   hash = excluded.hash, created_at = excluded.created_at,
+			   swarm_rev = excluded.swarm_rev, mirrored_at = excluded.mirrored_at`,
+			r.ID, r.Scope, r.Stack, r.Name, r.Payload, r.Hash, r.CreatedAt, r.SwarmRev, appliedAt); err != nil {
+			return fmt.Errorf("apply snapshot: upsert secret %s: %w", r.Name, err)
+		}
+		names = append(names, r.Name)
+	}
+	return deleteAbsent(ctx, tx, "secrets", "name", names)
+}
+
+// applyUsers replaces the mirrored users table. See ApplySnapshot for why this one
+// table is not an upsert.
+func applyUsers(ctx context.Context, tx *sql.Tx, rows []SnapshotUser, appliedAt int64) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM users`); err != nil {
+		return fmt.Errorf("apply snapshot: clear users: %w", err)
+	}
+	for _, r := range rows {
+		// token_id is nullable in the schema and UNIQUE when set: a legacy row has
+		// no token id, and inserting "" for several of them collides on the index.
+		// NULL is the only faithful spelling of "this row has none".
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO users (id, name, token_id, token_hash, created_at, last_used_at, stack, role, mirrored_at)
+			 VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+			r.ID, r.Name, nullIfEmpty(r.TokenID), r.TokenHash, r.CreatedAt, r.Stack, r.Role, appliedAt); err != nil {
+			return fmt.Errorf("apply snapshot: insert user %s: %w", r.Name, err)
+		}
+	}
+	return nil
+}
+
+// deleteAbsent removes every row of table whose key column is not in keys. An
+// empty snapshot means the leader has no rows, so everything goes — this is the
+// half of the apply that an upsert-only mirror gets wrong, and a deleted setting
+// would otherwise live on every follower forever.
+func deleteAbsent(ctx context.Context, tx *sql.Tx, table, column string, keys []any) error {
+	if len(keys) == 0 {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+table); err != nil {
+			return fmt.Errorf("apply snapshot: clear %s: %w", table, err)
+		}
+		return nil
+	}
+	// The identifiers are constants in this package; the placeholders are generated
+	// from the row count, so no value is ever interpolated into the statement.
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",")
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM `+table+` WHERE `+column+` NOT IN (`+placeholders+`)`, keys...); err != nil {
+		return fmt.Errorf("apply snapshot: delete absent rows of %s: %w", table, err)
+	}
+	return nil
+}
+
+// nullIfEmpty maps the domain's "" onto SQL NULL, for columns where "" is a real
+// value that a UNIQUE index would treat as a duplicate.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}

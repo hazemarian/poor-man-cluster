@@ -66,110 +66,41 @@ Key properties:
   swarm queries. An unacknowledged storage-failover marker dominates the badge
   ("failover", amber) until an operator `stack ack`s it or moves it back.
 
-### Parallel leader loop: control-plane Raft snapshot
+### Cluster state: the mirror is the document, and adoption copies nothing
 
-Alongside the reconciler, the leader runs `controlplane.Kit.Loop` (5-minute tick,
-plus an immediate snapshot on promotion). It re-publishes the failover-survivor
-kit (config.yaml, config/ tree, the encryption key in a separate config, and an
-EXPORT of `data.db`'s authoritative tables — see below) into
-`pmcluster_state_*` / `pmcluster_state_key_*` Docker configs, which Swarm's Raft
-store replicates to every manager. The snapshot only fires when a kit file
-changed since the newest config (deploys, settings, secret/webhook edits all land
-within one interval), logs the packed payload size at info on every publish,
-prunes to the newest two, and fails loudly when a payload would exceed Docker's
-500 KiB config ceiling. It is independent of `reconcile_interval` — a cluster
-with the reconcile loop disabled still keeps its control plane replicated. See
-`internal/controlplane`.
+There is no control-plane Raft snapshot any more (ADR 0005). Cluster state reaches
+every manager by the swarm-mTLS pull (`internal/clustersnapshot`, 60 s, with
+`If-None-Match` so a quiet cluster costs a 304) and is mirrored into that manager's
+own store. The mirror carries the WHOLE document — every table, minus the ones
+whose rows describe the node they live on (`backups`, `node_stats`,
+`github_runners`, `sync_state`, plus the two structural tables; see
+`internal/store/mirror_tables.go` for both lists and a reason per exclusion). That
+includes `stack_revisions` and `cluster_version`, so a promoted leader reads the
+manifest behind its live stack pointer and continues the version counter.
 
-**What crosses the fleet, and what does not.** The kit's `data.db` is not the
-leader's file: `controlplane` exports a fresh SQLite database that runs the
-migrations and copies the authoritative tables — `users` (token hashes, roles,
-scopes), `managed_credentials`, `stacks` (name, repo, deploy file,
-current-revision pointer), `webhook_sources`, `registries`, `cluster_settings`,
-`configs`, `secrets`, `site_certs`, `stack_failover` — plus a SHORT ROLLBACK
-WINDOW on the two tables that grow without bound: `stack_revisions` arrives as
-each stack's newest 5 revisions **and** the row `current_revision` points at
-(which is not always one of them — a rollback leaves the pointer on an older
-row), and `config_versions` as the newest 10 versions per config name, row ids
-preserved so a rollback names the same row it would on the leader. Everything
-else in those two tables, plus `backups`, `webhook_deliveries`, `stack_status`
-and `node_stats`, stays behind. The caps live in one place
-(`internal/controlplane/kitdb.go`) and are held by tests that pack 500
-revisions and 200 versions per group and fail if either the caps or the size
-budget drift.
+**Adoption is a check, not a transfer.** `Kit.AdoptOnLeadership`
+(`internal/controlplane/adopt.go`) runs once per follower→leader transition and
+serves the store the node already has; nothing is staged, renamed or reopened, and
+`store.Store.Swap` is gone with the path that used it. What it decides:
 
-This was forced by measurement: the leader's `data.db` reached 5.2 MB, 3.7 MB
-of it revisions, 538 KB gzipped against the 512 KB ceiling, so every publish
-was refused for days and the API keys, settings and secrets created in that
-window existed only on one disk. A promoted leader now serves identical auth,
-settings, secrets and stack LIST, can reconcile each stack against its current
-rendered manifest without waiting for a re-deploy, and can roll a deploy back
-within the window. A revision outside the window still reads as "no stored
-revision on this node" (telemetry status `skipped`), handled once, at info,
-instead of marking the stack errored; a config rollback further back than ten
-versions is a leader-side operation, because only the leader holds the older
-rows. `VACUUM INTO` was rejected for this: it copies everything, which is
-precisely what does not fit.
+- a STALE mirror is served, and the version and age are logged ("adopting mirror
+  version N, age Ts") — a promotion on a few-minutes-old snapshot beats no leader,
+  and the journal carries the cost;
+- a node that has never applied a snapshot AND holds no cluster state refuses,
+  loudly, and starts no control loop: that is nothing to serve, not something old;
+- a node that has never mirrored but holds state is the cluster's source (the first
+  leader after `cluster up`);
+- the encryption key is compared with its own config and a mismatch is a warning —
+  the key route is the next decision.
 
-**Adoption happens at startup AND on leadership gain.** Two call sites run the
-same predicate, and they are the only two:
+Startup says the same thing without copying: `noderuntime.ConfirmMirrorAtStartup`
+reports the leader, version and age it holds, or that it is waiting for the first
+snapshot. A manager with no data yet starts, serves `/health` and says why.
 
-- **Startup, before `store.Open`.** `serve` restores from the newest
-  `pmcluster_state_*` config only when the local DB is missing or older than the
-  snapshot (a current DB — e.g. on shared storage — is never clobbered), and
-  repairs a missing `.encryption_key` even when the DB is current. Nothing has
-  the store open yet, so the kit is extracted in place.
-- **On the follower→leader transition.** `Kit.AdoptOnLeadership`
-  (`internal/controlplane/adopt.go`) runs once per transition, from the
-  leadership goroutine *before* the reconcile loop reads settings/credentials and
-  before the node answers control-plane reads. A manager that becomes leader
-  while running is usually behind: the previous leader snapshotted API keys,
-  credentials and settings it never adopted.
-
-The mid-run case cannot extract in place — `data.db` is open, and writing it
-under the live SQLite connection makes the daemon serve stale page-cache rows
-while fresh readers see the new file (split-brain). Adoption therefore stages the
-kit in a `.adopt-*` directory *inside* the data dir (same filesystem, so the final
-move is an atomic `rename`), then closes the store (`store.Store.Swap`), renames
-the kit into place with `data.db` **last**, writes `.state_revision`, and reopens
-the same `*store.Store` every consumer already holds. The `.encryption_key` is
-adopted with the DB, and the in-memory `credentials.Cipher` is reloaded in place
-when the key changed — a cluster DB beside the node's old key leaves every
-credential ciphertext undecryptable.
-
-**The window in which the new leader is not yet serving.** Between the moment
-Swarm elects the node and the moment adoption finishes, the daemon answers `503`
-with `Retry-After: 1` and a JSON body that says it is adopting, for every route
-except `/health` (`internal/cli/adoptgate.go`). The gate wraps the whole handler,
-so it covers the REST API, the console's fragments and the webhook receiver
-alike — anything that would read control-plane state. `/health` stays exempt
-because liveness has to answer during an adoption: a leader that looks down for
-the duration is a worse failure than the one being fixed.
-
-A caller should retry once, not page. The window is one kit extract plus one
-rename, plus any in-flight query the swap waits for; the gate's comment estimates
-a few tens of milliseconds, and it has not been timed against a live failover, so
-treat that as an order of magnitude rather than a number. A request already in
-flight when the store closes may fail with `sql: database is closed`; retrying
-succeeds. The alternative — answering from the revision being replaced — is the
-silent rollback this machinery exists to prevent.
-
-The journal names it: `control-plane data ADOPTED on leadership gain: store
-closed, data.db + .encryption_key replaced, store reopened, revision advanced`,
-with the config, the previous revision and whether the key changed. A node the
-leadership finds already current says so and touches no file.
-
-**A leadership move no longer serves stale state.** Before this, the failure was
-silent: the new leader answered `200` from its own older revision, so an API key
-created minutes earlier on the old leader returned `401` and read as a credential
-bug on a node that had, in fact, already received the newer kit through Raft. Now
-the same move is either invisible (the node was already current) or a short,
-deliberate `503` — never an answer built from the revision being replaced.
-
-Failures are contained, not fatal: an unreadable kit, a state config whose key
-config is missing, or a payload that does not extract leaves the current database
-in place, logs at ERROR with the reason, and keeps serving. A worker node or a
-leaderless swarm (quorum lost) degrades gracefully: snapshot/adoption become
-no-ops that retry on the next transition instead of crash-looping the daemon.
-Adoption is never part of a tick: a node that stays leader does not close its
-store, and a snapshot this node published itself is never adopted back.
+**No Docker config is written at all.** The data kit `pmcluster_state_<ts>` went with
+the mirror, the control-plane backup archive (`pmcluster-ctlplane-*.tar.gz`) went with
+its service and its restore path — backups are service volumes only — and the key
+config `pmcluster_state_key_<ts>` went last (ADR 0006). The cipher key is a file,
+`<data dir>/.encryption_key`, minted once at `cluster init` and never rotated; it
+reaches the other managers through the join route, or by an operator copying it. A key
+that does not change needs somewhere to live, not a delivery channel.

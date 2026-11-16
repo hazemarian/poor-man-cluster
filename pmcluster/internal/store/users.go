@@ -36,6 +36,10 @@ func (s *Store) CreateUser(ctx context.Context, name, tokenID, tokenHash string,
 }
 
 // CreateUserWithRole is CreateUser with an explicit daemon role tier (FIX 5).
+//
+// users is one of the tables a follower mirrors (Store.Snapshot): minting a token
+// bumps the cluster version in the same transaction, or a follower keeps
+// authenticating a fleet where that token does not exist.
 func (s *Store) CreateUserWithRole(ctx context.Context, name, tokenID, tokenHash, role string, stack ...string) (int64, error) {
 	if role == "" {
 		role = auth.RoleAdmin
@@ -44,17 +48,27 @@ func (s *Store) CreateUserWithRole(ctx context.Context, name, tokenID, tokenHash
 	if tokenID != "" {
 		tid = sql.NullString{String: tokenID, Valid: true}
 	}
-	res, err := s.conn().ExecContext(ctx,
-		`INSERT INTO users (name, token_id, token_hash, created_at, stack, role) VALUES (?, ?, ?, ?, ?, ?)`,
-		name, tid, tokenHash, time.Now().Unix(), firstStack(stack), role,
-	)
-	if err != nil {
-		if isUniqueViolation(err) {
-			return 0, ErrUserExists
+	var id int64
+	err := s.inTxBump(ctx, func(tx *sql.Tx) (bool, error) {
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO users (name, token_id, token_hash, created_at, stack, role) VALUES (?, ?, ?, ?, ?, ?)`,
+			name, tid, tokenHash, time.Now().Unix(), firstStack(stack), role,
+		)
+		if err != nil {
+			if isUniqueViolation(err) {
+				return false, ErrUserExists
+			}
+			return false, fmt.Errorf("insert user: %w", err)
 		}
-		return 0, fmt.Errorf("insert user: %w", err)
+		if id, err = res.LastInsertId(); err != nil {
+			return false, fmt.Errorf("insert user id: %w", err)
+		}
+		return true, nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 // firstStack resolves the optional variadic stack scope: the first
@@ -245,6 +259,12 @@ func (s *Store) UserByName(ctx context.Context, name string) (*UserRow, error) {
 // TouchUser records a successful API-key use for a user, best-effort. The
 // returned error is intentionally ignorable: last-used tracking must never
 // break authentication.
+//
+// This is the ONE write to a mirrored table that does not bump the cluster
+// version, and deliberately so: last_used_at is not in the snapshot
+// (Store.Snapshot says why), and bumping here would advance the version on every
+// authenticated request the whole cluster serves — every follower poll would be a
+// 200 carrying a full body for a change no follower mirrors.
 func (s *Store) TouchUser(ctx context.Context, id int64) error {
 	if _, err := s.conn().ExecContext(ctx,
 		`UPDATE users SET last_used_at = ? WHERE id = ?`, time.Now().Unix(), id,
@@ -255,20 +275,23 @@ func (s *Store) TouchUser(ctx context.Context, id int64) error {
 }
 
 // DeleteUser removes a user row (revoking its bearer token immediately).
-// Returns ErrUserNotFound when no row matched.
+// Returns ErrUserNotFound when no row matched. A revoke bumps the cluster version,
+// so a follower stops honouring the token too.
 func (s *Store) DeleteUser(ctx context.Context, id int64) error {
-	res, err := s.conn().ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("delete user: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("rows affected: %w", err)
-	}
-	if n == 0 {
-		return ErrUserNotFound
-	}
-	return nil
+	return s.inTxBump(ctx, func(tx *sql.Tx) (bool, error) {
+		res, err := tx.ExecContext(ctx, `DELETE FROM users WHERE id = ?`, id)
+		if err != nil {
+			return false, fmt.Errorf("delete user: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return false, fmt.Errorf("rows affected: %w", err)
+		}
+		if n == 0 {
+			return false, ErrUserNotFound
+		}
+		return true, nil
+	})
 }
 
 // isUniqueViolation matches modernc.org/sqlite's UNIQUE error strings.
