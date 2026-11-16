@@ -3,7 +3,7 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
-## Unreleased — the upgrade is a workflow, with a gate and a rollback
+## v0.2.347 — the upgrade is a workflow, with a gate and a rollback
 
 **Why:** replacing the binary across a swarm was the one operation that runs unattended, can take
 every node down, and had no verification. `hack/upgrade-nodes.sh` ordered the nodes correctly,
