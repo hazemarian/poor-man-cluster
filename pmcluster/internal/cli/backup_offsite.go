@@ -174,8 +174,16 @@ func runVerifyOffsite(cmd *cobra.Command, _ []string) error {
 		}
 		rec.Sample = keys
 		for _, local := range locals {
-			rec.Checked++
 			name := filepath.Base(local)
+			// A platform export is a DISASTER-RECOVERY artifact and goes to the offsite
+			// target only — a copy inside the cluster it protects dies with the cluster. So
+			// it is not "missing" from the in-cluster store; counting it there reported it
+			// missing and turned `doctor` red for an artifact that was exactly where it
+			// should be (measured the moment the first export was taken).
+			if !artifactIsCheckedOn(name, rec.Target) {
+				continue
+			}
+			rec.Checked++
 			if !present[name] {
 				rec.Missing = append(rec.Missing, name)
 				continue
@@ -245,6 +253,19 @@ func runVerifyOffsite(cmd *cobra.Command, _ []string) error {
 }
 
 // recentArtifacts lists archive files under dir newer than days, newest first.
+// artifactIsCheckedOn decides whether a local artifact is expected in a given ship target.
+//
+// Everything is expected everywhere EXCEPT a platform export, which is a disaster-recovery
+// artifact written to the offsite target only: a copy inside the cluster it protects dies with
+// the cluster, so the in-cluster store reporting it "missing" is noise that turned doctor red
+// for a file exactly where it should be.
+func artifactIsCheckedOn(name, target string) bool {
+	if strings.HasPrefix(name, backups.PlatformArchivePrefix+"-") && strings.HasPrefix(target, "store:") {
+		return false
+	}
+	return true
+}
+
 func recentArtifacts(dir string, days int) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
