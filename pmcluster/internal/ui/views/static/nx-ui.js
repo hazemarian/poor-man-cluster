@@ -1,10 +1,10 @@
 // Site-native dropdowns and confirmations, ported from nx-master's ui.js.
 // Every <select> is replaced by a styled button + listbox menu (the real <select> stays in the DOM, hidden,
-// so forms, htmx and change handlers behave as before); touch devices get the same menu as a bottom sheet.
+// so forms, htmx and change handlers behave as before). The menu is a dropdown on every device, touch included.
 // hx-confirm questions open in the site's own dialog instead of the browser's confirm().
 (function () {
   "use strict";
-  var coarse = !!(window.matchMedia && matchMedia("(pointer: coarse)").matches);
+  var coarse = false; // a dropdown anchored to its button everywhere; no bottom-sheet mode
 
   var CHEV = '<svg class="dd-chev" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   var CHECK = '<svg class="dd-check" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';

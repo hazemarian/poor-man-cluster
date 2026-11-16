@@ -22,7 +22,7 @@
   {{template "stat" (dict "Class" (partial "stacks_cls4" .) "Label" (T "stacks.stat_changed") "Value" (partial "stacks_value4" .) "ValueClass" "stat-text" "Foot" (T "stacks.stat_changed_f"))}}
 </div>
 
-<form class="toolbar" hx-get="/web/stacks" hx-target="#view" hx-push-url="true">
+<form class="toolbar" hx-get="/web/stacks" hx-target="#view" hx-push-url="true" data-morph>
   <div class="search">
     {{icon "search"}}
     <input type="search" name="q" value="{{.Query}}" placeholder="{{T "stacks.search_ph"}}"

@@ -126,9 +126,8 @@
             {{range .Services}}
             <li class="obs-svc">
               <span class="obs-svc-name mono iso" dir="ltr" title="{{.Service}}{{if .Platform}} · {{T "nav.platform"}}{{end}}">{{.Service}}{{if .Platform}} <span class="pill plain">{{T "nav.platform"}}</span>{{end}}</span>
-              <span class="obs-svc-rep num iso" dir="ltr">{{N .Replicas}} / {{if .DesiredKnown}}{{N .Desired}}{{else}}?{{end}}</span>
-              <span class="obs-svc-state">{{if .Job}}<span class="pill plain">{{T "observability.job_unknown"}}</span>{{else if eq .Status "inactive"}}<span class="pill plain">{{T "st.inactive"}}</span>{{else if .Completed}}<span class="pill good"><i class="dot"></i>{{T "st.complete"}}</span>{{else if .Ready}}<span class="pill good"><i class="dot"></i>{{T "st.running"}}</span>{{else}}<span class="pill bad"><i class="dot"></i>{{T "st.degraded"}}</span>{{end}}</span>
               <span class="obs-svc-act"><a class="btn btn-ghost btn-sm" href="/web/observability?tab=logs&amp;service={{urlquery .Path}}&amp;range={{$.Range}}" hx-get="/web/observability?tab=logs&amp;service={{urlquery .Path}}&amp;range={{$.Range}}" hx-target="#view" hx-push-url="true" data-tip="{{T "obs.view_logs"}}">{{icon "overview"}}<span>{{T "obs.view_logs"}}</span></a></span>
+              <span class="obs-svc-state">{{if .Job}}<span class="pill plain">{{T "observability.job_unknown"}}</span>{{else if eq .Status "inactive"}}<span class="pill plain">{{T "st.inactive"}}</span>{{else if .Completed}}<span class="pill good"><i class="dot"></i>{{N .Replicas}} / {{if .DesiredKnown}}{{N .Desired}}{{else}}?{{end}} {{T "st.complete"}}</span>{{else if .Ready}}<span class="pill good"><i class="dot"></i>{{N .Replicas}} / {{if .DesiredKnown}}{{N .Desired}}{{else}}?{{end}} {{T "st.running"}}</span>{{else}}<span class="pill bad"><i class="dot"></i>{{N .Replicas}} / {{if .DesiredKnown}}{{N .Desired}}{{else}}?{{end}} {{T "st.degraded"}}</span>{{end}}</span>
             </li>
             {{end}}
           </ul>
@@ -136,7 +135,7 @@
         {{end}}
       </div>
       {{if gt .StackPage.Pages 1}}
-      <div class="panel-foot">
+      <div class="panel-foot pager">
         <span class="muted">{{T "obs.page"}} {{N .StackPage.Page}} / {{N .StackPage.Pages}}</span>
         <span class="spacer"></span>
         {{if .StackPage.HasPrev}}<a class="btn btn-sm" href="/web/observability?tab=overview&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Prev}}&amp;range={{.Range}}" hx-get="/web/observability?tab=overview&amp;q={{urlquery .Q}}&amp;page={{.StackPage.Prev}}&amp;range={{.Range}}" hx-target="#view" hx-push-url="true">{{T "obs.prev"}}</a>{{end}}
@@ -376,7 +375,7 @@
 
 {{define "observability_pactions2"}}<button type="button" class="btn btn-ghost btn-sm" hx-get="/web/observability/summary?range={{.Range}}" hx-target="#observability-summary" hx-swap="outerHTML" hx-indicator="#observability-summary .load-overlay" hx-disabled-elt="this" data-tip="{{T "common.refresh"}}">{{icon "refresh"}}<span>{{T "common.refresh"}}</span></button>{{end}}
 
-{{define "observability_pactions3"}}<form class="obs-search" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" hx-trigger="submit, keyup changed delay:400ms from:#obs-q">
+{{define "observability_pactions3"}}<form class="obs-search" method="get" action="/web/observability" hx-get="/web/observability" hx-target="#view" hx-push-url="true" data-morph hx-trigger="submit, keyup changed delay:400ms from:#obs-q">
           <input type="hidden" name="tab" value="overview"><input type="hidden" name="range" value="{{.Range}}">
           <label class="sr-only" for="obs-q">{{T "obs.search_services"}}</label>
           <input id="obs-q" class="finput" type="search" name="q" value="{{.Q}}" maxlength="100" placeholder="{{T "obs.search_services"}}" autocomplete="off">
@@ -412,4 +411,4 @@
 
 {{define "observability_foot3"}}{{T "observability.tls_expiry_foot"}}{{if .Health.TLSPartial}} · {{T "observability.partial"}}{{end}}{{end}}
 
-{{define "observability_window"}}<div class="muted mono iso" dir="ltr">{{if .Evidence.WindowStart}}{{.Evidence.WindowStart}} → {{.Evidence.WindowEnd}}{{end}}</div>{{end}}
+{{define "observability_window"}}<div class="obs-window" dir="ltr">{{if .Evidence.WindowStart}}{{tsRange .Evidence.WindowStart .Evidence.WindowEnd}}{{end}}</div>{{end}}

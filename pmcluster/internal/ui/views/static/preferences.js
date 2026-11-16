@@ -112,4 +112,7 @@ function nxObsTab(a) {
   bar.dataset.tab = tab;
   var input = bar.querySelector('#obs-tab-input');
   if (input) input.value = tab;
+  // the page's Refresh button was rendered for the tab the page opened on; point it at the one now showing
+  var rb = document.querySelector('#view .btn-refresh[hx-get*="/web/observability"]');
+  if (rb) rb.setAttribute('hx-get', rb.getAttribute('hx-get').replace(/([?&]tab=)[^&]*/, '$1' + encodeURIComponent(tab)));
 }
