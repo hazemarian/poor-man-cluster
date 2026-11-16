@@ -149,6 +149,18 @@ func (e PlatformExporter) Run(ctx context.Context) (PlatformExportResult, error)
 	if !cfg.Configured() {
 		return out, nil
 	}
+	// The sidecar, written here rather than only inside the tarball. The verifier asks for a
+	// `.json` beside every archive it ships — that is what makes an offsite copy "verified"
+	// instead of merely "present" — and without one this artifact reported as "restorable, not
+	// verifiable" by the very pass that exists to prove it is still there.
+	sidecar := filepath.Join(filepath.Dir(res.Path), ManifestName(res.Name))
+	if err := writePlatformSidecar(sidecar, res); err != nil {
+		return out, err
+	}
+	defer func() { _ = os.Remove(sidecar) }()
+	if err := PutS3Object(ctx, cfg, ManifestName(res.Name), sidecar); err != nil {
+		return out, fmt.Errorf("upload %s offsite: %w", ManifestName(res.Name), err)
+	}
 	if err := PutS3Object(ctx, cfg, res.Name, res.Path); err != nil {
 		return out, fmt.Errorf("upload %s offsite: %w", res.Name, err)
 	}
@@ -164,6 +176,26 @@ func (e PlatformExporter) Run(ctx context.Context) (PlatformExportResult, error)
 	}
 	out.OffsiteKey = res.Name
 	return out, nil
+}
+
+// writePlatformSidecar writes the `.json` the offsite verifier looks for beside an archive.
+//
+// Its content is the same provenance the archive's own MANIFEST.json carries, plus where the
+// archive came from: the verifier compares presence and the restore drill compares bytes.
+func writePlatformSidecar(path string, res PlatformExport) error {
+	manifest, err := ReadPlatformManifest(res.Path)
+	if err != nil {
+		return fmt.Errorf("read back the manifest for the sidecar: %w", err)
+	}
+	body, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return fmt.Errorf("build sidecar: %w", err)
+	}
+	body = append(body, '\n')
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		return fmt.Errorf("write sidecar: %w", err)
+	}
+	return nil
 }
 
 // PlatformExport is the result of a successful export.
