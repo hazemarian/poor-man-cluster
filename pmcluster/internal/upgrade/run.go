@@ -246,18 +246,27 @@ func (o Options) install(ctx context.Context, t Target) error {
 		"d=$(mktemp -d)",
 		"trap 'rm -rf \"$d\"' EXIT",
 		fmt.Sprintf("tar -xzf %s -C \"$d\"", remote),
-		// The release archives unpack into a DIRECTORY (pmcluster-v0.2.346-linux-amd64/), so
-		// "$d/pmcluster" does not exist. Find the executable rather than assuming the layout:
-		// the archive is built by release.yml, and a rollout should not break when that
-		// changes shape.
-		`bin=$(find "$d" -type f -name pmcluster | head -1)`,
-		`test -n "$bin" || { echo "no pmcluster binary in the archive" >&2; exit 1; }`,
+		// The archive holds ONE file, named after the asset with .tar.gz dropped
+		// (`pmcluster-v0.2.347-linux-amd64`) — not `pmcluster`, and not in a directory. An
+		// older release tarred a directory containing `pmcluster`, so take the expected name
+		// first and fall back to whatever executable the archive actually carries: a rollout
+		// should not break because the release layout changed shape between two tags.
+		fmt.Sprintf(`cand="$d/%s"`, binNameFromAsset(o.Artifact)),
+		`if [ -x "$cand" ]; then bin="$cand"; else bin=$(find "$d" -type f -name 'pmcluster*' -perm -u+x | head -1); fi`,
+		`[ -n "$bin" ] && [ -x "$bin" ] || { echo "no pmcluster binary in the archive" >&2; exit 1; }`,
 		fmt.Sprintf("install -m 0755 \"$bin\" %s", binPath),
 		"systemctl restart pmcluster",
 		fmt.Sprintf("rm -f %s", remote),
 	}, "\n")
 	_, err := o.Transport.Run(ctx, t, script)
 	return err
+}
+
+// binNameFromAsset is the file name inside the release archive: the asset name without its
+// .tar.gz suffix.
+func binNameFromAsset(artifact string) string {
+	base := filepath.Base(artifact)
+	return strings.TrimSuffix(base, ".tar.gz")
 }
 
 // awaitHealthy polls /health until it answers 200 with the expected version in the body.
