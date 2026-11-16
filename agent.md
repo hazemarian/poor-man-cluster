@@ -120,7 +120,7 @@ repo root (this dir)
 │   └── test-reports/          # per-test-case field reports (historical)
 ├── harden-host.sh             # one-shot host hardening (ufw, DOCKER-USER, fail2ban)
 ├── install.sh                 # curl|bash installer (binary + systemd + auto cluster up/update)
-├── pmcluster/hack/upgrade-nodes.sh   # multi-node binary upgrade (verify → ssh+cat copy → install → restart → cluster update)
+├── pmcluster/hack/upgrade-nodes.sh   # legacy multi-node upgrade script (superseded by `pmcluster cluster upgrade`)
 ├── skills/poor-man-cluster-deploy/SKILL.md   # deployment skill for agents
 ├── .github/workflows/
 │   ├── pmcluster.yml          # build gate: lint + build + unit + fast e2e
@@ -811,16 +811,33 @@ poisoning new secrets), and `cluster update` no longer has a key publish step to
 Push a `v*` tag → `release.yml` cross-compiles 4 tarballs + SHA256SUMS +
 builds/pushes `ghcr.io/hazemarian/pmcluster-edge:<v>` + `:latest`.
 
-To replace the binary on a **multi-node** swarm, use
-`pmcluster/hack/upgrade-nodes.sh <version>`: it verifies the release checksum,
-copies the binary to each node over `ssh … "cat > /tmp/pmcluster.new"` (not
-`scp` — see the script header), installs/restarts units followers-first with the
-leader last, exits non-zero without half-applying if any node fails, and runs
-`cluster update` on the leader only once every node agrees. Pass
-`PMCLUSTER_NODES` (public IPs); discovery returns swarm-internal addresses,
-which are unreachable from outside. `PMCLUSTER_SSH_USER` defaults to `root`;
-wafaa needs `wafaa` (+ passwordless sudo), a disabled-SFTP sshd, and a zsh login
-shell.
+To replace the binary on a **multi-node** swarm, use `pmcluster cluster upgrade <version>`
+(`internal/upgrade`, `internal/cli/cluster_upgrade.go`). It is a workflow, not a script:
+
+1. fetches the release artifact with `gh`, reads its sha256 out of `SHA256SUMS.txt`, and
+   verifies it locally — then copies it to each node over the same authenticated ssh channel
+   and verifies the checksum AGAIN on the node (the release repo is private, so a node cannot
+   fetch it; two checks catch a corrupt transfer, which is what reaches `/usr/local/bin`
+   otherwise);
+2. asks every node what it is (`docker info` → ControlAvailable, because a WORKER cannot run
+   `docker node inspect self`), orders them workers → follower managers → **leader last**, and
+   REFUSES when no node claims leadership rather than guessing;
+3. per node: skip when it already runs the version (idempotent — a failed run resumes), keep the
+   outgoing binary as `.prev`, install, restart, then GATE on `/health` answering with the NEW
+   version in its body. `systemctl is-active` is not a gate: it reads "active" for a binary that
+   crash-loops;
+4. a node that fails the gate is restored to `.prev` and re-gated; if the rollback itself fails
+   the report says so instead of claiming a rollback. Either way the rollout STOPS — the nodes
+   it had not reached are untouched, because continuing past a broken node is how a fleet ends
+   up with mixed versions and a dead leader.
+
+Pass `--nodes` (public IPs) or `PMCLUSTER_NODES`; discovery returns swarm-internal addresses,
+which are unreachable from outside. `--user` defaults to `root`; wafaa needs `wafaa` (+
+passwordless sudo), a disabled-SFTP sshd, and a zsh login shell. `--dry-run` prints the plan and
+touches nothing.
+
+`hack/upgrade-nodes.sh` still exists and still works (ordering, checksum, fatal steps), but it
+has no health gate and no rollback; prefer the command.
 
 On a **single node**, `curl -fsSL .../install.sh | VERSION=vX bash` installs the
 new binary, restarts the daemon, and auto-runs `pmcluster cluster update`

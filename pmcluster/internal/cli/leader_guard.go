@@ -125,6 +125,10 @@ var bootstrapClusterSubcommands = map[string]bool{
 // allowed; `true` for the whole family.
 var nodeLocalClusterSubcommands = map[string]bool{
 	"mirror": true,
+	// `upgrade` is the rollout of the BINARY across the fleet: it drives ssh to every node, so
+	// it neither needs nor may require local leadership. Refusing it on a follower would mean
+	// an operator had to be logged into the leader to upgrade the leader.
+	"upgrade": true,
 }
 
 // mirrorReadable reports whether this invocation reads state a follower mirrors rather

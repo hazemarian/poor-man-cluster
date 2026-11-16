@@ -3,6 +3,40 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## Unreleased — the upgrade is a workflow, with a gate and a rollback
+
+**Why:** replacing the binary across a swarm was the one operation that runs unattended, can take
+every node down, and had no verification. `hack/upgrade-nodes.sh` ordered the nodes correctly,
+verified the release checksum and treated every step as fatal — most of the way there — and then
+slept six seconds, printed `systemctl is-active` and moved on. That value reads "active" for a
+binary that starts and dies in a loop, so a bad release reported `✔ upgraded` on the whole fleet
+and left it crash-looping; and the `.prev` copy it took was never used, because nothing knew what
+to do with it.
+
+`pmcluster cluster upgrade <version>` (`internal/upgrade` + `internal/cli/cluster_upgrade.go`):
+
+- **Verified twice.** The artifact is fetched with `gh`, its sha256 read from `SHA256SUMS.txt` and
+  checked locally, then copied over ssh and checked AGAIN on the node. The release repo is
+  private, so nodes cannot fetch it; two checks catch a corrupt transfer, which is otherwise what
+  reaches `/usr/local/bin`.
+- **Ordered from the nodes.** Each node is asked what it is — through `docker info`
+  (ControlAvailable), because a WORKER cannot run `docker node inspect self` and that is exactly
+  the node a rollout starts with. Workers → follower managers → **leader last**. No node claiming
+  leadership is a refusal, not a guess.
+- **Gated.** After the restart the node must answer `/health` with the NEW version in the body.
+  `systemctl is-active` is not a gate.
+- **Rolled back, and the rollback is verified.** A node that fails the gate is restored to
+  `.prev`, restarted and re-gated; a rollback that does not bring the node back is reported as
+  such instead of as a rollback. Either way the rollout STOPS — the nodes it had not reached are
+  untouched, because continuing past a broken node is how a fleet ends up with mixed versions and
+  a dead leader.
+- **Idempotent.** A node already on the version is skipped, so a failed run resumes by running the
+  same command again.
+- `--dry-run` prints the plan and touches nothing.
+
+The transport is an interface with an ssh implementation, so the last hop can move to the node API
+without touching the workflow. `hack/upgrade-nodes.sh` still works but has no gate and no rollback.
+
 ## v0.2.346 — the key config is gone; the key is a file
 
 **And the control plane has a restore point again, on a button.** Deleting the
