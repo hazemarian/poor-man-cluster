@@ -3,6 +3,32 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.360 — the CLI stops advertising a way out that does not exist
+
+`cluster update` was refused on a follower with "Run it on the leader, or use the remote CLI from
+your own machine: pmcluster cluster update --api-url … --api-token …". There is no remote form: the
+command opens the leader's `data.db` and the local docker socket, and `internal/remote` has no client
+for it. Following that advice produced a connection error on a cluster that was working fine.
+
+The hint is now conditional on the command actually being served by the daemon — an allowlist
+mirroring the `remote.New*` clients the CLI wires in `backend.go`. Everything else is told the truth:
+no remote form, run it on the leader. The direction of failure is deliberate: a missing entry costs a
+hint, a wrong entry would make the CLI lie.
+
+`hack/upgrade-nodes.sh` is deleted; `cluster upgrade` replaced it (ordering, checksum, health gate,
+rollback, and an archive layout it actually reads).
+
+## v0.2.359 — the timer's flag reaches the command
+
+`backup platform --if-leader` failed on two managers out of three on its first scheduled run: the
+leader guard refused `backup platform` before the command could read its own flag, because scope is
+resolved by command NAME and `backup` is leader-scoped. The daily timer would have been red on two
+nodes every morning.
+
+`--if-leader` is now a flag-level carve-out (the plain form stays leader-only), and
+`backup platform-verify` is node-local outright — it drills a file on this disk and the weekly drill
+runs it on every storage node.
+
 ## v0.2.358 — the control-plane export stops being a manual command
 
 The audit that found a storage node with no backup agent found something else: the control-plane

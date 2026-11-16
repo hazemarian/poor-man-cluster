@@ -120,7 +120,7 @@ repo root (this dir)
 │   └── test-reports/          # per-test-case field reports (historical)
 ├── harden-host.sh             # one-shot host hardening (ufw, DOCKER-USER, fail2ban)
 ├── install.sh                 # curl|bash installer (binary + systemd + auto cluster up/update)
-├── pmcluster/hack/upgrade-nodes.sh   # legacy multi-node upgrade script (superseded by `pmcluster cluster upgrade`)
+├── pmcluster/hack/registry-rotate.sh # registry credential rotation
 ├── skills/poor-man-cluster-deploy/SKILL.md   # deployment skill for agents
 ├── .github/workflows/
 │   ├── pmcluster.yml          # build gate: lint + build + unit + fast e2e
@@ -836,8 +836,10 @@ which are unreachable from outside. `--user` defaults to `root`; wafaa needs `wa
 passwordless sudo), a disabled-SFTP sshd, and a zsh login shell. `--dry-run` prints the plan and
 touches nothing.
 
-`hack/upgrade-nodes.sh` still exists and still works (ordering, checksum, fatal steps), but it
-has no health gate and no rollback; prefer the command.
+`hack/upgrade-nodes.sh` was deleted once the command covered it: the script ordered nodes and
+verified checksums, but it had no health gate, no rollback, and it read the release archive by a
+fixed layout — the trap that stopped the first real rollout. Anyone still calling it should call
+`pmcluster cluster upgrade` instead.
 
 On a **single node**, `curl -fsSL .../install.sh | VERSION=vX bash` installs the
 new binary, restarts the daemon, and auto-runs `pmcluster cluster update`
