@@ -3,6 +3,22 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.361 — the terminal says why it failed, on both sides
+
+"Terminal is not working" left no evidence anywhere: the console package had no logger at all, so a
+refused daemon dial, a service with no ExecAttacher and a browser socket closed by an intermediary
+all ended as a one-line browser status and silence in the log.
+
+The console now has a logger (installed by the edge), the terminal logs each way it can fail — an
+upgrade it could not perform, a console with no daemon address, the daemon refusing the exec socket
+(with the HTTP status and the URL) — and the page prints the websocket CLOSE CODE, because 1006
+means the handshake never completed while 1000 is a finished session.
+
+Measured while chasing this, and worth recording: the daemon's exec socket is healthy (a real
+handshake with the edge token answers 101; a plain GET 400; no token 401), the console route is
+healthy, and the xterm assets are served. The untested leg is the browser's handshake through the
+SSO gate.
+
 ## v0.2.360 — the CLI stops advertising a way out that does not exist
 
 `cluster update` was refused on a follower with "Run it on the leader, or use the remote CLI from

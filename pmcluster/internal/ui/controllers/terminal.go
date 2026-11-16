@@ -31,6 +31,11 @@ type terminalPageData struct {
 // Page renders the terminal document.
 func (t Terminal) Page(g *gin.Context) {
 	stack, service := g.Param("name"), g.Query("service")
+	// One line per open. With this and the WS entry line below, "did the request reach the
+	// console at all" stops being a guess: no page line means the gate in front refused it before
+	// us, no WS line with a page line means the browser never opened the socket.
+	t.Log.Info().Str("stack", stack).Str("service", service).Str("host", g.Request.Host).
+		Str("xfp", g.Request.Header.Get("X-Forwarded-Proto")).Msg("terminal: page served")
 	d := terminalPageData{Stack: stack, Service: service, Domain: t.Domain, Version: t.Version}
 	// The page's WS targets this console route; the console bridges to the
 	// daemon. ws(s) follows the /web scheme the browser used.
@@ -56,6 +61,9 @@ func (t Terminal) WS(g *gin.Context) {
 	ctx := g.Request.Context()
 	stack, service := g.Param("name"), g.Query("service")
 	apiURL, token, configured := t.loadParams(ctx)
+	t.Log.Info().Str("stack", stack).Str("service", service).Bool("configured", configured).
+		Str("upgrade", g.GetHeader("Upgrade")).Str("origin", g.GetHeader("Origin")).
+		Msg("terminal: websocket handshake arrived")
 
 	up := websocket.Upgrader{
 		ReadBufferSize:  4096,
