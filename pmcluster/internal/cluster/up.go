@@ -170,7 +170,15 @@ type UpDeps struct {
 	Cipher   *credentials.Cipher
 	Docker   runtime.Client
 	Deployer StackDeployer
-	Stdout   io.Writer
+	// EnsureBackupAgent installs this node's hourly backup unit and policy, when the reconcile
+	// finds this node is a storage node.
+	//
+	// Injected rather than imported: `internal/nodeunits` imports this package, so referencing
+	// it here is an import cycle — and the layering is right either way (nodeunits owns the
+	// units, cluster owns reconciliation). Nil means "nobody wired it", which the reconcile
+	// reports instead of silently leaving a storage node without an agent (ADR 0008).
+	EnsureBackupAgent func(out io.Writer, configPath string) error
+	Stdout            io.Writer
 	// BeforeDeploy runs once, before the first stack deploy of the run: the
 	// CLI applies the stored registry credential there so
 	// `--with-registry-auth` has something valid to freeze. Nil is a no-op.

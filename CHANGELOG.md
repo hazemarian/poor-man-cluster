@@ -3,6 +3,25 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.354 — becoming a storage node installs the agent; the export is drilled
+
+**Why:** the audit found a storage node with a live stack and no backup agent at all, and it was
+invisible because the agent is opt-in per node and nothing tracked adoption. Two fixes, plus the
+drill the platform export never had.
+
+- **A storage node ends every `cluster update` with a working agent.** The reconcile that maintains
+  `storage_nodes` and the storage label now calls the installer on this node — so `install.sh`,
+  `cluster update` after a binary upgrade, and `cluster update` after `node promote` all leave a
+  storage node with a unit, a timer and a policy. The installer is injected (`UpdateDeps.
+  EnsureBackupAgent`) because `internal/nodeunits` imports `internal/cluster`; a nil installer is
+  reported, never silently skipped (ADR 0008).
+- **`pmcluster backup platform-verify`** proves an export restores instead of assuming it: manifest
+  sha256 per member, `PRAGMA integrity_check` on `data.db`, and the archived key decrypting a
+  sampled secret — the step that proves the key belongs to the ciphertext it shipped with. Refuses
+  a tampered archive, a missing key, or a member the manifest does not describe.
+- `internal/api/doctor.go` no longer claims to be "reachable from the console": nothing calls it.
+  The health model is CLI-only until a Health page exists.
+
 ## v0.2.353 — the agent check skips where it cannot see the run history
 
 **Why:** `backups` is node-local and not mirrored, so a follower's store answers "no runs ever" for

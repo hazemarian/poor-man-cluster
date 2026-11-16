@@ -227,9 +227,13 @@ func runClusterUpdate(cmd *cobra.Command, _ []string) error {
 		// Pulls use the stored read-only PAT: apply it before the first
 		// `docker stack deploy --with-registry-auth` freezes it into a spec.
 		BeforeDeploy: func(ctx context.Context) { loginBeforeDeploy(ctx, st, cfg, log) },
+		// A storage node ends every update with a working backup agent (ADR 0008). Injected from
+		// here because nodeunits owns the units and cluster must not import it.
+		EnsureBackupAgent: nodeunits.EnsureBackupAgent,
 	}, cluster.UpdateInput{
-		ConfigDir: cfg.ConfigDir(),
-		Version:   buildinfo.Version,
+		ConfigDir:  cfg.ConfigDir(),
+		ConfigPath: cfg.ConfigPath(),
+		Version:    buildinfo.Version,
 	})
 	if err != nil {
 		return err
@@ -379,10 +383,14 @@ func runClusterReset(cmd *cobra.Command, _ []string) error {
 		// Pulls use the stored read-only PAT: apply it before the first
 		// `docker stack deploy --with-registry-auth` freezes it into a spec.
 		BeforeDeploy: func(ctx context.Context) { loginBeforeDeploy(ctx, st, cfg, log) },
+		// `cluster reset` rebuilds the swarm side from the DB; a storage node's agent is part of
+		// that side, so it is ensured here too.
+		EnsureBackupAgent: nodeunits.EnsureBackupAgent,
 	}, cluster.UpdateInput{
-		ConfigDir: cfg.ConfigDir(),
-		Version:   buildinfo.Version,
-		Force:     true,
+		ConfigDir:  cfg.ConfigDir(),
+		ConfigPath: cfg.ConfigPath(),
+		Version:    buildinfo.Version,
+		Force:      true,
 	})
 	if err != nil {
 		return err

@@ -47,6 +47,24 @@ write the archive without uploading (the button in the console always uploads).`
 	RunE: runBackupPlatform,
 }
 
+var backupPlatformVerifyCmd = &cobra.Command{
+	Use:   "platform-verify [archive]",
+	Short: "Prove a platform export restores: manifest, integrity_check, and the key",
+	Long: `Unpacks a control-plane export into a scratch dir and checks it the way a restore would:
+
+  1. every member matches the sha256 in its MANIFEST.json,
+  2. data.db opens and SQLite reports integrity_check ok,
+  3. the archived key DECRYPTS a secret from that database — the step that proves the key
+     belongs to the ciphertext it shipped with, which is why the export carries both.
+
+Presence in the bucket is not proof of anything: ` + "`S3ObjectExists`" + ` says an object was written,
+and this says it can be read back. Run it after a manual export, or from a timer.
+
+With no argument it drills the NEWEST pmcluster-platform-*.tar.gz in the local archive dir.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runBackupPlatformVerify,
+}
+
 var backupCmd = &cobra.Command{
 	Use:   "backup",
 	Short: "Trigger, inspect and prune the node's snapshot backups",
@@ -62,6 +80,7 @@ hour-by-hour plus one artifact per day to the end of backup_retention_days
   pmcluster backup restore    put a stack's artifact back
   pmcluster backup prune      apply retention now
   pmcluster backup platform   export the control plane (db + key) offsite, from the leader
+  pmcluster backup platform-verify   prove the newest export actually restores
   pmcluster backup create     run the agent on THIS node (needs root)`,
 }
 
@@ -233,7 +252,7 @@ func init() {
 	backupPlatformCmd.Flags().Bool("json", false, "machine-readable result")
 
 	backupCmd.AddCommand(backupCreateCmd, backupListCmd, backupBrowseCmd, backupRestoreCmd, backupPruneCmd,
-		backupEnableCmd, backupDisableCmd, backupScheduleCmd, backupPlatformCmd)
+		backupEnableCmd, backupDisableCmd, backupScheduleCmd, backupPlatformCmd, backupPlatformVerifyCmd)
 	rootCmd.AddCommand(backupCmd)
 }
 
@@ -699,6 +718,46 @@ func runBackupPlatform(cmd *cobra.Command, _ []string) error {
 	if uploadErr != nil {
 		return uploadErr
 	}
+	return nil
+}
+
+// runBackupPlatformVerify drills a control-plane export.
+func runBackupPlatformVerify(cmd *cobra.Command, args []string) error {
+	defer initCLITelemetry()()
+	out := cmd.OutOrStdout()
+
+	path := ""
+	if len(args) == 1 {
+		path = args[0]
+	} else {
+		dir := envOr("PMCLUSTER_BACKUP_DIR", backups.DefaultArchiveDir)
+		p, err := backups.NewestPlatformExport(dir)
+		if err != nil {
+			return err
+		}
+		path = p
+	}
+
+	rep, err := backups.DrillPlatformExport(path)
+	if err != nil {
+		fmt.Fprintf(out, "platform drill: FAILED\n  archive: %s\n  ✖ %v\n", path, err)
+		return fmt.Errorf("the platform export is not restorable")
+	}
+
+	fmt.Fprintf(out, "platform drill: %s\n", filepath.Base(rep.Archive))
+	fmt.Fprintf(out, "  written      : %s by %s (%s)\n", rep.ManifestAt, rep.Hostname, rep.Version)
+	fmt.Fprintf(out, "  members      : %d, all matching the manifest\n", rep.Members)
+	fmt.Fprintf(out, "  integrity    : %s\n", rep.IntegrityCheck)
+	if rep.SecretsChecked == 0 {
+		fmt.Fprintf(out, "  key          : not proven — the archive carries no secrets yet\n")
+	} else {
+		fmt.Fprintf(out, "  key          : decrypts %d/%d sampled secret(s)\n", rep.SecretsDecrypted, rep.SecretsChecked)
+	}
+	fmt.Fprintf(out, "  took         : %s\n", rep.Duration.Round(time.Millisecond))
+	if !rep.OK() {
+		return fmt.Errorf("the platform export is not restorable")
+	}
+	fmt.Fprintf(out, "  ✔ this archive restores\n")
 	return nil
 }
 

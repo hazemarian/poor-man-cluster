@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,7 +26,11 @@ import (
 // read back from the persisted install state so update needs no re-bootstrap.
 type UpdateInput struct {
 	ConfigDir string
-	Version   string
+	// ConfigPath is the config.yaml this node was started with. The backup agent's policy is
+	// written from it, and a storage node must not be left without an agent just because
+	// nobody ran `backup-agent install` by hand (ADR 0008).
+	ConfigPath string
+	Version    string
 
 	// Source names the caller in the apply record: "update" for an operator run
 	// (`cluster update` or the API), "reconcile" for the daemon's leader-only
@@ -40,6 +45,10 @@ type UpdateInput struct {
 	// configs are still re-ensured idempotently.
 	Force bool
 }
+
+// localHostnameFn is this node's hostname, as a seam: a test pins it to the fake swarm's node
+// instead of the machine the test happens to run on.
+var localHostnameFn = os.Hostname
 
 // UpdateResult reports which configs/secrets were rotated and which stacks
 // were re-deployed on this update. A no-op update (nothing changed) returns
@@ -96,6 +105,11 @@ type UpdateDeps struct {
 	// CLI applies the stored registry credential there so
 	// `--with-registry-auth` has something valid to freeze. Nil is a no-op.
 	BeforeDeploy func(ctx context.Context)
+
+	// EnsureBackupAgent installs this node's hourly backup unit and policy, so a node that is
+	// a storage node ends every update with a working agent (ADR 0008). Injected because
+	// `internal/nodeunits` imports this package. Nil is reported, not ignored.
+	EnsureBackupAgent func(out io.Writer, configPath string) error
 }
 
 // Update re-provisions the OTel collector + Traefik dynamic configs and the
@@ -898,6 +912,25 @@ func Update(ctx context.Context, deps UpdateDeps, in UpdateInput) (*UpdateResult
 				return fmt.Errorf("persist storage_nodes: %w", err)
 			}
 			fmt.Fprintf(out, "  ⚠ adopted %s into storage_nodes (it carries the %s label)\n", n.Hostname, runtime.StorageNodeLabel)
+		}
+		// THE AGENT IS PART OF BEING A STORAGE NODE.
+		//
+		// It used to be opt-in per node with this reconcile as the only thing that knew a node
+		// had been adopted — and nothing installed it. Measured on production 2026-11-16: a
+		// storage node with a live stack held its data for weeks with no unit, no timer and no
+		// policy, and every check said the cluster was fine. Installing here means the two
+		// paths that make a node a storage node (this reconcile, and the update an operator
+		// runs after `node promote`) both end with a working agent.
+		if host, herr := localHostnameFn(); herr == nil && in.ConfigPath != "" &&
+			containsStorageNode(splitStorageNodes(raw), host) {
+			if deps.EnsureBackupAgent == nil {
+				fmt.Fprintf(out, "  ⚠ this node is a storage node but no backup-agent installer is wired (run `pmcluster backup-agent install`)\n")
+			} else if aerr := deps.EnsureBackupAgent(out, in.ConfigPath); aerr != nil {
+				// A warning, not a failure: the platform stacks are already deployed at this
+				// point, and an agent that cannot install is a thing to report, not a reason to
+				// leave the cluster half-applied.
+				fmt.Fprintf(out, "  ⚠ the backup agent is NOT installed on this node: %v — run `pmcluster backup-agent install`\n", aerr)
+			}
 		}
 		return nil
 	})

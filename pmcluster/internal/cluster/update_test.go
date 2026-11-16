@@ -1147,6 +1147,73 @@ func TestUpdate_LeaderBecomesAStorageNodeWhenNoneIsSet(t *testing.T) {
 	}
 }
 
+// TestUpdate_InstallsTheBackupAgentOnAStorageNode is ADR 0008: a node that is a storage node
+// ends every update with a working backup agent. The agent used to be opt-in per node with
+// nothing tracking adoption — measured on production 2026-11-16, a storage node held a live
+// stack for weeks with no unit, no timer and no policy.
+func TestUpdate_InstallsTheBackupAgentOnAStorageNode(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "node-a"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "node-a", ID: "na", Role: "manager", Status: "ready", Availability: "active", IsLeader: true,
+			Labels: map[string]string{runtime.StorageNodeLabel: "true"}},
+		{Hostname: "node-b", ID: "nb", Role: "worker", Status: "ready", Availability: "active"},
+	}
+	// The reconcile asks the LOCAL hostname; pin it to the storage node for this test.
+	prevHost := localHostnameFn
+	localHostnameFn = func() (string, error) { return "node-a", nil }
+	t.Cleanup(func() { localHostnameFn = prevHost })
+
+	var installed int
+	deps.EnsureBackupAgent = func(_ io.Writer, configPath string) error {
+		installed++
+		if configPath == "" {
+			t.Error("the agent was installed with no config path to write its policy from")
+		}
+		return nil
+	}
+	var out bytes.Buffer
+	deps.Stdout = &out
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, ConfigPath: "/tmp/config.yaml", Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if installed != 1 {
+		t.Fatalf("the backup agent was installed %d time(s), want exactly 1 (output:\n%s)", installed, out.String())
+	}
+}
+
+// TestUpdate_LeavesTheBackupAgentAloneOnANonStorageNode: a worker must not get an agent (it
+// would snapshot an empty directory), and a node that is not designated must not either.
+func TestUpdate_LeavesTheBackupAgentAloneOnANonStorageNode(t *testing.T) {
+	deps, cfgDir := seedUpdateState(t)
+	ctx := context.Background()
+	if err := deps.Store.SetSetting(ctx, SettingStorageNodes(), "node-a"); err != nil {
+		t.Fatalf("SetSetting storage_nodes: %v", err)
+	}
+	f := deps.Docker.(*fakeDocker)
+	f.nodes = []runtime.Node{
+		{Hostname: "node-a", ID: "na", Role: "manager", Status: "ready", Availability: "active", IsLeader: true},
+		{Hostname: "node-b", ID: "nb", Role: "manager", Status: "ready", Availability: "active"},
+	}
+	prevHost := localHostnameFn
+	localHostnameFn = func() (string, error) { return "node-b", nil }
+	t.Cleanup(func() { localHostnameFn = prevHost })
+
+	var installed int
+	deps.EnsureBackupAgent = func(io.Writer, string) error { installed++; return nil }
+	deps.Stdout = io.Discard
+	if _, err := Update(ctx, deps, UpdateInput{ConfigDir: cfgDir, ConfigPath: "/tmp/config.yaml", Version: "v0.3.0"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if installed != 0 {
+		t.Fatalf("a non-storage node received a backup agent (%d install(s))", installed)
+	}
+}
+
 // TestUpdate_StorageSetSurvivesLeadershipChange is the regression for the
 // incident: leadership moved from nxt-sw-4-m to nxt-sw-5-m and the apply
 // rewrote storage_nodes (removing the former leader, adding the new one), which
