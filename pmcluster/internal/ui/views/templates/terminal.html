@@ -96,9 +96,12 @@
         }
       } catch (e) {}
     };
-    ws.onclose = function () {
+    ws.onclose = function (ev) {
+      // The code is the diagnosis: 1006 means the handshake never completed (a gate in front
+      // of the console refused it, or the network dropped), while 1000/1001 is a normal end.
+      // Without it "closed" is indistinguishable from "blocked".
       if (!statusEl.hidden) return;
-      setStatus('{{T "terminal.closed"}}', true);
+      setStatus('{{T "terminal.closed"}}' + ' (' + ev.code + (ev.reason ? ': ' + ev.reason : '') + ')', true);
     };
     ws.onerror = function () { setStatus('{{T "terminal.failed"}}', true); };
   }

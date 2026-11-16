@@ -66,25 +66,41 @@ func (t Terminal) WS(g *gin.Context) {
 	}
 	client, err := up.Upgrade(g.Writer, g.Request, nil)
 	if err != nil {
-		return // upgrade already wrote the error
+		// The upgrade already wrote the HTTP error; log it so a browser-side failure that never
+		// becomes a websocket is still visible from the server.
+		t.Log.Warn().Err(err).Str("stack", stack).Str("service", service).
+			Msg("terminal: the browser connection could not be upgraded")
+		return
 	}
 	defer client.Close() //nolint:errcheck // best-effort socket close
 
 	if service == "" || !configured {
+		t.Log.Warn().Str("stack", stack).Str("service", service).Bool("configured", configured).
+			Msg("terminal: no service in the query, or no daemon address/token for this console")
 		writeJSONFrame(client, map[string]any{"type": "error", "error": "terminal: service or daemon not configured"})
 		return
 	}
 
 	daemonURL, err := terminalDaemonWSURL(apiURL, stack, service)
 	if err != nil {
+		t.Log.Warn().Err(err).Str("stack", stack).Msg("terminal: could not build the daemon address")
 		writeJSONFrame(client, map[string]any{"type": "error", "error": err.Error()})
 		return
 	}
 
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+token)
-	daemon, _, err := websocket.DefaultDialer.Dial(daemonURL, header)
+	daemon, resp, err := websocket.DefaultDialer.Dial(daemonURL, header)
 	if err != nil {
+		// This is THE line that was missing. When the daemon refused the exec socket — a token
+		// without the stack in scope, no ExecAttacher on that node, a service that is not running
+		// — the browser saw a one-line status and the server recorded nothing at all.
+		code := 0
+		if resp != nil {
+			code = resp.StatusCode
+		}
+		t.Log.Warn().Err(err).Int("status", code).Str("stack", stack).Str("service", service).
+			Str("daemon", daemonURL).Msg("terminal: the daemon refused the exec socket")
 		writeJSONFrame(client, map[string]any{"type": "error", "error": "daemon exec socket: " + err.Error()})
 		return
 	}
@@ -112,6 +128,13 @@ func (t Terminal) WS(g *gin.Context) {
 	for {
 		mt, data, err := client.ReadMessage()
 		if err != nil {
+			// A close code other than normal is the browser or an intermediary dropping the
+			// socket — worth a line, because it is indistinguishable from "nothing happened"
+			// from the operator's side.
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				t.Log.Warn().Err(err).Str("stack", stack).Str("service", service).
+					Msg("terminal: the browser socket closed unexpectedly")
+			}
 			_ = daemon.Close()
 			return
 		}

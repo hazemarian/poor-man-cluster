@@ -53,6 +53,9 @@ func run() error {
 		uiCfg.DataDir = ":memory:"
 	}
 
+	// The console's own failures (an interactive terminal that cannot dial the daemon, for one)
+	// used to leave no trace anywhere: the page showed a status line and the server said nothing.
+	uiCfg.Logger = log
 	applyEdgeSecrets(&uiCfg)
 	if err := uiCfg.Validate(); err != nil {
 		return fmt.Errorf("ui config: %w", err)
