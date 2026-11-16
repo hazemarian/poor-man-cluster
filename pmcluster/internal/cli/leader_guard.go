@@ -102,7 +102,28 @@ var topLevelScopes = map[string]commandScope{
 // archive directory: it has no cluster-wide answer, and gating it on leadership
 // would leave a worker's disk unable to clean itself up.
 var nodeLocalSubcommands = map[string]map[string]bool{
-	"backup": {"prune": true},
+	"backup": {
+		"prune": true,
+		// `backup platform-verify` unpacks and checks an archive that is on THIS disk. It reads no
+		// cluster state, and the weekly drill runs it on every storage node — refusing it on a
+		// follower would make the drill's third step print a leadership error instead of verifying.
+		"platform-verify": true,
+	},
+}
+
+// selfGuardedPlatform reports whether this is `backup platform --if-leader`: the form whose
+// WHOLE PURPOSE is to answer "this node is a follower, nothing to do" and exit 0.
+//
+// It is checked on flags rather than on the command name because the plain form must stay
+// leader-scoped — running it on a follower by hand is a mistake worth refusing. Without this the
+// guard refused before the command could read its own flag, which is exactly how the first
+// scheduled run failed on two of the three managers.
+func selfGuardedPlatform(cmd *cobra.Command) bool {
+	if cmd.Name() != "platform" || cmd.Parent() == nil || cmd.Parent().Name() != "backup" {
+		return false
+	}
+	on, err := cmd.Flags().GetBool("if-leader")
+	return err == nil && on
 }
 
 // bootstrapClusterSubcommands are the `cluster` subcommands that must work
@@ -169,6 +190,9 @@ func scopeOf(cmd *cobra.Command) commandScope {
 	}
 
 	if subs, ok := nodeLocalSubcommands[name]; ok && cmd != top && subs[cmd.Name()] {
+		return scopeNode
+	}
+	if selfGuardedPlatform(cmd) {
 		return scopeNode
 	}
 

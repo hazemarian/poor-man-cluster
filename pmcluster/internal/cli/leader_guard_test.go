@@ -93,6 +93,52 @@ func TestScopeOf(t *testing.T) {
 	}
 }
 
+// TestBackupPlatformScope pins the two forms apart, because they differ by a FLAG and the first
+// scheduled run failed on two managers out of three: the plain form is leader-only (running it on
+// a follower by hand is a mistake worth refusing), while --if-leader is the form whose entire job
+// is to answer "this node is a follower" and exit 0. `platform-verify` is node-local: it drills a
+// file on this disk, and the weekly drill runs it on every storage node.
+func TestBackupPlatformScope(t *testing.T) {
+	backup := findCmd(t, "backup")
+	platform := findSub(t, backup, "platform")
+	verify := findSub(t, backup, "platform-verify")
+
+	if got := scopeOf(platform); got != scopeLeader {
+		t.Errorf("scopeOf(backup platform) = %v, want leader (a hand-run export on a follower is a mistake)", got)
+	}
+	if err := platform.Flags().Set("if-leader", "true"); err != nil {
+		t.Fatalf("the platform command has no --if-leader flag: %v", err)
+	}
+	if got := scopeOf(platform); got != scopeNode {
+		t.Errorf("scopeOf(backup platform --if-leader) = %v, want node — the daily timer runs on every manager, and a follower must be allowed to say so", got)
+	}
+	if got := scopeOf(verify); got != scopeNode {
+		t.Errorf("scopeOf(backup platform-verify) = %v, want node — it drills an archive on this disk, and the drill runs on every storage node", got)
+	}
+}
+
+func findCmd(t *testing.T, name string) *cobra.Command {
+	t.Helper()
+	for _, c := range rootCmd.Commands() {
+		if c.Name() == name {
+			return c
+		}
+	}
+	t.Fatalf("command %q is not registered", name)
+	return nil
+}
+
+func findSub(t *testing.T, parent *cobra.Command, name string) *cobra.Command {
+	t.Helper()
+	for _, c := range parent.Commands() {
+		if c.Name() == name {
+			return c
+		}
+	}
+	t.Fatalf("command %q has no subcommand %q", parent.Name(), name)
+	return nil
+}
+
 // A follower must refuse cluster state, and say where to go instead.
 func TestEnforceScope_RefusesOnNonLeader(t *testing.T) {
 	t.Setenv("PMCLUSTER_API_URL", "")
