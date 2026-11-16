@@ -3,6 +3,14 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.353 — the agent check skips where it cannot see the run history
+
+**Why:** `backups` is node-local and not mirrored, so a follower's store answers "no runs ever" for
+a cluster that backs up hourly — and the moment `backup agents` reached a follower it called all
+three storage nodes silent, which is the same class of lie the check exists to catch. It now skips
+there with the reason and points at the leader, the only place the question can be answered. Found
+by running v0.2.352 on the fleet rather than trusting its unit tests.
+
 ## v0.2.352 — the backup checks answer on every node, not just the leader
 
 **Why:** v0.2.351 added the two checks and they were useless on the fleet that needed them. They
