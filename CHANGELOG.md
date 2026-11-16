@@ -3,6 +3,16 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.352 — the backup checks answer on every node, not just the leader
+
+**Why:** v0.2.351 added the two checks and they were useless on the fleet that needed them. They
+were registered only in the leader view, so a follower — the node an operator usually stands on —
+printed nothing about them; and `unbacked data` read a volume root the leader view never sets, so
+it reported "no volume root on this host" and looked at nothing. Both now take a shared
+`backupView` and run in `RunNodeLocal` as well as `Run`: a follower manager mirrors the settings,
+so it can answer "is every storage node reporting" as well as the leader can, and `unbacked data`
+falls back to the stock volume root instead of skipping.
+
 ## v0.2.351 — a storage node with no agent, and data no backup covers, are now findings
 
 **Why:** a backup audit on production found one of three storage nodes (`nxt-sw-4-m`) with **no
