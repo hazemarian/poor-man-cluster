@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -34,27 +35,21 @@ func ensureOverlayNetwork(t *testing.T, ctx context.Context, name string) (creat
 	return true
 }
 
-// ensurePlatformNetworks ensures both networks the platform stacks expect and schedules removal of
-// exactly the ones this test created.
+// ensurePlatformNetworks creates the networks the platform stacks expect, ONCE PER PROCESS, and
+// deliberately never removes them.
+//
+// They belong to the JOB, not to a test. Removing them in a test's cleanup deleted infrastructure
+// that the next test in the same job still needed — measured: TestDeployPipeline created both,
+// finished, removed both, and TestSecretsConfigsE2E then deployed into
+// `network "traefik-net" is declared as external, but could not be found`. The runner is
+// ephemeral and the swarm dies with it, so leaving them behind is correct; prod leaves them too.
+var platformNetworksOnce sync.Once
+
 func ensurePlatformNetworks(t *testing.T, ctx context.Context) {
 	t.Helper()
-	var created []string
-	for _, name := range []string{"traefik-net", "monitoring-net"} {
-		if ensureOverlayNetwork(t, ctx, name) {
-			created = append(created, name)
-		}
-	}
-	if len(created) == 0 {
-		return
-	}
-	t.Cleanup(func() {
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		for _, name := range created {
-			out, err := dockerRun(cleanCtx, "network", "rm", name)
-			if err != nil {
-				t.Logf("docker network rm %s: %v\n%s", name, err, out)
-			}
+	platformNetworksOnce.Do(func() {
+		for _, name := range []string{"traefik-net", "monitoring-net"} {
+			ensureOverlayNetwork(t, ctx, name)
 		}
 	})
 }
