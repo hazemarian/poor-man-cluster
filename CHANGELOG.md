@@ -14,6 +14,10 @@ upgrade it could not perform, a console with no daemon address, the daemon refus
 (with the HTTP status and the URL) — and the page prints the websocket CLOSE CODE, because 1006
 means the handshake never completed while 1000 is a finished session.
 
+There is also one line per terminal open — page served, then handshake arrived with the Upgrade
+and Origin headers — so "did the request reach the console at all" becomes answerable in one look at
+the edge log instead of a guess about gates and proxies.
+
 Measured while chasing this, and worth recording: the daemon's exec socket is healthy (a real
 handshake with the edge token answers 101; a plain GET 400; no token 401), the console route is
 healthy, and the xterm assets are served. The untested leg is the browser's handshake through the
