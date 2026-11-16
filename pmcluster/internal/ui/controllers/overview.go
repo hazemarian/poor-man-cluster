@@ -139,21 +139,8 @@ func (c Overview) Fragment(g *gin.Context) {
 		}
 	}
 	if errD == nil && checks != nil {
-		d.HealthKnown = true
-		for _, ch := range checks {
-			// fail and warn only: an "ok" line is not news, and a "skip" is a check declining to
-			// answer on this node (the run history is not mirrored, for instance).
-			if ch.Status != "fail" && ch.Status != "warn" {
-				continue
-			}
-			d.Health = append(d.Health, healthModel{Name: ch.Name, Detail: ch.Detail, Failed: ch.Status == "fail"})
-			if ch.Status == "fail" {
-				d.HealthTone = "bad"
-			}
-		}
-		if len(d.Health) > 0 && d.HealthTone == "" {
-			d.HealthTone = "warn"
-		}
+		// Same shaping as every other screen: see healthView in health.go.
+		d.Health, d.HealthKnown, d.HealthTone = shapeHealth(checks)
 	}
 	if errV == nil && versions != nil {
 		d.SkewKnown = true
@@ -202,14 +189,6 @@ func (c Overview) Fragment(g *gin.Context) {
 type versionModel struct {
 	Hostname string
 	Version  string
-}
-
-// healthModel is one failing or warning platform check.
-type healthModel struct {
-	Name   string
-	Detail string
-	// Failed is a fail; false is a warn. Both are shown, the banner tone follows the worst.
-	Failed bool
 }
 
 // applyModel is the last platform apply as the overview renders it.

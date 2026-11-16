@@ -3,6 +3,25 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.358 — the control-plane export stops being a manual command
+
+The audit that found a storage node with no backup agent found something else: the control-plane
+export — the one artifact that rebuilds the whole cluster — had been run by hand four times in one
+evening and never again. The stack volumes had an hourly timer, an offsite check and a weekly drill;
+the database had a shell command.
+
+- **`pmcluster-platform.timer`** on every manager: daily at 01:20, `Persistent=true`, running
+  `backup platform --if-leader`. A follower exits 0 with one line — two managers of three are
+  followers, and a unit that is red every morning is a unit nobody reads.
+- **Gated on manager, not storage node.** An export needs the authoritative store; an agent needs
+  stack volumes. Installing one with the other would have left a manager that hosts no volume with
+  no restore point at all.
+- **The weekly drill verifies the export** as its third step (`backup platform-verify --if-present`),
+  so "it restores" stops being something proven once by hand.
+- **The backups screen carries its own findings.** `pmcluster doctor`'s backup-related checks now
+  render in a banner there — narrowed to their own subject (the certificate check belongs elsewhere)
+  — instead of living only on the overview, one nav click from the page that could act on them.
+
 ## v0.2.357 — Back is a page load
 
 Pressing Back or Forward on any console screen returned raw HTML — no head, no stylesheets, no

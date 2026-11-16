@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -47,6 +48,14 @@ write the archive without uploading (the button in the console always uploads).`
 	RunE: runBackupPlatform,
 }
 
+// platformIfLeader makes the daily timer a no-op on a follower instead of a failed unit: only the
+// leader holds the authoritative store, and two of three managers are followers.
+var platformIfLeader bool
+
+// platformVerifyIfPresent lets the weekly drill include this step on a node that has never
+// exported (a follower) without failing the drill for it.
+var platformVerifyIfPresent bool
+
 var backupPlatformVerifyCmd = &cobra.Command{
 	Use:   "platform-verify [archive]",
 	Short: "Prove a platform export restores: manifest, integrity_check, and the key",
@@ -63,6 +72,13 @@ and this says it can be read back. Run it after a manual export, or from a timer
 With no argument it drills the NEWEST pmcluster-platform-*.tar.gz in the local archive dir.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runBackupPlatformVerify,
+}
+
+func init() {
+	backupPlatformCmd.Flags().BoolVar(&platformIfLeader, "if-leader", false,
+		"exit 0 with a note on a follower (for the daily timer)")
+	backupPlatformVerifyCmd.Flags().BoolVar(&platformVerifyIfPresent, "if-present", false,
+		"exit 0 when there is no export on this node (for the weekly drill)")
 }
 
 var backupCmd = &cobra.Command{
@@ -683,6 +699,13 @@ func runBackupPlatform(cmd *cobra.Command, _ []string) error {
 		S3: func(ctx context.Context) backups.S3Config { return backupS3FromSettings(ctx, st) },
 	}.Run(ctx)
 	if err != nil {
+		// The daily timer runs on every manager; only the leader has an authoritative store. A
+		// follower is not a failure — it is the expected answer two mornings out of three, and a
+		// unit that fails there gets ignored on the day it means something.
+		if platformIfLeader && errors.Is(err, backups.ErrNotLeader) {
+			fmt.Fprintf(out, "platform export: this node is a follower — %s\n", err)
+			return nil
+		}
 		return err
 	}
 
@@ -733,6 +756,13 @@ func runBackupPlatformVerify(cmd *cobra.Command, args []string) error {
 		dir := envOr("PMCLUSTER_BACKUP_DIR", backups.DefaultArchiveDir)
 		p, err := backups.NewestPlatformExport(dir)
 		if err != nil {
+			// The weekly drill carries this step on every storage node, and a follower has never
+			// exported anything. Saying "nothing to drill here" is the honest answer; failing the
+			// drill for it would hide a real failure in the same red line.
+			if platformVerifyIfPresent {
+				fmt.Fprintf(out, "platform drill: nothing to drill on this node (%v)\n", err)
+				return nil
+			}
 			return err
 		}
 		path = p

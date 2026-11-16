@@ -466,6 +466,33 @@ func TestControllers_OverviewShowsTheDoctorFindings(t *testing.T) {
 	}
 }
 
+// TestControllers_BackupsCarriesItsOwnFindings: the backups screen must show the checks about
+// backups, and only those — the certificate check belongs to another subject and would dilute the
+// one line that matters here.
+func TestControllers_BackupsCarriesItsOwnFindings(t *testing.T) {
+	prev := doctorFixture
+	doctorFixture = doctorFindingsFixture
+	t.Cleanup(func() { doctorFixture = prev })
+
+	h := newCtrlHarness(t)
+	h.mountBackups()
+	rr := h.get(t, "/web/backups")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /web/backups = %d, want 200", rr.Code)
+	}
+	b := rr.Body.String()
+	if !strings.Contains(b, "backup agents") ||
+		!strings.Contains(b, "nxt-sw-4-m holds a volume but has never reported a backup run") {
+		t.Error("the backups screen does not carry the failing backup check")
+	}
+	if strings.Contains(b, "certificates") {
+		t.Error("the backups screen shows a check about a different subject")
+	}
+	if !strings.Contains(b, "Backup health") {
+		t.Error("the backups screen has no health banner heading")
+	}
+}
+
 func TestControllers_Overview(t *testing.T) {
 	h := newCtrlHarness(t)
 	h.mountOverview()

@@ -14,6 +14,8 @@ func init() {
 		"overview.apply_warnings_title": "آخر تطبيق للمنصة لم يكمل {0} خطوة",
 		"overview.apply_warnings_body":  "لا شيء متوقف، لكن المنصة تعمل بأقل مما طُلب منها — هذه هي الخطوات التي تراجعت واستمرت:",
 		"overview.apply_warnings_when":  "مسجّل عند {0} بواسطة {1}",
+		"backups.health_title":          "صحة النسخ الاحتياطي: {0} ملاحظة",
+		"backups.health_body":           "ما يقوله pmcluster doctor عن النسخ الاحتياطي بكلماته. الجدول أدناه لا يرى هذه الأمور — يعرف فقط ما تم تسجيله.",
 		"overview.health_title":         "صحة المنصة: {0} ملاحظة",
 		"overview.health_body":          "الفحوصات التي يشغّلها pmcluster doctor، مقيسة من الخدمة. كل سطر بكلمات الفحص نفسه.",
 		"overview.version_skew_title":   "{0} مديراً يشغّل إصدار pmcluster مختلفاً",

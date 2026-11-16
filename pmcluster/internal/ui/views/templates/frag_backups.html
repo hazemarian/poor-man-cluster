@@ -9,6 +9,10 @@
 {{template "banner" (dict "Tone" "ok" "Icon" "check-circle" "Title" (T .MsgKey) "Body" .MsgA)}}
 {{end}}
 
+{{if .Health}}
+{{template "banner" (dict "Tone" .HealthTone "Icon" "alert" "Title" (TF "backups.health_title" (len .Health)) "Body" (T "backups.health_body") "Extra" (partial "health_list" .))}}
+{{end}}
+
 {{if .AtRisk}}
 {{template "banner" (dict "Tone" "warn" "Icon" "alert" "Title" (TF "backups.risk_banner" (N .AtRisk)) "Body" (T "backups.missed_meaning") "Action" (partial "backups_runnow" .))}}
 {{end}}

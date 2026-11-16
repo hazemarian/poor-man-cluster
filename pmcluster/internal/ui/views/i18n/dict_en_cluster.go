@@ -7,6 +7,8 @@ func init() {
 		"overview.apply_warnings_title": "The last platform apply could not finish {0} step(s)",
 		"overview.apply_warnings_body":  "Nothing is down, but the platform is running with less than it asked for — these are the steps that degraded and carried on:",
 		"overview.apply_warnings_when":  "recorded at {0} by {1}",
+		"backups.health_title":          "Backup health: {0} finding(s)",
+		"backups.health_body":           "What pmcluster doctor says about backups, in its own words. The table below cannot see these — it only knows what was recorded.",
 		"overview.health_title":         "Platform health: {0} finding(s)",
 		"overview.health_body":          "The checks pmcluster doctor runs, measured by the daemon. Each line is the check's own words.",
 		"overview.version_skew_title":   "{0} manager(s) run a different pmcluster version",

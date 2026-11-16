@@ -54,8 +54,17 @@ artifact names in the run records. It skips on a follower by design: `backups` i
 mirrored, so a follower would call a healthy cluster silent — measured, on the first build that ran
 it there. The operator's answer is one command on the leader.
 
-**3. The export is drilled, not just stored.** `pmcluster backup platform-verify [archive]` unpacks
-the newest export into a scratch dir and checks, in the order a restore would: every member against
+**3. The export is scheduled, not remembered.** It runs from `pmcluster-platform.timer` on every
+manager — daily, 01:20, `Persistent=true` so a missed night is made up — via
+`pmcluster backup platform --if-leader`, which exits 0 with one line on a follower. Two of three
+managers are followers by design, and a unit that fails there every morning is a unit nobody reads.
+The gating is on **manager**, not storage node: an export needs the authoritative store, an agent
+needs stack volumes, and tying one to the other left a manager with no restore point.
+
+**4. The export is drilled, not just stored.** `pmcluster backup platform-verify [archive]` unpacks
+the newest export into a scratch dir and checks, in the order a restore would (the weekly
+`pmcluster-backup-drill` unit runs it as one of its three steps, `--if-present` on a node that has
+never exported): every member against
 its manifest sha256, `PRAGMA integrity_check` on `data.db`, and **the archived key decrypting a
 sampled secret** — the only step that proves the key belongs to the ciphertext it shipped with,
 which is why the artifact carries both.

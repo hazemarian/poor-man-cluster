@@ -299,7 +299,10 @@
 
 {{define "overview_apply_list"}}<ul class="b-list">{{range .Apply.Warnings}}<li>{{.}}</li>{{end}}</ul>{{end}}
 
-{{define "overview_health_list"}}<ul class="b-list">{{range .Health}}<li><strong>{{.Name}}</strong> — {{.Detail}}</li>{{end}}</ul>{{end}}
+{{define "overview_health_list"}}{{template "health_list" .}}{{end}}
+
+{{/* health_list is shared with the backups screen: the same checks, quoted the same way. */}}
+{{define "health_list"}}<ul class="b-list">{{range .Health}}<li><strong>{{.Name}}</strong> — {{.Detail}}</li>{{end}}</ul>{{end}}
 
 {{define "overview_skew_list"}}<ul class="b-list">{{range .Skew}}<li>{{.Hostname}} — {{.Version}}</li>{{end}}</ul>{{end}}
 

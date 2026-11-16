@@ -52,6 +52,13 @@ type backupsData struct {
 	StackCount      int64
 	Unchecked       int64
 
+	// Health is the doctor checks about backups, quoting the checks themselves. This screen is
+	// where an operator looks when backup state is in doubt; the overview's banner was one nav
+	// click away from the page that could act on it.
+	Health      []healthModel
+	HealthKnown bool
+	HealthTone  string
+
 	LastVerifiedDays int64
 	HasLastVerified  bool
 	AtRisk           int64
@@ -317,6 +324,12 @@ func (c Backups) List(g *gin.Context) {
 // load reads the run window and the per-stack coverage into d.
 func (c Backups) load(g *gin.Context, d *backupsData) {
 	ctx := g.Request.Context()
+	// The checks about backups, quoting themselves. They belong here rather than only on the
+	// overview: this is the page an operator opens when backup state is in doubt, and it used to
+	// show a clean coverage table while doctor failed "backup agents" one nav click away.
+	if h := loadHealth(ctx, c.API, "backup", "unbacked", "restore drill", "offsite", "platform"); h.Known {
+		d.Health, d.HealthKnown, d.HealthTone = h.Rows, h.Known, h.Tone
+	}
 
 	if rows, err := c.API.ListBackups(ctx, backupsListLimit); err != nil {
 		if d.ErrKey == "" {

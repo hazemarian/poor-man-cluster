@@ -56,12 +56,18 @@ var (
 	BackupUnitPath      = "/etc/systemd/system/pmcluster-backup.service"
 	BackupTimerPath     = "/etc/systemd/system/pmcluster-backup.timer"
 	BackupDrillUnitPath = "/etc/systemd/system/pmcluster-backup-drill.service"
-	BackupDrillTimer    = "/etc/systemd/system/pmcluster-backup-drill.timer"
-	OffsiteUnitPath     = "/etc/systemd/system/pmcluster-backup-offsite.service"
-	OffsiteTimerPath    = "/etc/systemd/system/pmcluster-backup-offsite.timer"
-	AgentVolumeRoot     = manifest.DefaultVolumeRoot
-	AgentArchiveDir     = "/var/stack/backup"
-	AgentStateDir       = "/var/lib/pmcluster-backup"
+	// PlatformUnitPath / PlatformTimerPath drive the CONTROL-PLANE export: data.db and the
+	// encryption key, the restore point for losing every manager at once. Installed on every
+	// manager (not only storage nodes) and guarded by --if-leader, so a follower's daily tick is
+	// a no-op instead of a failed unit.
+	PlatformUnitPath  = "/etc/systemd/system/pmcluster-platform.service"
+	PlatformTimerPath = "/etc/systemd/system/pmcluster-platform.timer"
+	BackupDrillTimer  = "/etc/systemd/system/pmcluster-backup-drill.timer"
+	OffsiteUnitPath   = "/etc/systemd/system/pmcluster-backup-offsite.service"
+	OffsiteTimerPath  = "/etc/systemd/system/pmcluster-backup-offsite.timer"
+	AgentVolumeRoot   = manifest.DefaultVolumeRoot
+	AgentArchiveDir   = "/var/stack/backup"
+	AgentStateDir     = "/var/lib/pmcluster-backup"
 )
 
 // CanonicalAgentBinary picks the path the timer should exec.
@@ -344,7 +350,11 @@ ExecStart=%s backup-agent drill --newest 1
 # that check pointed at the mirror (version, age, rows, key). "-" keeps the step from
 # masking a failed artifact drill; a worker fails it with a clear reason, which is
 # honest on a node that holds no mirror by design.
-ExecStart=-/bin/sh -c '%s cluster mirror verify' 
+ExecStart=-/bin/sh -c '%s cluster mirror verify'
+# And the third artifact class: the control-plane export. Presence in the bucket has never been
+# proof it opens (ADR 0008); this unpacks the newest one and proves the manifest, integrity_check
+# and the key. --if-present makes a node that never exported say so instead of failing.
+ExecStart=-/bin/sh -c '%s backup platform-verify --if-present'
 Nice=15
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
@@ -353,7 +363,7 @@ TimeoutStartSec=1800
 
 [Install]
 WantedBy=multi-user.target
-`, volumeRoot, archiveDir, stateDir, BackupEnvFile, exe, exe)
+`, volumeRoot, archiveDir, stateDir, BackupEnvFile, exe, exe, exe)
 }
 
 // RenderDrillTimerUnit builds the weekly schedule: Sunday, 03:00, spread over 30
@@ -479,6 +489,91 @@ func RemoveBackupAgent(out io.Writer) {
 			_ = Systemctl("daemon-reload")
 		}
 	}
+}
+
+// RenderPlatformServiceUnit is the daily control-plane export. It runs on every manager and
+// decides for itself: `--if-leader` makes a follower exit 0 with one line, because a timer that
+// fails on two of three managers every morning is a timer nobody keeps.
+//
+// The command ships the archive offsite itself — the export's whole value is NOT being on this
+// host, so a unit that only wrote it to disk would produce a restore point that dies with the
+// thing it restores.
+func RenderPlatformServiceUnit(exe, archiveDir string) string {
+	return fmt.Sprintf(`[Unit]
+Description=pmcluster control-plane export (data.db + key — the restore point for every manager at once)
+Documentation=https://github.com/hazemarian/poor-man-cluster
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Environment=PMCLUSTER_BACKUP_DIR=%s
+Nice=10
+# A follower holds no authoritative store, so it exports nothing and must not fail this unit.
+ExecStart=%s backup platform --if-leader
+`, archiveDir, exe)
+}
+
+// RenderPlatformTimerUnit runs the export once a day, away from the hourly stack backups.
+// Persistent catches up after downtime: this is the only restore point for the whole control
+// plane, so a missed night is worth making up.
+func RenderPlatformTimerUnit() string {
+	return `[Unit]
+Description=Daily pmcluster control-plane export
+Documentation=https://github.com/hazemarian/poor-man-cluster
+
+[Timer]
+OnCalendar=*-*-* 01:20:00
+RandomizedDelaySec=20m
+Persistent=true
+Unit=pmcluster-platform.service
+
+[Install]
+WantedBy=timers.target
+`
+}
+
+// EnsurePlatformExport installs the daily control-plane export. Separate from EnsureBackupAgent
+// because the condition differs: an agent needs stack volumes (a storage node), an export needs
+// the authoritative store (a manager). Gating one on the other left a manager that is not a
+// storage node with no restore point at all.
+func EnsurePlatformExport(out io.Writer, isManager bool) error {
+	if !isManager {
+		fmt.Fprintln(out, "  (not a manager — the control-plane export runs on managers only)")
+		return nil
+	}
+	if os.Getenv("PMCLUSTER_SKIP_PLATFORM_EXPORT") != "" {
+		fmt.Fprintln(out, "  (PMCLUSTER_SKIP_PLATFORM_EXPORT set — the export timer was not installed)")
+		return nil
+	}
+	if HostOS != "linux" {
+		fmt.Fprintln(out, "  (non-Linux host — the export timer is a Linux systemd unit)")
+		return nil
+	}
+	if !HasSystemctl() {
+		fmt.Fprintln(out, "  (systemctl not found — schedule `pmcluster backup platform` yourself)")
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve executable: %w", err)
+	}
+	exe = CanonicalAgentBinary(exe, os.Stat)
+	if err := WriteUnit(PlatformUnitPath, []byte(RenderPlatformServiceUnit(exe, AgentArchiveDir)), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", PlatformUnitPath, err)
+	}
+	if err := WriteUnit(PlatformTimerPath, []byte(RenderPlatformTimerUnit()), 0o644); err != nil {
+		return fmt.Errorf("write %s: %w", PlatformTimerPath, err)
+	}
+	for _, args := range [][]string{{"daemon-reload"}, {"enable", "--now", "pmcluster-platform.timer"}} {
+		if err := Systemctl(args...); err != nil {
+			return fmt.Errorf("systemctl %s: %w", strings.Join(args, " "), err)
+		}
+	}
+	fmt.Fprintf(out, "  → installed %s + %s (daily control-plane export, 01:20)\n",
+		filepath.Base(PlatformUnitPath), filepath.Base(PlatformTimerPath))
+	return nil
 }
 
 // EnsureBackupAgent writes the units and enables the timers.

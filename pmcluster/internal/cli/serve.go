@@ -292,7 +292,25 @@ func runServe(cmd *cobra.Command, _ []string) error {
 					log.Info().Msg("backup agent: " + s)
 				}
 			}
+			// The control-plane export is a MANAGER's job, not a storage node's: the leader holds
+			// the authoritative store. Gating it on the storage role — the obvious shortcut — would
+			// leave a manager that hosts no volumes with no restore point at all.
+			ensureExport := func(isManager bool) {
+				var buf bytes.Buffer
+				if err := nodeunits.EnsurePlatformExport(&buf, isManager); err != nil {
+					log.Warn().Err(err).Msg("platform export timer: could not be ensured on this node")
+					return
+				}
+				if s := strings.TrimSpace(buf.String()); s != "" {
+					log.Info().Msg("platform export: " + s)
+				}
+			}
 			ensureAgent()
+			// A manager's own daily export. docker info's ControlAvailable is the only honest
+			// answer to "am I a manager" — `docker node inspect self` fails on a worker.
+			if info, ierr := dc.Info(cmd.Context()); ierr == nil {
+				ensureExport(info.SwarmControlAvailable)
+			}
 			// Re-check when the membership actually changes (an operator flips the toggle), not
 			// every tick: writing units and running systemctl every two minutes is noise.
 			wasMember := storageNodeFor(st, host)
