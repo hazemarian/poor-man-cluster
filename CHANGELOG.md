@@ -3,6 +3,15 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.349 — a platform export is checked offsite only
+
+**Why:** `doctor` went red on production the moment the first export was taken — `offsite …
+store:pmcluster-backups: 3/6 present, 3 missing (e.g. pmcluster-platform-…tar.gz)`. The verify pass
+expects every local artifact in every configured target, but a platform export goes to the bucket
+and NOWHERE inside the cluster on purpose: a copy inside the cluster it protects dies with the
+cluster. The check was wrong, not the export. `artifactIsCheckedOn` exempts it from the in-cluster
+store and still verifies it offsite, with a test.
+
 ## v0.2.348 — the rollout finds the binary the release actually ships
 
 **Why:** the first rollout of v0.2.347 stopped on the worker with "no pmcluster binary in the
