@@ -3,6 +3,14 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.350 — a platform export ships its sidecar, so the offsite copy is verifiable
+
+**Why:** the verifier reported the three offsite exports as "restorable, not verifiable". It looks
+for a `.json` beside every archive it ships — that is what makes an offsite copy *verified* rather
+than merely *present* — and the export's manifest only existed inside the tarball. The sidecar is
+now written from the archive itself (which also proves the archive reads back) and uploaded next
+to it, so `backup-agent verify-offsite` can check it like any stack artifact.
+
 ## v0.2.349 — a platform export is checked offsite only
 
 **Why:** `doctor` went red on production the moment the first export was taken — `offsite …
