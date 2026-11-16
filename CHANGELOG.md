@@ -3,6 +3,21 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.362 — the terminal page waits for xterm, and then it works
+
+The interactive terminal has never worked in any browser. `xterm.min.js` is loaded with `defer`,
+which executes after the document is parsed; the page's inline bootstrap sits at the end of `<body>`
+and runs during parsing, so `window.Terminal` was always undefined — the page printed "the terminal
+failed to load" and never reached `new WebSocket(...)`.
+
+Measured on production: two "terminal: page served" lines for one stack and **zero** handshake lines.
+A real handshake sent straight at the console route is accepted and the console dials the daemon, and
+through Traefik the same handshake is answered exactly like a page (403 in 14 ms without a session).
+The gate, the proxy and the daemon were all fine; the page simply never asked.
+
+The bootstrap now starts on `DOMContentLoaded`, which deferred scripts always precede. The page test
+pins the wrapper and the `defer` attribute together so the premise cannot rot.
+
 ## v0.2.361 — the terminal says why it failed, on both sides
 
 "Terminal is not working" left no evidence anywhere: the console package had no logger at all, so a
