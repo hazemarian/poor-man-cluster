@@ -212,6 +212,45 @@ func TestExecWS_FramePump(t *testing.T) {
 	stream.mu.Unlock()
 }
 
+// TestExecWS_KeystrokesOnATextFrameReachStdin is the regression test for the report "I cannot write
+// anything": xterm.js sends keystrokes as JS strings, i.e. TEXT frames, and the pump used to parse
+// text only as a resize control and drop everything else. The socket connected, the cursor blinked,
+// and no key ever reached the process.
+func TestExecWS_KeystrokesOnATextFrameReachStdin(t *testing.T) {
+	stream := newFakeExecStream()
+	att := &fakeAttacher{stream: stream}
+	srv := execWSServer(t, att)
+
+	conn, _ := dialWS(t, wsURL(srv, "/api/services/demo/web/exec/ws?cmd=sh"), "tok")
+	if conn == nil {
+		t.Fatal("dial failed")
+	}
+
+	if err := conn.WriteMessage(websocket.TextMessage, []byte("echo hi\n")); err != nil {
+		t.Fatalf("write keystrokes: %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		stream.mu.Lock()
+		got := string(stream.stdin)
+		stream.mu.Unlock()
+		if got != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	if got := string(stream.stdin); got != "echo hi\n" {
+		t.Errorf("stdin = %q, want the keystrokes — a text frame that is not a resize is input", got)
+	}
+	if stream.resized {
+		t.Error("keystrokes were mistaken for a resize")
+	}
+}
+
 func TestExecWS_OutputAndExitFrame(t *testing.T) {
 	stream := newFakeExecStream()
 	stream.waitCode = 3

@@ -153,6 +153,15 @@ func pumpExecStream(conn *websocket.Conn, stream runtime.ExecStream, ctx context
 			var c resizeControl
 			if json.Unmarshal(data, &c) == nil && c.Type == "resize" && c.Rows > 0 && c.Cols > 0 {
 				_ = stream.Resize(ctx, c.Rows, c.Cols)
+				continue
+			}
+			// Anything else on a text frame is INPUT. xterm.js sends keystrokes as JS strings, which
+			// arrive as text frames — and dropping them is precisely what "I cannot write anything"
+			// looks like from the operator's seat: the socket connects, the cursor blinks, every key
+			// goes nowhere.
+			if _, werr := stream.Write(data); werr != nil {
+				writeWSClose(conn, websocket.CloseInternalServerErr, "stdin: "+werr.Error())
+				return
 			}
 		}
 	}
