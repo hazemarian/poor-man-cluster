@@ -320,6 +320,7 @@ func init() {
 		"terminal.back":         "Back to stack",
 		"terminal.shell_failed": "The shell could not be started.",
 		"stacks.shell":          "Shell",
+		"stacks.shell_tip":      "A shell joined to this stack's networks, with its secrets and configs mounted",
 		"terminal.exited":       "Session ended, exit code",
 		"terminal.closed":       "Connection closed.",
 		"terminal.failed":       "Could not start the terminal session.",

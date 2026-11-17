@@ -325,6 +325,7 @@ func init() {
 		"terminal.title":        "الطرفية",
 		"terminal.shell_failed": "لم يتم بدء الصدفة.",
 		"stacks.shell":          "صدفة",
+		"stacks.shell_tip":      "صدفة متصلة بشبكات هذا الستاك ومعها كل أسراره وإعداداته",
 		"terminal.back":         "العودة إلى الحزمة",
 		"terminal.exited":       "انتهت الجلسة، رمز الخروج",
 		"terminal.closed":       "أُغلقت الجلسة.",
