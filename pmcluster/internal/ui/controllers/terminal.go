@@ -153,6 +153,17 @@ func (t Terminal) ShellWS(g *gin.Context) {
 	relaySockets(client, daemon)
 }
 
+// ShellReport is the shell page's failure line. Without it the page's report POST 404s and the one
+// sentence that explains a dead socket never reaches a log — the operator sees "could not start" and
+// nobody can say why.
+func (t Terminal) ShellReport(g *gin.Context) {
+	id := g.Param("id")
+	body, _ := io.ReadAll(io.LimitReader(g.Request.Body, 4<<10))
+	t.Log.Warn().Str("shell", id).Str("client", string(body)).Str("ua", g.Request.UserAgent()).
+		Msg("terminal: the browser could not open the shell socket")
+	g.Status(http.StatusNoContent)
+}
+
 // Report is where the page tells the console why its socket failed.
 //
 // The browser is the only place a failed handshake is explained — "Could not start the terminal

@@ -307,6 +307,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	// terminal reach a container that lives on another node than the console's daemon.
 	op.GET("/stacks/:name/shell", tm.ShellPage)
 	op.GET("/shells/:id/ws", tm.ShellWS)
+	op.POST("/shells/:id/report", tm.ShellReport)
 	// The page beacons the browser's reason for a failed handshake; it is a diagnostic, not an
 	// action, so it is POST but goes nowhere near cluster state.
 	op.POST("/stacks/:name/terminal/report", tm.Report)

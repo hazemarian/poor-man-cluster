@@ -88,8 +88,14 @@ services:
       #     is served behind the gate. The ticket binds the socket to one stack, one service, and
       #     expires in two minutes.
       #
-      # priority 2000 keeps it ahead of pmcluster-web (default 0) for this exact path only.
-      "traefik.http.routers.pmcluster-terminal-ws.rule": "Host(`pmcluster.${DOMAIN}`) && PathRegexp(`^/web/stacks/[^/]+/terminal/ws$`)"
+      # priority 2000 keeps it ahead of pmcluster-web (default 0) for these exact paths only.
+      #
+      # BOTH socket paths must be listed. The console has two: a service's terminal
+      # (/web/stacks/<stack>/terminal/ws) and a stack's shell (/web/shells/<id>/ws). Listing only the
+      # first is a live trap — the shell socket was added later, silently matched pmcluster-web, went
+      # through forwardAuth and never completed its handshake: the page opened and typing did nothing.
+      # The console checks the same two-minute ticket on both.
+      "traefik.http.routers.pmcluster-terminal-ws.rule": "Host(`pmcluster.${DOMAIN}`) && PathRegexp(`^/web/(stacks/[^/]+/terminal|shells/[^/]+)/ws$`)"
       "traefik.http.routers.pmcluster-terminal-ws.entrypoints": "websecure"
       "traefik.http.routers.pmcluster-terminal-ws.tls": "true"
       [[- if .ACMEEmail]]
