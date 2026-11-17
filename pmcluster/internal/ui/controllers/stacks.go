@@ -122,6 +122,12 @@ type revRow struct {
 	// Error is this deployment execution's outcome (joined from the stack's
 	// error history by revision): "" = applied cleanly, else the failure.
 	Error string
+	// Attempts counts identical consecutive retries collapsed into Error (1 for
+	// older rows), FailedAt is when the last one happened. Together they let the
+	// page say "failed at 23:06, 7 attempts" instead of listing twenty identical
+	// failures as if they were twenty deploys.
+	Attempts int
+	FailedAt int64
 }
 
 // backupInfo is the last backup of a stack, with the pill tone resolved here
@@ -534,14 +540,7 @@ func (c Stacks) loadStack(ctx context.Context, name string) stackDetailData {
 	if sd.Stack.Name == "" {
 		sd.Stack.Name = name
 	}
-	for _, r := range det.Revisions {
-		sd.Revisions = append(sd.Revisions, revRow{
-			Revision:  r.Revision,
-			CreatedAt: r.CreatedAt,
-			Current:   r.Revision == det.Stack.CurrentRevision,
-			Error:     r.Error,
-		})
-	}
+	sd.Revisions = revisionRows(det)
 	if b := det.LastBackup; b != nil {
 		sd.LastBackup = &backupInfo{
 			Status:       b.Status,
@@ -598,6 +597,35 @@ func backupTone(status string) string {
 // to the backups page, which owns listing and filtering them.
 func (c Stacks) ShowBackups(g *gin.Context) {
 	g.Redirect(http.StatusFound, WebBase+"/backups")
+}
+
+// revisionRows maps the daemon's revision list into what the page renders, filling
+// in the fields older daemons do not send: Attempts defaults to 1 when a failure
+// carries no count, and FailedAt falls back to the revision's own timestamp.
+func revisionRows(det *pmapi.StackDetail) []revRow {
+	if det == nil {
+		return nil
+	}
+	out := make([]revRow, 0, len(det.Revisions))
+	for _, r := range det.Revisions {
+		attempts := r.Attempts
+		if attempts == 0 && r.Error != "" {
+			attempts = 1
+		}
+		failedAt := r.FailedAt
+		if failedAt == 0 {
+			failedAt = r.CreatedAt
+		}
+		out = append(out, revRow{
+			Revision:  r.Revision,
+			CreatedAt: r.CreatedAt,
+			Current:   r.Revision == det.Stack.CurrentRevision,
+			Error:     r.Error,
+			Attempts:  attempts,
+			FailedAt:  failedAt,
+		})
+	}
+	return out
 }
 
 // newestStackError returns the newest FAILED outcome's message for the

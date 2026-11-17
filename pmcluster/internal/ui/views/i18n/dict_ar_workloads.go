@@ -80,6 +80,8 @@ func init() {
 		"stack.services_unknown_title": "الخدمات غير متاحة",
 		"stack.services_unknown_body":  "لم تُرجع واجهة API للعنقود خدمات هذه الحزمة، لذا صحة النسخ غير معروفة وليست فارغة.",
 		"stack.deploy_failed":          "فشل النشر",
+		"stack.rev_failed_at":          "فشل %s",
+		"stack.rev_attempts":           "%d محاولات",
 		"stack.deploy_failed_hint":     "لم يكتمل النشر الأخير بنجاح. تحقّق من سجلات النشر (log_level=debug يعرض Compose كل مستوى) ومن مهام الخدمات، ثم أعد النشر.",
 		"stack.error_history":          "سجل أخطاء النشر",
 		"stack.badge":                  "شارة الحالة",

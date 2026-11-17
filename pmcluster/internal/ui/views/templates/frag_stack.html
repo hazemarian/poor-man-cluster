@@ -238,7 +238,18 @@
           <div class="rev-main">
             <span class="rev-id" dir="ltr">{{N0 .Revision}}</span>
             {{if .Current}}<span class="pill good"><i class="dot"></i>{{T "stack.rev_current"}}</span>{{end}}
-            {{if .Error}}<span class="pill bad" title="{{.Error}}"><i class="dot"></i>{{T "stack.deploy_failed"}}</span>{{end}}
+            {{/* A failure on the CURRENT revision is state: that deploy is what runs now.
+                 A failure on an OLDER revision is history and stays in the list forever — but it
+                 must not read as "this stack is broken", which is what a wall of red used to say
+                 when one crash-looping service minted a revision (and an error) every two minutes.
+                 The retry count makes that explicit: one broken deploy, N attempts. */}}
+            {{if .Error}}
+              {{if .Current}}
+                <span class="pill bad" title="{{.Error}}"><i class="dot"></i>{{T "stack.deploy_failed"}}</span>
+              {{else}}
+                <span class="pill plain" title="{{.Error}}"><i class="dot"></i>{{TF "stack.rev_failed_at" (ts .FailedAt)}}{{if gt .Attempts 1}} · {{TF "stack.rev_attempts" .Attempts}}{{end}}</span>
+              {{end}}
+            {{end}}
           </div>
           <div class="rev-when">{{TF "stack.rev_when" (ts .CreatedAt)}}</div>
           <div class="rev-actions">

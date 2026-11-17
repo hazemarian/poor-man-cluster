@@ -3368,6 +3368,16 @@ components:
               error:
                 type: string
                 description: why this revision failed to apply; empty when it applied
+              attempts:
+                type: integer
+                description: >-
+                  How many identical consecutive attempts the failure stands for. A stack that fails
+                  on every reconcile pass is one broken deploy, not twenty; older daemons send
+                  nothing here, read that as 1.
+              failed_at:
+                type: integer
+                format: int64
+                description: When the most recent attempt failed (unix seconds).
         last_backup:
           $ref: "#/components/schemas/BackupSummary"
     BackupSummary:

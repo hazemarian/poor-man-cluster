@@ -59,9 +59,16 @@ var ErrRevisionNotFound = errs.ErrRevisionNotFound
 // an entry with an empty Error records a successful apply (which clears the
 // surfaced "latest error" while the history is retained).
 type StackErrorEntry struct {
-	Revision  int64  `json:"revision"`
-	Error     string `json:"error"`
-	CreatedAt int64  `json:"created_at"`
+	Revision int64  `json:"revision"`
+	Error    string `json:"error"`
+	// CreatedAt is the time of the MOST RECENT attempt this entry stands for.
+	CreatedAt int64 `json:"created_at"`
+	// Count is how many consecutive identical attempts this entry collapses. A
+	// stack that fails on every reconcile pass is ONE broken deploy, not twenty:
+	// without this the history filled with the same sentence every two minutes
+	// and the console showed a wall of "deploy failed" pills. Absent (0) in rows
+	// written before it existed — read it as 1.
+	Count int `json:"count,omitempty"`
 }
 
 // StackErrorHistoryLimit caps how many outcomes the last_error column keeps.
@@ -245,7 +252,16 @@ func (s *Store) RecordStackError(ctx context.Context, stackName string, revision
 		return 0, fmt.Errorf("read stack last_error: %w", err)
 	}
 	entries := ParseStackErrors(raw)
-	entries = append([]StackErrorEntry{{Revision: revision, Error: errMsg, CreatedAt: time.Now().Unix()}}, entries...)
+	now := time.Now().Unix()
+	// The SAME failure on the SAME revision is a retry, not history: collapse it
+	// into the entry already at the top and count it. This is what keeps a
+	// crash-looping service from filling all twenty slots with one sentence.
+	if len(entries) > 0 && entries[0].Revision == revision && entries[0].Error == errMsg {
+		entries[0].CreatedAt = now
+		entries[0].Count++
+	} else {
+		entries = append([]StackErrorEntry{{Revision: revision, Error: errMsg, CreatedAt: now, Count: 1}}, entries...)
+	}
 	if len(entries) > StackErrorHistoryLimit {
 		entries = entries[:StackErrorHistoryLimit]
 	}

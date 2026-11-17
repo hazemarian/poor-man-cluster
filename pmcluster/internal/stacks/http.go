@@ -109,15 +109,27 @@ func (h *HTTP) show(w http.ResponseWriter, r *http.Request) {
 	// (stacks.last_error JSON array, newest first) carries one entry per
 	// deployment execution keyed by revision — no per-revision storage.
 	revError := map[int64]string{}
+	// how many attempts the failure stands for, and when the last one was: a
+	// crash-looping service is one broken deploy retried, not twenty deploys.
+	revAttempts := map[int64]int{}
+	revFailedAt := map[int64]int64{}
 	for _, e := range st.StackErrors {
 		revError[e.Revision] = e.Error
+		revAttempts[e.Revision] = e.Count
+		revFailedAt[e.Revision] = e.CreatedAt
 	}
 	revsJSON := make([]map[string]any, 0, len(revs))
 	for _, rv := range revs {
+		attempts := revAttempts[rv.Revision]
+		if attempts == 0 && revError[rv.Revision] != "" {
+			attempts = 1 // rows written before the count existed
+		}
 		revsJSON = append(revsJSON, map[string]any{
 			"revision":   rv.Revision,
 			"created_at": rv.CreatedAt,
 			"error":      revError[rv.Revision],
+			"attempts":   attempts,
+			"failed_at":  revFailedAt[rv.Revision],
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

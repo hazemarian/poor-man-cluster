@@ -427,6 +427,21 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 		return nil
 	})
 	wf.Add("Recording revision", func(ctx context.Context) error {
+		// A RETRY OF A FAILED DEPLOY IS THE SAME REVISION. The rendered hash is
+		// stamped only after a successful apply, so a stack that keeps failing
+		// looks like drift on every reconcile pass and used to mint a revision
+		// every two minutes — measured on a crash-looping service: 8 consecutive
+		// revisions, ONE distinct rendered manifest, and a console panel that read
+		// as twenty failed deploys.
+		//
+		// So: when the current revision is the failed one AND the source and the
+		// render are byte-identical, record nothing and retry under the same
+		// number. The success path then stamps the hash on that revision, which is
+		// what it was always supposed to mean.
+		if cur, cerr := s.currentFailedRevision(ctx, app.Name); cerr == nil && reusableFailedRevision(cur, string(rendered), p.Manifest) {
+			revision = cur.Revision
+			return nil
+		}
 		next, err := s.Store.NextFreeRevision(ctx, app.Name, time.Now().Unix())
 		if err != nil {
 			return fmt.Errorf("assign revision: %w", err)
@@ -1089,6 +1104,36 @@ func (s *Service) Undeploy(ctx context.Context, stackName string) (retErr error)
 		return err
 	}
 	return nil
+}
+
+// reusableFailedRevision reports whether a failed deploy may be retried under the
+// SAME revision number: only when its hash was never stamped (the apply never
+// succeeded) and nothing about the deploy changed — same source, same render.
+//
+// Without this, a stack that fails on every reconcile pass minted a revision per
+// pass: measured on a crash-looping service, 8 consecutive revisions with one
+// distinct rendered manifest, and a console that read as twenty failed deploys.
+func reusableFailedRevision(cur *store.StackRevision, rendered, source string) bool {
+	if cur == nil || cur.RenderedHash != "" {
+		return false
+	}
+	return rendered == cur.RenderedYAML && source == cur.SourceYAML
+}
+
+// currentFailedRevision returns the stack's current revision when its last apply
+// did not succeed (empty rendered hash), or nil when there is nothing to reuse.
+//
+// It is what stops a failing stack from minting a revision per reconcile pass:
+// a retry that changes nothing is the same revision retried, not a new deploy.
+func (s *Service) currentFailedRevision(ctx context.Context, stackName string) (*store.StackRevision, error) {
+	st, err := s.Store.Stack(ctx, stackName)
+	if err != nil || st == nil {
+		return nil, err
+	}
+	if st.CurrentRevision == 0 {
+		return nil, nil
+	}
+	return s.Store.Revision(ctx, stackName, st.CurrentRevision)
 }
 
 // runPreDeployBackup records its outcome in the audit table. Returns an

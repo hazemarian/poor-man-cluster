@@ -79,6 +79,11 @@ type RevisionMeta struct {
 	CreatedAt int64 `json:"created_at"`
 	// Error is this deployment execution's outcome ("" = applied cleanly).
 	Error string `json:"error"`
+	// Attempts is how many identical consecutive attempts the failure stands
+	// for (0/absent on rows written before it existed: read as 1).
+	Attempts int `json:"attempts"`
+	// FailedAt is when the most recent attempt failed (unix seconds).
+	FailedAt int64 `json:"failed_at"`
 }
 
 // StackDetail is GET /api/stacks/{name}.
