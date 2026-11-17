@@ -589,9 +589,39 @@ func TestRenderOTelCollectorConfig_LogsPipeline(t *testing.T) {
 
 	// memory_limiter MUST lead every pipeline: it is what stops a failing
 	// exporter from growing the collector until the host loses its Swarm
-	// heartbeat.
-	if !strings.Contains(body, "[memory_limiter, resourcedetection, filter/skip_filelog, batch]") {
-		t.Error("logs pipeline must lead with memory_limiter, then resourcedetection + filter/skip_filelog before batch")
+	// heartbeat — and batch must come last. The processors BETWEEN them are
+	// named here in the order they must run, because each one depends on the
+	// previous having happened:
+	//
+	//	resourcedetection        stamps host.name before anything routes on it
+	//	transform/logs_attributes drops app-defined attributes, whose empty or
+	//	                         mixed-type values make the backend reject a
+	//	                         WHOLE batch (measured: "category_id": null)
+	//	filter/skip_filelog      drops what must not ship at all
+	logsPipeline := ""
+	for _, line := range strings.Split(body, "\n") {
+		// The logs pipeline is the one carrying the filelog filter; traces and
+		// metrics also lead with memory_limiter and end with batch.
+		if strings.Contains(line, "processors:") && strings.Contains(line, "filter/skip_filelog") {
+			logsPipeline = strings.TrimSpace(line)
+			break
+		}
+	}
+	if logsPipeline == "" {
+		t.Fatalf("no pipeline line found; config changed shape")
+	}
+	want := []string{"[memory_limiter,", "resourcedetection", "transform/logs_attributes",
+		"filter/skip_filelog", "batch]"}
+	at := 0
+	for _, part := range want {
+		idx := strings.Index(logsPipeline, part)
+		if idx < 0 {
+			t.Fatalf("logs pipeline %q is missing %q", logsPipeline, part)
+		}
+		if idx < at {
+			t.Errorf("logs pipeline %q has %q out of order", logsPipeline, part)
+		}
+		at = idx
 	}
 
 	// The metrics pipeline keeps its invariant (memory_limiter first, batch

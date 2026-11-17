@@ -268,7 +268,27 @@ processors:
         # characters, and the literal text "\u0000" are ALL accepted (200); only an ABSENT body
         # answers 400. Both earlier attempts here matched control characters — shapes the backend
         # takes happily — and so they changed nothing while looking like fixes.
-        - 'body == nil' 
+        - 'body == nil'
+
+  # AN ATTRIBUTE WITH AN EMPTY VALUE TAKES THE WHOLE BATCH DOWN, and an app that logs JSON gets one
+  # for free: `"category_id": null` becomes {"key":"category_id","value":{}} on the wire, the backend
+  # answers 400 "Could not deserialize into JSON object, Invalid data for Value, no known keys found",
+  # and every other service's logs in that batch are lost with it — every ten seconds.
+  #
+  # This was found by capturing the collector's own payloads and bisecting a rejected batch down to a
+  # single record (153 records -> 1), never by reading the error message. The record's body was fine;
+  # its attributes were not.
+  #
+  # The rule is generic on purpose: the platform owns the log schema, so the attributes that survive
+  # are the ones the PLATFORM sets — stream, log.file.path and time from the receiver, level from the
+  # level parser. An app's own JSON fields stay in the body, where they are searchable as text, and
+  # can never introduce a type or an empty value that breaks the shared stream for everyone.
+  transform/logs_attributes:
+    error_mode: ignore
+    log_statements:
+      - context: log
+        statements:
+          - 'keep_matching_keys(attributes, "^(stream|log\\.file\\.path|time|level)$")'
 
   # Docker Engine API calls are PLUMBING, and two components emit them by the
   # thousand: Traefik's swarm provider (--tracing.otlp=true, polling
@@ -412,7 +432,7 @@ service:
   pipelines:
     logs:
       receivers:  [receiver_creator, otlp]
-      processors: [memory_limiter, resourcedetection, filter/skip_filelog, batch]
+      processors: [memory_limiter, resourcedetection, transform/logs_attributes, filter/skip_filelog, batch]
       exporters:  [otlp_http/parseable-logs]
     metrics:
       receivers:  [docker_stats, otlp]
