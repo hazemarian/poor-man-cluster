@@ -70,6 +70,14 @@ type Deps struct {
 	// (ADR 0007). Optional; when nil the route is not mounted.
 	PlatformExport func(ctx context.Context) (backups.PlatformExportResult, error)
 
+	// The on-demand terminal: a throwaway container on THIS node, joined to the stack's networks
+	// with its secrets and configs mounted, exec'd over a socket and destroyed when that socket
+	// closes. Optional; when nil the routes are omitted and the console keeps the service-container
+	// terminal, which only reaches services that share a node with this daemon.
+	OpenShell      func(ctx context.Context, stack, image string) (services.ShellSession, error)
+	ShellContainer func(ctx context.Context, serviceID string) (string, error)
+	CloseShell     func(ctx context.Context, serviceID string) error
+
 	// Settings exposes the editable cluster settings surface under
 	// /api/cluster/settings. Optional; when nil those routes are omitted.
 	Settings settings.Service
@@ -226,6 +234,15 @@ func New(d Deps) http.Handler {
 			r.Use(stackScopeGuard)
 			r.Get("/me", api.Me)
 			if d.Docker != nil {
+				// The on-demand terminal: create a throwaway shell for a stack on THIS node.
+				// Mutating and privileged (it mounts the stack's secrets), so it sits on the same
+				// bearer + scope chain as every other write.
+				if d.OpenShell != nil {
+					r.Method(http.MethodPost, "/stacks/{stack}/shell",
+						auth.Bearer(d.Lookup)(stackScopeGuard(ShellOpenHandler(d))))
+					r.Method(http.MethodDelete, "/shells/{id}",
+						auth.Bearer(d.Lookup)(ShellRemoveHandler(d)))
+				}
 				r.Get("/cluster/info", api.ClusterInfoHandler(d.Docker))
 				// Forcing a Swarm election (the CLI's `cluster leader`): a testing
 				// affordance for failover, refused unless the node is a manager and
@@ -349,9 +366,17 @@ func New(d Deps) http.Handler {
 	// real http.ResponseWriter.
 	if d.Services != nil && d.Lookup != nil {
 		ws := execWSHandler(d)
+		shellWS := shellExecWSHandler(d)
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			if strings.HasPrefix(req.URL.Path, execWSPathPrefix) && strings.HasSuffix(req.URL.Path, execWSPathSuffix) {
 				ws.ServeHTTP(w, req)
+				return
+			}
+			// The on-demand shell's socket rides the same top-level dispatch, for the same reason:
+			// the chi router's writers cannot be hijacked.
+			if d.OpenShell != nil && strings.HasPrefix(req.URL.Path, shellWSPathPrefix) &&
+				strings.HasSuffix(req.URL.Path, execWSPathSuffix) {
+				shellWS.ServeHTTP(w, req)
 				return
 			}
 			base.ServeHTTP(w, req)

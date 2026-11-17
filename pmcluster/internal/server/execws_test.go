@@ -70,12 +70,27 @@ type fakeAttacher struct {
 	attachErr    error
 	attachCalled bool
 	gotArgv      []string
+	gotContainer string
 }
 
 func (f *fakeAttacher) ExecAttach(_ context.Context, _, _ string, argv []string, _, _ uint) (runtime.ExecStream, error) {
 	f.mu.Lock()
 	f.attachCalled = true
 	f.gotArgv = argv
+	f.mu.Unlock()
+	if f.attachErr != nil {
+		return nil, f.attachErr
+	}
+	return f.stream, nil
+}
+
+// ExecAttachContainer makes the fake a shell-capable attacher too: the interface gained the method
+// when the on-demand shell needed to exec into a container it resolved itself.
+func (f *fakeAttacher) ExecAttachContainer(ctx context.Context, containerID string, argv []string, rows, cols uint) (runtime.ExecStream, error) {
+	f.mu.Lock()
+	f.attachCalled = true
+	f.gotArgv = argv
+	f.gotContainer = containerID
 	f.mu.Unlock()
 	if f.attachErr != nil {
 		return nil, f.attachErr

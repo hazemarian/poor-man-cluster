@@ -308,6 +308,34 @@ type DoctorCheck struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// ShellSession is a live on-demand terminal container.
+type ShellSession struct {
+	ServiceID   string `json:"service_id"`
+	ContainerID string `json:"container_id"`
+	Node        string `json:"node"`
+	MaxSeconds  int    `json:"max_seconds"`
+}
+
+// OpenShell asks the daemon for a shell session in a stack. The daemon creates a throwaway
+// container pinned to ITS node (so the exec is local), joined to the stack's networks with the
+// stack's secrets and configs mounted, then answers the ids the console needs.
+func (c *Client) OpenShell(ctx context.Context, stack, image string) (ShellSession, error) {
+	var out ShellSession
+	path := "/stacks/" + url.PathEscape(stack) + "/shell"
+	if image != "" {
+		path += "?image=" + url.QueryEscape(image)
+	}
+	if err := c.do(ctx, http.MethodPost, path, nil, &out); err != nil {
+		return ShellSession{}, err
+	}
+	return out, nil
+}
+
+// CloseShell destroys a session the console is done with.
+func (c *Client) CloseShell(ctx context.Context, serviceID string) error {
+	return c.do(ctx, http.MethodDelete, "/shells/"+url.PathEscape(serviceID), nil, nil)
+}
+
 // Doctor asks the daemon for its platform health checks — the same measurement
 // `pmcluster doctor` makes, so the console can show what a human would otherwise have to type.
 func (c *Client) Doctor(ctx context.Context) ([]DoctorCheck, error) {

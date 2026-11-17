@@ -565,13 +565,54 @@ func runServe(cmd *cobra.Command, _ []string) error {
 		backupSvc.Scaler = sc
 	}
 
+	// The on-demand terminal's engine side. Only a node that can reach the swarm engine (a manager)
+	// can create the shell, and only where it can also exec — which is why the shell is pinned to
+	// THIS node rather than scheduled anywhere.
+	shellLocal := services.Local{Docker: dc}
+	var openShell func(ctx context.Context, stack, image string) (services.ShellSession, error)
+	var shellContainer func(ctx context.Context, serviceID string) (string, error)
+	var closeShell func(ctx context.Context, serviceID string) error
+	if shellRT, ok := dc.(runtime.ShellRuntime); ok {
+		openShell = func(ctx context.Context, stack, image string) (services.ShellSession, error) {
+			secrets, err := st.ListSecrets(ctx, "stack", stack)
+			if err != nil {
+				return services.ShellSession{}, err
+			}
+			configs, err := st.ListConfigs(ctx, "stack", stack)
+			if err != nil {
+				return services.ShellSession{}, err
+			}
+			req := services.ShellRequest{Stack: stack, Image: shellImage(image)}
+			for _, s := range secrets {
+				req.SecretNames = append(req.SecretNames, store.SwarmSecretName(s.Name, s.Hash))
+			}
+			for _, c := range configs {
+				req.ConfigNames = append(req.ConfigNames, store.SwarmConfigName(c.Name, c.Hash))
+			}
+			return shellLocal.OpenShell(ctx, req)
+		}
+		shellContainer = func(ctx context.Context, serviceID string) (string, error) {
+			node, err := shellRT.SelfHostname(ctx)
+			if err != nil {
+				return "", err
+			}
+			return shellRT.ShellContainerOn(ctx, serviceID, node)
+		}
+		closeShell = func(ctx context.Context, serviceID string) error {
+			return shellRT.ShellRemove(ctx, serviceID)
+		}
+	}
+
 	deps := server.Deps{
-		Lookup:        st,
-		Docker:        dc,
-		Store:         st,
-		DeployService: deploySvc,
-		Cipher:        cipher,
-		Backups:       backupSvc,
+		Lookup:         st,
+		Docker:         dc,
+		Store:          st,
+		DeployService:  deploySvc,
+		Cipher:         cipher,
+		OpenShell:      openShell,
+		ShellContainer: shellContainer,
+		CloseShell:     closeShell,
+		Backups:        backupSvc,
 		// The console's "export the control plane" button: the same exporter the CLI drives,
 		// refusing on a follower instead of exporting a mirror (ADR 0007).
 		PlatformExport: func(ctx context.Context) (backups.PlatformExportResult, error) {
@@ -881,6 +922,22 @@ func checkConfigVersions(ctx context.Context, dc runtime.Client, log zerolog.Log
 			log.Warn().Str("base", base).Msg("version check: no managed config found")
 		}
 	}
+}
+
+// shellImage resolves the image an interactive shell runs in.
+//
+// It must carry the database clients — psql, pg_restore, mysql, mariadb-dump — because a shell that
+// cannot open the database it has credentials for answers the wrong question. The published image is
+// the default; PMCLUSTER_SHELL_IMAGE overrides it, and the API's ?image= overrides that for one
+// session (an operator may want a stack-specific toolchain).
+func shellImage(requested string) string {
+	if requested != "" {
+		return requested
+	}
+	if env := os.Getenv("PMCLUSTER_SHELL_IMAGE"); env != "" {
+		return env
+	}
+	return "ghcr.io/hazemarian/pmcluster-shell:" + buildinfo.Version
 }
 
 // storageNodeFor reports whether this host is currently designated a storage node, read from the

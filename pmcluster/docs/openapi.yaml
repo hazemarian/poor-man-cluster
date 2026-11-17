@@ -2871,6 +2871,58 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/stacks/{name}/shell:
+    post:
+      summary: Open a throwaway shell session for a stack
+      description: >-
+        Creates a one-replica service pinned to THIS node, joined to every network the stack's
+        services use, with all of that stack's secrets and configs mounted, and waits for its
+        container. The caller execs into it at `/api/shell/{id}/exec/ws` and destroys it with
+        `DELETE /api/shells/{id}`; it self-limits at 30 minutes. See ADR 0009.
+      operationId: openStackShell
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: image
+          in: query
+          required: false
+          description: Client image for the session (default PMCLUSTER_SHELL_IMAGE, else the release's pmcluster-shell image).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session created; exec into it at /api/shell/{id}/exec/ws
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShellSession"
+        "502":
+          description: The container could not be created, or did not start on this node
+
+  /api/shells/{id}:
+    delete:
+      summary: Destroy a shell session
+      description: >-
+        Removes the throwaway service behind a shell session. The daemon does this itself when the
+        session's socket closes; this route exists for a caller that closed without a socket.
+      operationId: removeShellSession
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Removed (also when it was already gone)
+
 components:
   securitySchemes:
     bearerAuth:
@@ -3277,6 +3329,26 @@ components:
         updated_at:
           type: integer
           format: int64
+    ShellSession:
+      type: object
+      description: >-
+        A live on-demand terminal container: created for one stack, pinned to the node that answered,
+        destroyed when the session's socket closes (ADR 0009).
+      required: [service_id, container_id, node]
+      properties:
+        service_id:
+          type: string
+          description: The throwaway swarm service; pass it to DELETE /api/shells/{id}.
+        container_id:
+          type: string
+          description: The running container on this node.
+        node:
+          type: string
+          description: The hostname the container runs on. Equal to the answering node by construction.
+        max_seconds:
+          type: integer
+          description: The session ceiling. The container exits on its own at this age.
+
     StackDetail:
       type: object
       properties:

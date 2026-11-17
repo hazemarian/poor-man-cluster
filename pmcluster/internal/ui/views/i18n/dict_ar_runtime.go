@@ -322,11 +322,13 @@ func init() {
 		"services.logs_poll_hint":       "تشغيل التحديث التلقائي للسجل أو إيقافه",
 
 		// ---- terminal -------------------------------------------------------
-		"terminal.title":       "الطرفية",
-		"terminal.back":        "العودة إلى الحزمة",
-		"terminal.exited":      "انتهت الجلسة، رمز الخروج",
-		"terminal.closed":      "أُغلقت الجلسة.",
-		"terminal.failed":      "تعذّر بدء جلسة الطرفية.",
-		"terminal.load_failed": "تعذّر تحميل محرك الطرفية.",
+		"terminal.title":        "الطرفية",
+		"terminal.shell_failed": "لم يتم بدء الصدفة.",
+		"stacks.shell":          "صدفة",
+		"terminal.back":         "العودة إلى الحزمة",
+		"terminal.exited":       "انتهت الجلسة، رمز الخروج",
+		"terminal.closed":       "أُغلقت الجلسة.",
+		"terminal.failed":       "تعذّر بدء جلسة الطرفية.",
+		"terminal.load_failed":  "تعذّر تحميل محرك الطرفية.",
 	})
 }

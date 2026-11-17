@@ -771,6 +771,12 @@ func (r *realClient) ServiceExecAttach(ctx context.Context, serviceID string, ar
 	return nil, fmt.Errorf("service %s: no running task on this node (tasks run on other nodes — use ssh + docker exec)", svc.Name)
 }
 
+// ContainerExecAttach is execAttachContainer for callers outside this package: the on-demand shell
+// execs into a container ID it resolved itself, not into a (stack, service) pair.
+func (r *realClient) ContainerExecAttach(ctx context.Context, containerID string, argv []string, rows, cols uint) (runtime.ExecStream, error) {
+	return r.execAttachContainer(ctx, containerID, argv, rows, cols)
+}
+
 // execAttachContainer creates a TTY exec with stdin attached and hijacks the
 // connection. With Tty:true docker streams raw bytes (no stdcopy framing), so
 // the hijacked conn is used directly as the duplex stream.

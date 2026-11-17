@@ -140,6 +140,11 @@
             <a class="btn btn-ghost" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/tasks" hx-target="#view" hx-push-url="true" data-tip="{{T "services.action_tasks"}}">{{icon "server"}}<span>{{T "services.action_tasks"}}</span></a>
             <a class="btn btn-ghost" href="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-get="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/logs" hx-target="#view" hx-push-url="true" data-tip="{{T "services.action_logs"}}">{{icon "file"}}<span>{{T "services.action_logs"}}</span></a>
             <a class="btn btn-ghost" href="/web/stacks/{{$.Detail.Stack.Name}}/terminal?service={{.ServiceName}}" data-tip="{{T "services.action_terminal"}}">{{icon "console"}}<span>{{T "services.action_terminal"}}</span></a>
+            {{/* A shell for the whole stack: a throwaway container on the console's node, joined to
+                 this stack's networks with its secrets and configs mounted. It reaches every service
+                 here by name — including the ones that run on other nodes, which the per-service
+                 terminal cannot. */}}
+            <a class="btn btn-ghost" href="/web/stacks/{{$.Detail.Stack.Name}}/shell" target="_blank" rel="noopener" data-tip="{{T "stacks.shell"}}">{{icon "console"}}<span>{{T "stacks.shell"}}</span></a>
             <button type="button" class="btn btn-ghost" hx-post="/web/services/{{$.Detail.Stack.Name}}/{{.ServiceName}}/restart" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "services.restart_confirm" .Name}}" hx-disabled-elt="this" data-tip="{{T "services.action_restart"}}">{{icon "refresh"}}<span>{{T "services.action_restart"}}</span></button>
           </div>
         </span></div>

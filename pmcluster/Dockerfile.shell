@@ -1,0 +1,22 @@
+# The interactive shell an operator gets from a stack's console terminal.
+#
+# It is not plain busybox: the workloads on this platform are mostly databases, and a shell that
+# cannot open the database it has credentials mounted for answers the wrong question. So it carries
+# BOTH client stacks — PostgreSQL (psql, pg_dump, pg_restore) and MySQL/MariaDB (mysql, mysqldump,
+# mariadb-dump) — plus the small tools an operator reaches for while poking at a broken deployment.
+#
+# It is deliberately small (~90 MB) and pinned: the shell is created and destroyed per session, so
+# pull time is the operator's first two seconds.
+FROM alpine:3.20
+
+RUN apk add --no-cache         postgresql16-client         mariadb-client         busybox-extras         curl         jq         less         ncurses-terminfo         tzdata     && rm -rf /var/cache/apk/*
+
+# psql and mysql both read these; keeping HOME=/root means psql's history works in the session.
+ENV HOME=/root \
+    PAGER=less \
+    PSQL_PAGER=less \
+    MYSQL_PAGER=less
+
+# The shell itself never runs as a daemon: the daemon creates this container with `sleep <ttl>` and
+# execs `sh` into it. A `sh` entrypoint here is only a fallback for a manual `docker run`.
+CMD ["sleep", "1800"]

@@ -80,6 +80,13 @@ type ExecAttacher interface {
 	// is a raw duplex TTY (write stdin, read stdout/stderr). rows/cols seed
 	// the terminal size (0,0 → 80x24).
 	ExecAttach(ctx context.Context, stack, service string, argv []string, rows, cols uint) (runtime.ExecStream, error)
+
+	// ExecAttachContainer runs the same interactive session inside a container named by ID.
+	//
+	// It exists for the on-demand shell, whose container is not a service of the stack: the
+	// operator opened a terminal on `aarma`, the shell service is `pmshell-aarma-…`, and the exec
+	// target is that task's container on this node.
+	ExecAttachContainer(ctx context.Context, containerID string, argv []string, rows, cols uint) (runtime.ExecStream, error)
 }
 
 // Logs tails a service's stdout/stderr. Full-text search lives in

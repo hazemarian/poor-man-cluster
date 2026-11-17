@@ -160,6 +160,20 @@ func (l Local) ExecAttach(ctx context.Context, stack, service string, argv []str
 	return l.Docker.ServiceExecAttach(ctx, id, argv, rows, cols)
 }
 
+// ExecAttachContainer runs an interactive session in a container this node already holds.
+func (l Local) ExecAttachContainer(ctx context.Context, containerID string, argv []string, rows, cols uint) (runtime.ExecStream, error) {
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("argv: required (e.g. `sh`)")
+	}
+	att, ok := l.Docker.(interface {
+		ContainerExecAttach(ctx context.Context, containerID string, argv []string, rows, cols uint) (runtime.ExecStream, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("this node cannot exec into a container")
+	}
+	return att.ContainerExecAttach(ctx, containerID, argv, rows, cols)
+}
+
 // resolve maps a (stack, service) pair to the full swarm service ID, refusing
 // to act unless the service actually carries the stack's namespace label.
 func (l Local) resolve(ctx context.Context, stack, service string) (string, error) {

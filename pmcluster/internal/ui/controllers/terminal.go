@@ -63,6 +63,96 @@ func (t Terminal) Page(g *gin.Context) {
 	t.Views.Page(g, "terminal", d)
 }
 
+// ShellPage opens an on-demand shell for a stack and renders the terminal bound to it.
+//
+// This is the answer to placement: instead of exec'ing into a service container (which only works
+// when that container shares a node with the daemon), the daemon creates a throwaway container ON
+// ITS OWN NODE, joins it to the stack's networks with the stack's secrets and configs, and the
+// socket execs into that. One node, no cross-node channel, and it reaches every service of the stack
+// by name.
+func (t Terminal) ShellPage(g *gin.Context) {
+	stack := g.Param("name")
+	g.Header("Cache-Control", "no-store, must-revalidate")
+	ctx := g.Request.Context()
+	image := g.Query("image")
+	sess, err := t.API.OpenShell(ctx, stack, image)
+	if err != nil {
+		t.Log.Warn().Err(err).Str("stack", stack).Msg("terminal: could not open a shell session")
+		g.Status(http.StatusBadGateway)
+		t.Views.Page(g, "terminal_error", map[string]any{
+			"Stack": stack, "Reason": err.Error(),
+		})
+		return
+	}
+	// If the operator never connects (closed the tab during the redirect), the shell is removed by
+	// the daemon when the socket would have closed — and by the TTL regardless. Nothing to do here.
+
+	scheme := "ws"
+	if g.Request.TLS != nil || strings.HasPrefix(g.Request.Header.Get("X-Forwarded-Proto"), "https") {
+		scheme = "wss"
+	}
+	host := g.Request.Host
+	if host == "" {
+		host = t.Domain
+	}
+	ticket := t.Auth.SignTerminalToken("shell:"+sess.ServiceID, "sh", time.Now())
+	d := terminalPageData{
+		Stack:   stack,
+		Service: "shell on " + sess.Node,
+		Domain:  t.Domain,
+		Version: t.Version,
+	}
+	d.WSURL = fmt.Sprintf("%s://%s%s/shells/%s/ws?t=%s",
+		scheme, host, WebBase, url.PathEscape(sess.ServiceID), url.QueryEscape(ticket))
+	d.ReportURL = fmt.Sprintf("%s/shells/%s/report", WebBase, url.PathEscape(sess.ServiceID))
+	t.Views.Page(g, "terminal", d)
+}
+
+// ShellWS relays the browser to the daemon's shell socket.
+func (t Terminal) ShellWS(g *gin.Context) {
+	ctx := g.Request.Context()
+	id := g.Param("id")
+	if !t.Auth.VerifyTerminalToken(g.Query("t"), "shell:"+id, "sh", time.Now()) {
+		t.Log.Warn().Str("shell", id).Msg("terminal: refused a shell socket without a valid ticket")
+		g.AbortWithStatus(http.StatusForbidden)
+		return
+	}
+	apiURL, token, configured := t.loadParams(ctx)
+	if !configured {
+		g.AbortWithStatus(http.StatusServiceUnavailable)
+		return
+	}
+	daemonURL := terminalDaemonShellURL(apiURL, id, g.Query("rows"), g.Query("cols"))
+
+	up := websocket.Upgrader{
+		ReadBufferSize:  4096,
+		WriteBufferSize: 4096,
+		CheckOrigin:     func(*http.Request) bool { return true },
+	}
+	client, err := up.Upgrade(g.Writer, g.Request, nil)
+	if err != nil {
+		t.Log.Warn().Err(err).Str("shell", id).Msg("terminal: the browser connection could not be upgraded")
+		return
+	}
+	defer client.Close() //nolint:errcheck // best-effort socket close
+
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+token)
+	daemon, resp, err := websocket.DefaultDialer.Dial(daemonURL, header)
+	if err != nil {
+		code := 0
+		if resp != nil {
+			code = resp.StatusCode
+		}
+		t.Log.Warn().Err(err).Int("status", code).Str("shell", id).
+			Str("daemon", daemonURL).Msg("terminal: the daemon refused the shell socket")
+		writeJSONFrame(client, map[string]any{"type": "error", "error": "daemon shell socket: " + err.Error()})
+		return
+	}
+	defer daemon.Close() //nolint:errcheck // best-effort socket close
+	relaySockets(client, daemon)
+}
+
 // Report is where the page tells the console why its socket failed.
 //
 // The browser is the only place a failed handshake is explained — "Could not start the terminal
@@ -208,6 +298,63 @@ func terminalDaemonWSURL(apiURL, stack, service string) (string, error) {
 	q.Set("cmd", "sh")
 	u.RawQuery = q.Encode()
 	return u.String(), nil
+}
+
+// terminalDaemonShellURL is the daemon address for the on-demand shell socket.
+func terminalDaemonShellURL(apiURL, serviceID, rows, cols string) string {
+	u, err := url.Parse(apiURL)
+	if err != nil {
+		return apiURL
+	}
+	switch u.Scheme {
+	case "http":
+		u.Scheme = "ws"
+	case "https":
+		u.Scheme = "wss"
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/api/shell/" + url.PathEscape(serviceID) + "/exec/ws"
+	q := u.Query()
+	q.Set("cmd", "sh")
+	if rows != "" {
+		q.Set("rows", rows)
+	}
+	if cols != "" {
+		q.Set("cols", cols)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// relaySockets copies frames in both directions until either side ends. Shared by the
+// service-container relay and the shell relay so the two cannot drift.
+func relaySockets(client, daemon *websocket.Conn) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			mt, data, err := daemon.ReadMessage()
+			if err != nil {
+				_ = client.WriteControl(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseNormalClosure, "session ended"),
+					time.Now().Add(5*time.Second))
+				return
+			}
+			if werr := client.WriteMessage(mt, data); werr != nil {
+				return
+			}
+		}
+	}()
+	for {
+		mt, data, err := client.ReadMessage()
+		if err != nil {
+			_ = daemon.Close()
+			<-done
+			return
+		}
+		if werr := daemon.WriteMessage(mt, data); werr != nil {
+			return
+		}
+	}
 }
 
 func writeJSONFrame(conn *websocket.Conn, v any) {

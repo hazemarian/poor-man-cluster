@@ -316,11 +316,13 @@ func init() {
 		"services.logs_poll_hint":       "Turn the automatic log refresh on or off",
 
 		// ---- terminal -------------------------------------------------------
-		"terminal.title":       "Terminal",
-		"terminal.back":        "Back to stack",
-		"terminal.exited":      "Session ended, exit code",
-		"terminal.closed":      "Connection closed.",
-		"terminal.failed":      "Could not start the terminal session.",
-		"terminal.load_failed": "The terminal engine could not load.",
+		"terminal.title":        "Terminal",
+		"terminal.back":         "Back to stack",
+		"terminal.shell_failed": "The shell could not be started.",
+		"stacks.shell":          "Shell",
+		"terminal.exited":       "Session ended, exit code",
+		"terminal.closed":       "Connection closed.",
+		"terminal.failed":       "Could not start the terminal session.",
+		"terminal.load_failed":  "The terminal engine could not load.",
 	})
 }

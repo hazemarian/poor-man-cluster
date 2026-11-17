@@ -302,6 +302,11 @@ func (a *App) Mount(engine *gin.Engine) {
 	tm := controllers.Terminal{Controller: a.ctrl}
 	op.GET("/stacks/:name/terminal", tm.Page)
 	op.GET("/stacks/:name/terminal/ws", tm.WS)
+	// The on-demand shell: a throwaway container on the daemon's own node, joined to the stack's
+	// networks with its secrets and configs, destroyed when the socket closes. This is what makes a
+	// terminal reach a container that lives on another node than the console's daemon.
+	op.GET("/stacks/:name/shell", tm.ShellPage)
+	op.GET("/shells/:id/ws", tm.ShellWS)
 	// The page beacons the browser's reason for a failed handshake; it is a diagnostic, not an
 	// action, so it is POST but goes nowhere near cluster state.
 	op.POST("/stacks/:name/terminal/report", tm.Report)

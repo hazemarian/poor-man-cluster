@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/services"
 )
 
@@ -105,6 +106,14 @@ func serveExecWS(w http.ResponseWriter, r *http.Request, svc services.Service, s
 	}
 	defer stream.Close()
 
+	pumpExecStream(conn, stream, r.Context())
+}
+
+// pumpExecStream relays one interactive session: container output becomes binary frames to the
+// socket, socket bytes become stdin, text frames are resize controls, and the session ends with an
+// exit frame. Shared by the service-container endpoint and the on-demand shell, so the two cannot
+// drift in how a session ends.
+func pumpExecStream(conn *websocket.Conn, stream runtime.ExecStream, ctx context.Context) {
 	// Read the exec session's output and forward it as binary frames; when
 	// the session ends, send the exit frame and close the socket.
 	go func() {
@@ -143,7 +152,7 @@ func serveExecWS(w http.ResponseWriter, r *http.Request, svc services.Service, s
 		case websocket.TextMessage:
 			var c resizeControl
 			if json.Unmarshal(data, &c) == nil && c.Type == "resize" && c.Rows > 0 && c.Cols > 0 {
-				_ = stream.Resize(r.Context(), c.Rows, c.Cols)
+				_ = stream.Resize(ctx, c.Rows, c.Cols)
 			}
 		}
 	}

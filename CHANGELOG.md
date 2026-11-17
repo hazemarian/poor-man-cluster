@@ -3,6 +3,28 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.365 — the terminal gets a shell, not a scavenger hunt
+
+Interactive exec only works where the container is, and the console's daemon is the leader — so a
+terminal on any stack whose service ran elsewhere died with `No such container`, reported as
+"session ended". Measured: `aarma_db` on `nxt-sw-1-m`, console on `nxt-sw-5-m`.
+
+The terminal now opens a **throwaway shell** instead: a one-replica service pinned to the console's
+node, joined to every network the stack's services use, with **all of that stack's secrets and
+configs** mounted, running `sleep 1800` (ADR 0009).
+
+- `POST /api/stacks/{stack}/shell` creates it and answers the ids; `DELETE /api/shells/{id}` removes
+  it. A stack with no networks is refused — a shell with nothing to reach is a prompt with no purpose.
+- The socket is `/api/shell/{id}/exec/ws`, reachable through the console at `/web/shells/{id}/ws`
+  behind the same two-minute ticket as the service terminal.
+- It dies with the socket: removed by the daemon when the connection ends, and self-limiting at 30
+  minutes if the console crashed. `pmcluster.shell=true` labels every session so a leftover is
+  findable.
+- New image `ghcr.io/hazemarian/pmcluster-shell` (built on tag): Alpine with **both** client stacks —
+  `psql`/`pg_dump`/`pg_restore` and `mysql`/`mysqldump`/`mariadb-dump`. A shell that cannot open the
+  database whose credentials it has is not a shell.
+- A "Shell" button on the stack page opens it in a new tab.
+
 ## v0.2.364 — the socket URL is a string, not a quoted string
 
 Three separate faults kept the interactive terminal from ever connecting, and this is the last and

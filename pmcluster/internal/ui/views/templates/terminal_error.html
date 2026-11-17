@@ -1,0 +1,25 @@
+{{define "terminal_error"}}
+<!doctype html>
+<html lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="{{static "base.css"}}">
+  <link rel="stylesheet" href="{{static "components.css"}}">
+  <title>{{T "terminal.title"}} · {{T "app.title"}}</title>
+</head>
+<body class="terminal-body">
+<main class="terminal-doc">
+  <header class="terminal-bar">
+    <a class="terminal-back" href="{{.WebBase}}/stacks/{{.Stack}}">{{T "terminal.back"}}</a>
+    <span class="terminal-meta"><strong>{{.Stack}}</strong> / shell</span>
+  </header>
+  {{/* The reason, verbatim. A shell that cannot be created is almost always an image that cannot
+       be pulled or a stack with no network, and both are actionable only if the operator is told
+       which one it was. */}}
+  <p class="term-status bad">{{T "terminal.shell_failed"}}</p>
+  <pre class="term-status">{{.Reason}}</pre>
+</main>
+</body>
+</html>
+{{end}}
