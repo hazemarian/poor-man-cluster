@@ -302,6 +302,9 @@ func (a *App) Mount(engine *gin.Engine) {
 	tm := controllers.Terminal{Controller: a.ctrl}
 	op.GET("/stacks/:name/terminal", tm.Page)
 	op.GET("/stacks/:name/terminal/ws", tm.WS)
+	// The page beacons the browser's reason for a failed handshake; it is a diagnostic, not an
+	// action, so it is POST but goes nowhere near cluster state.
+	op.POST("/stacks/:name/terminal/report", tm.Report)
 
 	nd := controllers.Nodes{Controller: a.ctrl}
 	op.POST("/nodes/:hostname/storage", nd.Promote)

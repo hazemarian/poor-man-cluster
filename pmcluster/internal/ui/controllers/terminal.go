@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -23,14 +24,18 @@ type terminalPageData struct {
 	Service string
 	// WSURL is the /web route the page's javascript connects to. The console
 	// dials the daemon itself; the browser never sees the daemon address.
-	WSURL   string
-	Domain  string
-	Version string
+	WSURL     string
+	ReportURL string
+	Domain    string
+	Version   string
 }
 
 // Page renders the terminal document.
 func (t Terminal) Page(g *gin.Context) {
 	stack, service := g.Param("name"), g.Query("service")
+	// The page carries a per-render ticket and its own bootstrap: a cached copy is a page that
+	// cannot connect and cannot be told why. Never serve it from the browser cache.
+	g.Header("Cache-Control", "no-store, must-revalidate")
 	// One line per open. With this and the WS entry line below, "did the request reach the
 	// console at all" stops being a guess: no page line means the gate in front refused it before
 	// us, no WS line with a page line means the browser never opened the socket.
@@ -53,7 +58,24 @@ func (t Terminal) Page(g *gin.Context) {
 	ticket := t.Auth.SignTerminalToken(stack, service, time.Now())
 	d.WSURL = fmt.Sprintf("%s://%s%s/stacks/%s/terminal/ws?service=%s&t=%s",
 		scheme, host, WebBase, url.PathEscape(stack), url.QueryEscape(service), url.QueryEscape(ticket))
+	d.ReportURL = fmt.Sprintf("%s/stacks/%s/terminal/report?service=%s",
+		WebBase, url.PathEscape(stack), url.QueryEscape(service))
 	t.Views.Page(g, "terminal", d)
+}
+
+// Report is where the page tells the console why its socket failed.
+//
+// The browser is the only place a failed handshake is explained — "Could not start the terminal
+// session" is all it shows, while the reason (a proxy refusing the upgrade, a policy, a wrong
+// scheme) never reaches the server. The page beacons here on error, so the console's log carries
+// the browser's own view instead of an operator having to open DevTools on someone else's machine.
+func (t Terminal) Report(g *gin.Context) {
+	stack := g.Param("name")
+	body, _ := io.ReadAll(io.LimitReader(g.Request.Body, 4<<10))
+	t.Log.Warn().Str("stack", stack).Str("service", g.Query("service")).
+		Str("client", string(body)).Str("ua", g.Request.UserAgent()).
+		Msg("terminal: the browser could not open the socket")
+	g.Status(http.StatusNoContent)
 }
 
 // WS upgrades the browser's socket, dials the daemon's interactive exec

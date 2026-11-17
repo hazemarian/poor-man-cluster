@@ -109,7 +109,21 @@ document.addEventListener('DOMContentLoaded', function () {
       if (!statusEl.hidden) return;
       setStatus('{{T "terminal.closed"}}' + ' (' + ev.code + (ev.reason ? ': ' + ev.reason : '') + ')', true);
     };
-    ws.onerror = function () { setStatus('{{T "terminal.failed"}}', true); };
+    ws.onerror = function (ev) {
+      setStatus('{{T "terminal.failed"}}', true);
+      // Tell the console what the BROWSER saw: without this the server log is silent about a
+      // handshake that died on this side, and "Could not start the terminal session" is the only
+      // evidence anyone has.
+      try {
+        navigator.sendBeacon(
+          {{printf "%q" .ReportURL}},
+          new Blob([JSON.stringify({
+            url: url, readyState: ws.readyState, location: location.href,
+            secure: window.isSecureContext, ts: Date.now()
+          })], {type: 'application/json'})
+        );
+      } catch (e) {}
+    };
   }
 
   if (!window.Terminal) {
