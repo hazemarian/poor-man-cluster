@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/log"
@@ -53,9 +54,17 @@ func (w *otelWriter) Write(p []byte) (int, error) {
 	rec.SetObservedTimestamp(time.Now())
 	rec.SetSeverity(severityFromLevel(entry["level"]))
 	rec.SetSeverityText(stringField(entry["level"]))
-	if msg, ok := entry["message"].(string); ok {
-		rec.SetBody(log.StringValue(msg))
+	// The body is NEVER empty. Parseable rejects a record whose body carries no known value with
+	// "Could not deserialize into JSON object, Invalid data for Value, no known keys found" — and it
+	// rejects the WHOLE BATCH it arrived in, so one body-less line silently stops every other
+	// service's logs too. Measured: the edge started exporting and the entire logs stream went dark.
+	// A zerolog event with no `message` (fields only, or Msg("")) is therefore voiced with its own
+	// JSON, which is at least diagnosable.
+	msg, ok := entry["message"].(string)
+	if !ok || strings.TrimSpace(msg) == "" {
+		msg = strings.TrimSpace(string(p))
 	}
+	rec.SetBody(log.StringValue(msg))
 
 	for k, v := range entry {
 		switch k {
