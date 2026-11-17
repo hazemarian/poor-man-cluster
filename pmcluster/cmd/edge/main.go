@@ -16,13 +16,18 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/buildinfo"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/edgeproxy"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logger"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logging"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/telemetry"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui"
 )
 
@@ -35,9 +40,22 @@ func main() {
 
 func run() error {
 	proxyCfg := edgeproxy.FromEnv()
+
+	// Self-telemetry, the same way the daemon and the CLI do it: the console is a service like any
+	// other, so it must be able to answer "what did the UI do, and how slow was it" from the
+	// observability backend rather than from a shell on the leader.
+	//
+	// It ran for months with NO telemetry at all: the collector's filelog scrape deliberately skips
+	// the edge stack (its access-log volume was noise), and nothing else produced its records — so
+	// the console was the one service on the platform you could not investigate. Init runs BEFORE the
+	// logger is built, because the OTel log writer captures the global provider when it is created.
+	telemetryShutdown := initEdgeTelemetry()
+	defer telemetryShutdown()
+
 	// The edge shares PMCLUSTER_LOG_LEVEL with the daemon; its own LOG_LEVEL
-	// (set in the edge stack) is the fallback for standalone runs.
-	log := logging.ConfigureFromEnv(proxyCfg.LogLevel)
+	// (set in the edge stack) is the fallback for standalone runs. Every line also goes to the OTel
+	// log pipeline as structured JSON, so console logs carry level, service and trace context.
+	log := logging.ConfigureFromEnvWithSink(proxyCfg.LogLevel, logger.OTelWriter())
 	if err := edgeproxy.Validate(proxyCfg); err != nil {
 		return err
 	}
@@ -66,7 +84,14 @@ func run() error {
 		return fmt.Errorf("ui: %w", err)
 	}
 
-	handler := combineProxyAndUI(proxyCfg, app)
+	// Every outbound call — the console's API client and the reverse proxy's upstream — becomes a
+	// client span under the inbound one, so a slow page is a TRACE with a slow hop in it instead of
+	// an argument about which half is at fault. The proxy builds its own ReverseProxy with no
+	// transport, and the console's API client uses the default one, so instrumenting the default
+	// covers both rather than threading a client through two constructors.
+	http.DefaultTransport = otelhttp.NewTransport(http.DefaultTransport)
+
+	handler := otelhttp.NewHandler(combineProxyAndUI(proxyCfg, app), "pmcluster-edge")
 	srv := &http.Server{
 		Addr:              proxyCfg.ListenAddr,
 		Handler:           handler,
@@ -104,6 +129,41 @@ func run() error {
 		}
 		log.Info().Msg("pmcluster-edge stopped")
 		return nil
+	}
+}
+
+// initEdgeTelemetry wires the console into the platform's OTel pipeline and returns a flush
+// function to defer.
+//
+// The endpoint comes from OTEL_EXPORTER_OTLP_ENDPOINT, which the edge stack sets to the collector's
+// host-published port (the collector and the edge both run on the leader, so host.docker.internal is
+// the path from inside the container). Unset means no OTLP: a standalone run — a developer's laptop,
+// `pmcluster edge-up` — must not point an exporter at an address nobody answers on, which is the
+// shape of the 2026-11-08 journal storm.
+//
+// PMCLUSTER_NODE names the node the console runs on. Inside a container os.Hostname() is the
+// container id, so the stack passes the leader's hostname; without it the console's records would be
+// the only ones in the platform with no machine attached.
+func initEdgeTelemetry() func() {
+	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
+	if endpoint == "" {
+		return func() {}
+	}
+	shutdown, err := telemetry.Init(context.Background(), telemetry.Options{
+		Endpoint:       endpoint,
+		ServiceName:    "pmcluster-edge",
+		ServiceVersion: buildinfo.Version,
+		Node:           strings.TrimSpace(os.Getenv("PMCLUSTER_NODE")),
+	})
+	if err != nil {
+		// Telemetry must never be the reason the console does not start.
+		fmt.Fprintln(os.Stderr, "pmcluster-edge: telemetry disabled:", err)
+		return func() {}
+	}
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = shutdown(ctx)
 	}
 }
 

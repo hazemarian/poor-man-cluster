@@ -3,6 +3,27 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.371 — the console logs and traces like every other service
+
+The console was the one component you could not investigate: the collector's `receiver_creator`
+skips the `edge` stack on purpose (access-log volume), and nothing else produced its records. So
+"why is the page slow" and "what did the UI do" had no answer but a shell on the leader.
+
+The edge now ships OTLP itself (ADR 0010):
+
+- `telemetry.Init` with `service.name=pmcluster-edge`; endpoint from
+  `OTEL_EXPORTER_OTLP_ENDPOINT` (`http://host.docker.internal:4318` — the collector publishes on the
+  leader's host network and the edge runs there). Unset means no exporter, so a standalone console on
+  a laptop sends nothing anywhere.
+- **logs**: `logging.ConfigureFromEnvWithSink` keeps the human console output and also hands every
+  event to `logger.OTelWriter()` as zerolog JSON → an OTel log record with severity, fields and the
+  request's trace id. The tee is tested both ways: the sink must get JSON, the console must get text.
+- **spans**: an inbound `otelhttp` span named `pmcluster-edge` around the combined proxy+console
+  handler, plus a client span per outbound call by instrumenting `http.DefaultTransport` (the reverse
+  proxy has no transport of its own and the console's API client uses the default one).
+- `PMCLUSTER_NODE` names the leader, because inside a container `os.Hostname()` is the container id.
+- The `edge` scrape exclusion stays: OTLP is the better path, duplicating it would be worse data.
+
 ## v0.2.367 — the shell works, proved on a live stack
 
 Everything below was found by opening a real session against production, not by reading the code.

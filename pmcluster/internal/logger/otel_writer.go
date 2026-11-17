@@ -3,6 +3,7 @@ package logger
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"time"
 
 	"go.opentelemetry.io/otel/log"
@@ -20,6 +21,13 @@ import (
 type otelWriter struct {
 	logger log.Logger
 }
+
+// OTelWriter returns an io.Writer that turns each zerolog JSON line into an OTel log record.
+//
+// Call it AFTER telemetry.Init: the writer captures the global LoggerProvider when it is built, so a
+// writer made before Init would hold the noop provider forever and every record would vanish without
+// an error.
+func OTelWriter() io.Writer { return newOTelWriter() }
 
 func newOTelWriter() *otelWriter {
 	return &otelWriter{

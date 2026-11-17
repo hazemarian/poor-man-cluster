@@ -133,13 +133,47 @@ func configureFromEnv(fallback string, out io.Writer) zerolog.Logger {
 
 // configure builds the console logger and sets the process-wide level.
 func configure(name string, out io.Writer) zerolog.Logger {
+	return configureWithSink(name, out, nil)
+}
+
+// ConfigureFromEnvWithSink is ConfigureFromEnv plus a STRUCTURED sink: the console keeps its
+// human-readable formatting and every event is ALSO written, as zerolog JSON, to sink.
+//
+// The sink is how a containerised component ships its logs over OTLP instead of waiting to be
+// scraped off a disk the collector may not share. The console writer formats; the sink sees the raw
+// bytes, which is what an OTel log bridge can decode.
+func ConfigureFromEnvWithSink(fallback string, sink io.Writer) zerolog.Logger {
+	return configureFromEnvWithSink(fallback, os.Stderr, sink)
+}
+
+func configureFromEnvWithSink(fallback string, out, sink io.Writer) zerolog.Logger {
+	fallback = LevelOrDefault(fallback, DefaultLevel)
+	raw := strings.TrimSpace(os.Getenv(EnvVar))
+	name := Normalize(raw)
+	if raw != "" && name == "" {
+		log := configureWithSink(fallback, out, sink)
+		log.Warn().Str("env", EnvVar).Str("value", raw).Str("using", fallback).
+			Msg("unknown log level — allowed: " + AllowedNames)
+		return log
+	}
+	if name == "" {
+		name = fallback
+	}
+	return configureWithSink(name, out, sink)
+}
+
+func configureWithSink(name string, out io.Writer, sink io.Writer) zerolog.Logger {
 	if out == nil {
 		out = os.Stderr
 	}
 	lvl, _ := Parse(name)
 	zerolog.SetGlobalLevel(lvl)
 
-	return zerolog.New(zerolog.ConsoleWriter{Out: out, TimeFormat: time.RFC3339}).
-		Level(lvl).
-		With().Timestamp().Logger()
+	var w io.Writer = zerolog.ConsoleWriter{Out: out, TimeFormat: time.RFC3339}
+	if sink != nil {
+		// ConsoleWriter first so a human watching `docker logs` still sees the line even if the
+		// structured sink is slow or broken.
+		w = zerolog.MultiLevelWriter(zerolog.ConsoleWriter{Out: out, TimeFormat: time.RFC3339}, sink)
+	}
+	return zerolog.New(w).Level(lvl).With().Timestamp().Logger()
 }

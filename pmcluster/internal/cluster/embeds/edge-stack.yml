@@ -47,6 +47,20 @@ services:
       # storage so the operator is signed in, and it is rendered from one source
       # (RenderInput.ObservabilityBasicAuth), not typed anywhere.
       OBSERVABILITY_BASIC_AUTH: "[[.ObservabilityBasicAuth]]"
+      # Self-telemetry — the console is a service like any other (ADR 0010 in the repo docs).
+      #
+      # The collector publishes OTLP/HTTP 4318 on the LEADER's host network (mode: host) and this
+      # service is placed on the leader, so host.docker.internal is the path from inside the
+      # container; there is no monitoring-net here and none is needed.
+      #
+      # The console's container logs are NOT scraped: the collector's receiver_creator skips the
+      # `edge` stack on purpose (access-log volume with no query value), which is exactly why the
+      # console used to be the one service with no logs anywhere. It ships its own OTLP instead,
+      # so keep this pair — removing the endpoint silently returns the UI to being invisible.
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://host.docker.internal:4318"
+      # Inside a container os.Hostname() is the container id, so the node name has to be passed in
+      # or every console record is the only one in the platform with no machine attached.
+      PMCLUSTER_NODE: "[[ if .LeaderNode ]][[.LeaderNode]][[ end ]]"
     volumes:
       [[- if not .EdgeLoginDisabled]]
       - "pmui-data:/data"
