@@ -80,7 +80,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function connect() {
     // The server renders the correct ws/wss URL for the current request.
-    var url = {{printf "%q" .WSURL}};
+    // html/template already knows this is a JS string context and quotes+escapes the value.
+    // Wrapping it in printf "%q" as well double-quoted it, so the browser received a URL that
+    // began with a literal quote, refused it as invalid, and reported "could not start the
+    // terminal session" without ever sending a request.
+    var url = {{.WSURL}};
     if (!/^wss?:\/\//.test(url)) {
       url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + url;
     }
@@ -116,7 +120,7 @@ document.addEventListener('DOMContentLoaded', function () {
       // evidence anyone has.
       try {
         navigator.sendBeacon(
-          {{printf "%q" .ReportURL}},
+          {{.ReportURL}},
           new Blob([JSON.stringify({
             url: url, readyState: ws.readyState, location: location.href,
             secure: window.isSecureContext, ts: Date.now()

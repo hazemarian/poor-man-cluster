@@ -88,11 +88,35 @@ func TestTerminalPageRenders(t *testing.T) {
 	if !strings.Contains(b, "addEventListener('DOMContentLoaded'") {
 		t.Error("the terminal page starts before its deferred scripts: its inline code must wait for DOMContentLoaded, or xterm is always undefined")
 	}
+	// The socket URL must be emitted as ONE JS string. html/template quotes a string in a JS
+	// context by itself; adding printf "%q" as well produced `var url = "\"ws://…\""`, and the
+	// browser refused a URL that began with a literal quote — reporting "could not start the
+	// terminal session" while never sending a single request. Assert the rendered source, not the
+	// value, because the bug lived in the quoting.
+	if strings.Contains(b, `\"ws`) || strings.Contains(b, `\"wss`) {
+		t.Errorf("the socket URL is double-quoted in the rendered JS: %s",
+			firstLineContaining(b, "var url"))
+	}
+	if !strings.Contains(b, `var url = "ws`) && !strings.Contains(b, `var url = "wss`) {
+		t.Errorf("the socket URL is not a plain JS string: %s", firstLineContaining(b, "var url"))
+	}
+
 	// The rendered URL carries a cache-busting query, so match the attribute pair rather than the
 	// literal tag.
 	if !strings.Contains(b, "xterm.min.js?v=") || !strings.Contains(b, " defer></script>") {
 		t.Error("xterm.min.js is no longer deferred; if that changed deliberately, this test's premise is stale")
 	}
+}
+
+// firstLineContaining returns the first line of s that contains sub, for failure messages that
+// quote the offending source instead of describing it.
+func firstLineContaining(s, sub string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if strings.Contains(line, sub) {
+			return strings.TrimSpace(line)
+		}
+	}
+	return "(no line contains " + sub + ")"
 }
 
 // TestTerminalWSBridge drives the full relay: browser → console WS → daemon

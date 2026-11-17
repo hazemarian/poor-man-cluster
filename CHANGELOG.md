@@ -3,6 +3,26 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.364 — the socket URL is a string, not a quoted string
+
+Three separate faults kept the interactive terminal from ever connecting, and this is the last and
+oldest of them: the page emitted
+
+```js
+var url = "\"wss://pmcluster.…/terminal/ws?service=db\u0026t=…\"";
+```
+
+`{{printf "%q" .WSURL}}` inside a `<script>` block double-quotes the value — html/template already
+quotes a string in a JS context. The browser received a URL that began with a literal `"`, rejected
+it as invalid, and reported "could not start the terminal session" **without sending a request**.
+That is why the server log showed the page being served and never a handshake, for every attempt on
+every node.
+
+The template now emits `{{.WSURL}}` and lets html/template do the quoting, and the page test asserts
+the rendered source (it fails on the old form, quoting the exact broken line). The same fix applies
+to the diagnostic beacon added alongside it, and the page is served `no-store` so a browser cannot
+hold an older copy that carries no ticket.
+
 ## v0.2.363 — the socket carries a ticket, because a websocket cannot ride the gate
 
 v0.2.362 got the page running — it rendered, xterm loaded, it tried to connect — and the socket
