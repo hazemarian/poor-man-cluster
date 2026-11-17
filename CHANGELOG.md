@@ -3,6 +3,24 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.363 — the socket carries a ticket, because a websocket cannot ride the gate
+
+v0.2.362 got the page running — it rendered, xterm loaded, it tried to connect — and the socket
+still failed. The console never saw it: production logged two "terminal: page served" lines for the
+stack and zero "websocket handshake arrived" lines. The request dies between the browser and the
+console, and the only thing in that gap is Traefik's forwardAuth: the gate re-issues the handshake to
+oauth2-proxy, the browser's upgrade never completes, and the console is never called. Pages are
+unaffected, which is why every other screen worked.
+
+So the socket proves itself instead of riding the gate:
+
+- the page render — still behind the gate — mints a **ticket**: HMAC-SHA256 over
+  `stack|service|expiry`, keyed with the console's own session secret, valid two minutes;
+- the socket URL carries it, and the console verifies it **before** upgrading, refusing 403
+  otherwise. The signed payload is authoritative, so a caller cannot widen a ticket it did not mint;
+- Traefik gets `pmcluster-terminal-ws`: its own router at priority 2000, no auth middleware, matching
+  exactly `^/web/stacks/[^/]+/terminal/ws$` and nothing else.
+
 ## v0.2.362 — the terminal page waits for xterm, and then it works
 
 The interactive terminal has never worked in any browser. `xterm.min.js` is loaded with `defer`,
