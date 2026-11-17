@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
@@ -155,6 +156,12 @@ func (r *realClient) ShellRemove(ctx context.Context, serviceID string) error {
 		return nil
 	}
 	if err := r.c.ServiceRemove(ctx, serviceID); err != nil {
+		// Already gone is success. The session's socket close removes the service, so a caller that
+		// also deletes it — the console's onclose, a script, the sweeper racing a close — arrives a
+		// moment too late and must not be told it failed.
+		if cerrdefs.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("remove shell service: %w", err)
 	}
 	return nil
