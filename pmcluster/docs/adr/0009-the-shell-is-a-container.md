@@ -51,7 +51,11 @@ service terminal does.
 - the daemon removes the service when the socket closes, whatever closed it;
 - the container's own command is `sleep 1800`, so a crashed console cannot leave one behind;
 - `pmcluster.shell=true` labels every session, with `pmcluster.shell.stack` and
-  `pmcluster.shell.created`, so a leftover is identifiable and sweepable.
+  `pmcluster.shell.created`, so a leftover is identifiable and sweepable;
+- every five minutes the daemon collects sessions whose `created` stamp is older than the ceiling.
+  Without that, a console that dies without a close frame leaves a service whose task ends at 30
+  minutes and is then **restarted by the orchestrator, forever** — the ceiling bounds the container,
+  not the service.
 
 **The image is `ghcr.io/hazemarian/pmcluster-shell:<version>`** (built by the release workflow from
 `Dockerfile.shell`): Alpine with **both** client stacks — PostgreSQL (`psql`, `pg_dump`,

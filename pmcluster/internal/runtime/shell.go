@@ -90,4 +90,15 @@ type ShellRuntime interface {
 	StackNetworks(ctx context.Context, stack string) ([]string, error)
 	// SelfHostname is the node this daemon runs on, which is where the shell must be scheduled.
 	SelfHostname(ctx context.Context) (string, error)
+	// ShellList returns every shell session this node still has, for the sweeper. A session whose
+	// console died without closing its socket stops running at ShellMaxLife, but its SERVICE stays
+	// and the orchestrator keeps restarting it — so something has to collect them.
+	ShellList(ctx context.Context) ([]ShellRef, error)
+}
+
+// ShellRef is one leftover session, as the sweeper sees it.
+type ShellRef struct {
+	ServiceID string
+	Stack     string
+	Created   time.Time
 }

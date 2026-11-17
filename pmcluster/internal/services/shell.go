@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
@@ -61,13 +62,54 @@ func (l Local) OpenShell(ctx context.Context, req ShellRequest) (ShellSession, e
 	if err != nil {
 		return ShellSession{}, err
 	}
-	cid, err := shell.ShellContainerOn(ctx, id, node)
+	// The container is NOT waited for here. Pulling the shell image takes longer than an HTTP
+	// request may last — measured: the first pull of pmcluster-shell blew the daemon's request
+	// deadline and the operator got "context deadline exceeded" with a healthy container behind it.
+	// The socket waits instead (ShellContainer), where there is no request deadline and the page can
+	// say "starting".
+	return ShellSession{ServiceID: id, Node: node}, nil
+}
+
+// ReapStaleShells removes sessions that outlived their welcome.
+//
+// Two leaks this closes, both real:
+//
+//   - a console that died without closing its socket leaves a SERVICE behind. The container's own
+//     `sleep` ends it at ShellMaxLife, but the orchestrator then restarts the task, forever;
+//   - a session whose teardown failed is never retried by anyone.
+//
+// Only sessions older than max are touched, and that age comes from the label the creator stamped —
+// never from "it looks idle", because an operator typing for twenty minutes is indistinguishable
+// from an abandoned shell.
+func ReapStaleShells(ctx context.Context, rt runtime.ShellRuntime, now time.Time, max time.Duration) (int, error) {
+	refs, err := rt.ShellList(ctx)
 	if err != nil {
-		// Do not leave a container behind because the wait failed.
-		_ = shell.ShellRemove(context.WithoutCancel(ctx), id)
-		return ShellSession{}, err
+		return 0, err
 	}
-	return ShellSession{ServiceID: id, ContainerID: cid, Node: node}, nil
+	removed := 0
+	var firstErr error
+	for _, ref := range refs {
+		if ref.Created.IsZero() || now.Sub(ref.Created) < max {
+			continue
+		}
+		if rerr := rt.ShellRemove(ctx, ref.ServiceID); rerr != nil {
+			if firstErr == nil {
+				firstErr = rerr
+			}
+			continue
+		}
+		removed++
+	}
+	return removed, firstErr
+}
+
+// ShellContainer resolves the running container for a session, waiting for the task to start.
+func (l Local) ShellContainer(ctx context.Context, serviceID, node string) (string, error) {
+	shell, ok := l.Shell()
+	if !ok {
+		return "", fmt.Errorf("this node cannot exec into a container")
+	}
+	return shell.ShellContainerOn(ctx, serviceID, node)
 }
 
 // CloseShell destroys the session. Called when the socket closes, for any reason.

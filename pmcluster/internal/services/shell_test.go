@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
@@ -20,6 +21,8 @@ type fakeShell struct {
 	spec      runtime.ShellServiceSpec
 	created   int
 	removed   []string
+	sessions  []runtime.ShellRef
+	listErr   error
 }
 
 func (f *fakeShell) ShellCreate(_ context.Context, spec runtime.ShellServiceSpec) (string, error) {
@@ -51,6 +54,10 @@ func (f *fakeShell) SelfHostname(_ context.Context) (string, error) {
 	return f.node, f.nodeErr
 }
 
+func (f *fakeShell) ShellList(_ context.Context) ([]runtime.ShellRef, error) {
+	return f.sessions, f.listErr
+}
+
 // shellClients is a runtime.Client whose ShellRuntime half is the fake above.
 type shellClients struct {
 	runtime.Client
@@ -71,6 +78,9 @@ func (c shellClients) StackNetworks(ctx context.Context, stack string) ([]string
 }
 func (c shellClients) SelfHostname(ctx context.Context) (string, error) {
 	return c.shell.SelfHostname(ctx)
+}
+func (c shellClients) ShellList(ctx context.Context) ([]runtime.ShellRef, error) {
+	return c.shell.ShellList(ctx)
 }
 
 // TestOpenShell_PinsTheSessionToThisNode is the property the whole design rests on: the container
@@ -97,8 +107,14 @@ func TestOpenShell_PinsTheSessionToThisNode(t *testing.T) {
 	if sh.spec.Life != runtime.ShellMaxLife {
 		t.Errorf("shell life = %v, want %v", sh.spec.Life, runtime.ShellMaxLife)
 	}
-	if sess.ContainerID != "container-id" || sess.ServiceID != "svc-id" {
+	if sess.ServiceID != "svc-id" {
 		t.Errorf("session = %+v", sess)
+	}
+	// The container is resolved by the SOCKET, not here: an HTTP request may not last as long as the
+	// image pull. A session that carried a container id would mean the wait moved back into the
+	// request path, where it blew the daemon's deadline in production.
+	if sess.ContainerID != "" {
+		t.Errorf("OpenShell waited for the container (%q) — that belongs to the socket", sess.ContainerID)
 	}
 }
 
@@ -119,19 +135,18 @@ func TestOpenShell_RefusesAStackWithNothingToReach(t *testing.T) {
 	}
 }
 
-// TestOpenShell_CleansUpWhenTheContainerNeverStarts: a wait failure must not leave a service behind.
-func TestOpenShell_CleansUpWhenTheContainerNeverStarts(t *testing.T) {
+// TestShellContainer_ReportsAWaitFailure: the socket waits for the container, and when the image
+// never runs it gets the reason rather than a silent close.
+func TestShellContainer_ReportsAWaitFailure(t *testing.T) {
 	sh := &fakeShell{
 		node:     "n",
 		networks: []string{"net-a"},
 		waitErr:  errors.New("image pull failed"),
 	}
 	svc := Local{Docker: shellClients{shell: sh}}
-	if _, err := svc.OpenShell(context.Background(), ShellRequest{Stack: "aarma", Image: "img"}); err == nil {
-		t.Fatal("OpenShell succeeded although the container never started")
-	}
-	if len(sh.removed) != 1 || sh.removed[0] != "svc-id" {
-		t.Errorf("the half-created service was not removed: %v", sh.removed)
+	_, err := svc.ShellContainer(context.Background(), "svc-id", "n")
+	if err == nil || !strings.Contains(err.Error(), "image pull failed") {
+		t.Fatalf("ShellContainer = %v, want the engine's reason", err)
 	}
 }
 
@@ -159,6 +174,34 @@ func TestOpenShell_ReportsAnEngineWithoutShellSupport(t *testing.T) {
 		t.Fatal("a client without shell support produced a session")
 	} else if !strings.Contains(err.Error(), "cannot create a shell session") {
 		t.Errorf("unclear refusal: %v", err)
+	}
+}
+
+// TestReapStaleShells_TakesOnlySessionsPastTheirCeiling: the sweeper exists because a console that
+// dies without closing its socket leaves a service the orchestrator keeps restarting. It must never
+// touch a session somebody is still typing in — age comes from the creator's label, not from idleness.
+func TestReapStaleShells_TakesOnlySessionsPastTheirCeiling(t *testing.T) {
+	now := time.Date(2026, 11, 17, 2, 0, 0, 0, time.UTC)
+	sh := &fakeShell{sessions: []runtime.ShellRef{
+		{ServiceID: "old-1", Stack: "aarma", Created: now.Add(-40 * time.Minute)},
+		{ServiceID: "old-2", Stack: "shop", Created: now.Add(-31 * time.Minute)},
+		{ServiceID: "fresh", Stack: "aarma", Created: now.Add(-3 * time.Minute)},
+		{ServiceID: "unlabelled", Stack: "aarma"}, // no created stamp: leave it alone
+	}}
+	n, err := ReapStaleShells(context.Background(), shellClients{shell: sh}, now, runtime.ShellMaxLife)
+	if err != nil {
+		t.Fatalf("ReapStaleShells: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("swept %d sessions, want 2", n)
+	}
+	if len(sh.removed) != 2 || sh.removed[0] != "old-1" || sh.removed[1] != "old-2" {
+		t.Errorf("swept %v, want the two past their ceiling", sh.removed)
+	}
+	for _, gone := range sh.removed {
+		if gone == "fresh" || gone == "unlabelled" {
+			t.Errorf("the sweeper removed %q — a live or un-stamped session", gone)
+		}
 	}
 }
 

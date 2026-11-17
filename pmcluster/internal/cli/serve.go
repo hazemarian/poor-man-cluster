@@ -598,11 +598,32 @@ func runServe(cmd *cobra.Command, _ []string) error {
 			if err != nil {
 				return "", err
 			}
-			return shellRT.ShellContainerOn(ctx, serviceID, node)
+			return shellLocal.ShellContainer(ctx, serviceID, node)
 		}
 		closeShell = func(ctx context.Context, serviceID string) error {
 			return shellRT.ShellRemove(ctx, serviceID)
 		}
+		// Nothing here outlives its socket — except when the console does. A browser that vanishes
+		// without a close frame leaves a SERVICE whose task ends at ShellMaxLife and is then restarted
+		// by the orchestrator, forever. The sweeper is the answer for that one case; it only touches
+		// sessions older than the ceiling, so a session somebody is typing in is never taken.
+		go func() {
+			tick := time.NewTicker(5 * time.Minute)
+			defer tick.Stop()
+			for {
+				select {
+				case <-cmd.Context().Done():
+					return
+				case now := <-tick.C:
+					n, err := services.ReapStaleShells(cmd.Context(), shellRT, now, runtime.ShellMaxLife+2*time.Minute)
+					if err != nil {
+						log.Warn().Err(err).Msg("shell: the sweeper could not collect a stale session")
+					} else if n > 0 {
+						log.Info().Int("sessions", n).Msg("shell: swept sessions a console left behind")
+					}
+				}
+			}
+		}()
 	}
 
 	deps := server.Deps{
@@ -939,7 +960,15 @@ func shellImage(requested string) string {
 	if env := os.Getenv("PMCLUSTER_SHELL_IMAGE"); env != "" {
 		return env
 	}
-	return "ghcr.io/hazemarian/pmcluster-shell:" + buildinfo.Version
+	// A build without a version stamp ("dev", or an unstamped local build) would ask for
+	// ghcr.io/hazemarian/pmcluster-shell:dev, a tag that cannot exist — measured live: the task sat
+	// in "Rejected: not found" and the terminal had nothing to attach to. Such a build gets :latest.
+	tag := buildinfo.Version
+	switch tag {
+	case "", "dev", "unknown", "none":
+		tag = "latest"
+	}
+	return "ghcr.io/hazemarian/pmcluster-shell:" + tag
 }
 
 // storageNodeFor reports whether this host is currently designated a storage node, read from the

@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -29,18 +30,37 @@ func (r *realClient) ShellCreate(ctx context.Context, spec runtime.ShellServiceS
 	}
 	name := shellName(spec.Stack)
 
+	// A file-target mount needs the object's ID as well as its name: the engine refuses a
+	// name-only reference with "malformed secret reference". The mount NAME is the operator-facing
+	// one — the swarm object is <name>_<hash8>, and /run/secrets/<name>_<hash8> would be a puzzle
+	// where /run/secrets/<name> is what every stack's service already sees.
 	mounts := make([]*swarm.SecretReference, 0, len(spec.SecretNames))
 	for _, n := range spec.SecretNames {
+		meta, _, ierr := r.c.SecretInspectWithRaw(ctx, n)
+		if ierr != nil {
+			return "", fmt.Errorf("shell: secret %s is not in the swarm: %w", n, ierr)
+		}
 		mounts = append(mounts, &swarm.SecretReference{
+			SecretID:   meta.ID,
 			SecretName: n,
-			File:       &swarm.SecretReferenceFileTarget{Name: n, UID: "0", GID: "0", Mode: 0o400},
+			File:       &swarm.SecretReferenceFileTarget{Name: mountName(n), UID: "0", GID: "0", Mode: 0o400},
 		})
 	}
 	cfgMounts := make([]*swarm.ConfigReference, 0, len(spec.ConfigNames))
 	for _, n := range spec.ConfigNames {
+		meta, _, ierr := r.c.ConfigInspectWithRaw(ctx, n)
+		if ierr != nil {
+			return "", fmt.Errorf("shell: config %s is not in the swarm: %w", n, ierr)
+		}
 		cfgMounts = append(cfgMounts, &swarm.ConfigReference{
+			ConfigID:   meta.ID,
 			ConfigName: n,
-			File:       &swarm.ConfigReferenceFileTarget{Name: n, UID: "0", GID: "0", Mode: 0o444},
+			// A config's File.Name is its path RELATIVE TO /, unlike a secret's, which the runtime
+			// places under /run/secrets. Measured: Name "aarma_admin_phones" landed the file at
+			// /aarma_admin_phones — root of the container, one typo away from clobbering /bin.
+			File: &swarm.ConfigReferenceFileTarget{
+				Name: "run/configs/" + mountName(n), UID: "0", GID: "0", Mode: 0o444,
+			},
 		})
 	}
 
@@ -172,6 +192,48 @@ func (r *realClient) SelfHostname(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("docker info reported no node name")
 	}
 	return info.Name, nil
+}
+
+// ShellList returns the shell sessions this node still holds. The labels live on the service spec,
+// so the created stamp is read from there rather than from the task.
+func (r *realClient) ShellList(ctx context.Context) ([]runtime.ShellRef, error) {
+	services, err := r.c.ServiceList(ctx, swarm.ServiceListOptions{
+		Filters: filters.NewArgs(filters.Arg("label", runtime.ShellLabel+"=true")),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list shell services: %w", err)
+	}
+	out := make([]runtime.ShellRef, 0, len(services))
+	for _, svc := range services {
+		ref := runtime.ShellRef{ServiceID: svc.ID}
+		if svc.Spec.Labels != nil {
+			ref.Stack = svc.Spec.Labels[runtime.ShellStackLabel]
+			if secs, perr := strconv.ParseInt(svc.Spec.Labels[runtime.ShellCreatedLabel], 10, 64); perr == nil {
+				ref.Created = time.Unix(secs, 0)
+			}
+		}
+		out = append(out, ref)
+	}
+	return out, nil
+}
+
+// mountName is the file name a mounted swarm object gets inside the shell: the swarm name without
+// its content hash, so an operator finds /run/secrets/<name> and not /run/secrets/<name>_a1b2c3d4.
+func mountName(swarmName string) string {
+	if i := len(swarmName) - 9; i > 0 && swarmName[i] == '_' {
+		hash := swarmName[i+1:]
+		isHex := true
+		for _, c := range hash {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+				isHex = false
+				break
+			}
+		}
+		if isHex {
+			return swarmName[:i]
+		}
+	}
+	return swarmName
 }
 
 func shellName(stack string) string {

@@ -3,6 +3,35 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.367 — the shell works, proved on a live stack
+
+Everything below was found by opening a real session against production, not by reading the code.
+
+- **The shell mounted nothing.** A stack's secrets are stored with scope `service` and the stack in
+  the row; the code asked for scope `stack`. The same query also returns the stackless secrets every
+  stack shares, so the fix keeps only the rows belonging to the stack being opened — and the same for
+  configs, tested with a shared row, another stack's row and a cluster row.
+- **`malformed secret reference`**: a file-target mount needs the object's resolved ID as well as its
+  name. Mounts now use the short name too — `/run/secrets/database_url`, not
+  `/run/secrets/database_url_4fd63b9c`.
+- **Configs landed at the container root** (`/aarma_admin_phones`) because a config's `File.Name` is a
+  path relative to `/`, unlike a secret's. They now mount at `/run/configs/<name>`.
+- **The first pull blew the request deadline** — the operator got `context deadline exceeded` with a
+  healthy container behind it. The container is no longer awaited by the HTTP request; the socket
+  waits, where there is no deadline.
+- **`DELETE /api/shells/{id}` answered 502 and left the session running**: the id was trimmed with the
+  websocket prefix (`/api/shell/`), which never matches `/api/shells/…`, so the whole path went to
+  dockerd as a service id.
+- **A build without a version stamp asked for `pmcluster-shell:dev`**, a tag that cannot exist; the
+  task sat in "Rejected: not found". Such builds get `:latest`.
+- **The sweeper**: a console that dies without a close frame leaves a service whose task ends at 30
+  minutes and is then restarted by the orchestrator forever. Every 5 minutes the daemon collects
+  sessions older than the ceiling — and only those, so a session somebody is typing in is never taken.
+
+Live proof on `aarma` (leader `nxt-sw-5-m`): `psql 16.14` and MariaDB's `mysql` client present, four
+secrets at `/run/secrets`, two configs at `/run/configs`, `aarma_db:5432` reachable on the stack
+network, `DELETE` → 204, zero leftover services.
+
 ## v0.2.365 — the terminal gets a shell, not a scavenger hunt
 
 Interactive exec only works where the container is, and the console's daemon is the leader — so a
