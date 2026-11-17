@@ -18,6 +18,10 @@ import (
 // not a (stack, service) pair of the user's stack.
 const shellWSPathPrefix = "/api/shell/"
 
+// shellResourcePrefix is the collection a session is deleted from. Distinct from the websocket
+// prefix on purpose, and confusing them cost a "page not found" on every teardown.
+const shellResourcePrefix = "/api/shells/"
+
 // ShellOpenHandler opens a shell session for a stack: it creates the throwaway container, waits for
 // it to run on this node, and answers the IDs the console needs to connect and to tear down.
 //
@@ -136,7 +140,13 @@ func ShellRemoveHandler(d Deps) http.HandlerFunc {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, shellWSPathPrefix), "/")
+		// The resource prefix, not the websocket one: "/api/shell/" never matches "/api/shells/…",
+		// so trimming it left the whole path as the id and dockerd answered "page not found".
+		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, shellResourcePrefix), "/")
+		if id == "" || strings.Contains(id, "/") {
+			http.Error(w, "shell id is required", http.StatusBadRequest)
+			return
+		}
 		if err := d.CloseShell(r.Context(), id); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return

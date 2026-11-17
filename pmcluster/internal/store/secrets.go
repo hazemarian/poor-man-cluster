@@ -53,6 +53,37 @@ type SecretRow struct {
 // of truth for "which is the latest": translation looks up the row, takes
 // its Hash, and derives the exact swarm secret name to reference. The
 // container mount path stays /run/secrets/<name> regardless.
+// StackSwarmSecretNames returns the SWARM object names a given stack's own secrets are mirrored as.
+//
+// Two rules that cost a live session to learn:
+//
+//   - a stack's secrets are stored with scope "service" and the stack in the row, so querying
+//     scope "stack" finds nothing and the shell mounts nothing;
+//   - ListSecrets also returns the STACKLESS service-scope secrets (shared by every stack), and those
+//     must NOT be mounted into one stack's shell — the filter below keeps only this stack's rows.
+func StackSwarmSecretNames(metas []*SecretMeta, stack string) []string {
+	var out []string
+	for _, m := range metas {
+		if m == nil || m.Stack != stack || m.Name == "" {
+			continue
+		}
+		out = append(out, SwarmSecretName(m.Name, m.Hash))
+	}
+	return out
+}
+
+// StackSwarmConfigNames is the config analogue of StackSwarmSecretNames.
+func StackSwarmConfigNames(rows []*ConfigRow, stack string) []string {
+	var out []string
+	for _, r := range rows {
+		if r == nil || r.Stack != stack || r.Name == "" {
+			continue
+		}
+		out = append(out, SwarmConfigName(r.Name, r.Hash))
+	}
+	return out
+}
+
 func SwarmSecretName(name, hash string) string {
 	if len(hash) < 8 {
 		return name

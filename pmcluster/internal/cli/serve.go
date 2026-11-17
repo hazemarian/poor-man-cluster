@@ -574,20 +574,22 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	var closeShell func(ctx context.Context, serviceID string) error
 	if shellRT, ok := dc.(runtime.ShellRuntime); ok {
 		openShell = func(ctx context.Context, stack, image string) (services.ShellSession, error) {
-			secrets, err := st.ListSecrets(ctx, "stack", stack)
+			// Scope "service" is where a stack's secrets actually live (with the stack in the row);
+			// the helpers keep only this stack's rows, because the same query also returns the
+			// stackless service-scope secrets that belong to no stack in particular.
+			secrets, err := st.ListSecrets(ctx, "service", stack)
 			if err != nil {
 				return services.ShellSession{}, err
 			}
-			configs, err := st.ListConfigs(ctx, "stack", stack)
+			configs, err := st.ListConfigs(ctx, "service", stack)
 			if err != nil {
 				return services.ShellSession{}, err
 			}
-			req := services.ShellRequest{Stack: stack, Image: shellImage(image)}
-			for _, s := range secrets {
-				req.SecretNames = append(req.SecretNames, store.SwarmSecretName(s.Name, s.Hash))
-			}
-			for _, c := range configs {
-				req.ConfigNames = append(req.ConfigNames, store.SwarmConfigName(c.Name, c.Hash))
+			req := services.ShellRequest{
+				Stack:       stack,
+				Image:       shellImage(image),
+				SecretNames: store.StackSwarmSecretNames(secrets, stack),
+				ConfigNames: store.StackSwarmConfigNames(configs, stack),
 			}
 			return shellLocal.OpenShell(ctx, req)
 		}
