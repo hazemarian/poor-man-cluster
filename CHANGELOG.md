@@ -3,6 +3,17 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.372 — the console's telemetry actually arrives
+
+v0.2.371 shipped the instrumentation and delivered nothing: every export failed with
+`Post "http://host.docker.internal:4318/v1/logs": processor export timeout`. The address was the
+obvious one — the collector publishes OTLP on the leader's host network and the edge runs on the
+leader — and it is unreachable from a container on an overlay network. Measured from both sides: the
+host POSTs in 3 ms (200), a container on the same network as the edge times out.
+
+The edge now joins `monitoring-net` and exports to the collector's overlay alias,
+`http://otel-collector:4318`, which answers 200 from a container.
+
 ## v0.2.371 — the console logs and traces like every other service
 
 The console was the one component you could not investigate: the collector's `receiver_creator`

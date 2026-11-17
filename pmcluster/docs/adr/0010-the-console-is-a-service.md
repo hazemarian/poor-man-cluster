@@ -24,12 +24,17 @@ collector's container rules to change.
 
 - `cmd/edge` calls `telemetry.Init` with `service.name = pmcluster-edge`, so its logs, spans and any
   future metrics arrive through the same collector as the daemon's.
-- **Endpoint:** `OTEL_EXPORTER_OTLP_ENDPOINT=http://host.docker.internal:4318`, set by the edge
-  stack. The collector publishes OTLP/HTTP on the **leader's host network** (`mode: host`) and the
-  edge is placed on the leader, so that hostname is the path from inside the container. No
-  `monitoring-net` membership is needed and none was added. Unset means **no exporter**: a standalone
-  console on a laptop must not point at an address nobody answers on — that is the shape of the
-  2026-11-08 journal storm.
+- **Endpoint:** `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318` — the collector's overlay
+  alias — and the edge joins `monitoring-net` to reach it.
+  The obvious address was `host.docker.internal:4318`: the collector publishes OTLP/HTTP on the
+  leader's host network (`mode: host`) and the edge runs on the leader. **Measured, it does not
+  work**: from a container on an overlay network, `172.17.0.1:4318` times out while the host answers
+  the same POST in 3 ms, so the edge reported `Post …/v1/logs: processor export timeout` for every
+  batch and delivered nothing. `otel-collector:4318` on `monitoring-net` answers 200. A container's
+  route to the host's bridge gateway is not the host's port table; reachability has to be measured
+  from the network the caller is actually on.
+  Unset means **no exporter**: a standalone console on a laptop must not point at an address nobody
+  answers on — that is the shape of the 2026-11-08 journal storm.
 - **Node identity** comes from `PMCLUSTER_NODE`, which the stack renders from the leader's hostname.
   Inside a container `os.Hostname()` is the container id, so without it the console's records would be
   the only ones in the platform with no machine attached.
