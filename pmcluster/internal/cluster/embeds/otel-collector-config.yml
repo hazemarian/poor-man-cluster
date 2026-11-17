@@ -264,7 +264,12 @@ processors:
         # object, Invalid data for Value, no known keys found" — every ten seconds, for every
         # service on the platform. One app's binary output must not blind the cluster's logs, so a
         # record no log store can accept is dropped here, where it is attributable.
-        - 'IsMatch(body, "[\\x00]")' 
+        # NOTE the two forms. A record's body can carry a REAL control byte, or the text of the
+        # escape the container wrote into its log file ("\u0000", six literal characters) — the
+        # second is what an unterminated binary line looks like after Docker's JSON envelope failed
+        # to parse, and it is the form actually seen here. Matching only the byte form changed
+        # nothing, which is what a filter that matches nothing looks like from the outside.
+        - 'IsMatch(body, "[\\x00]") or IsMatch(body, "\\\\u0000")' 
 
   # Docker Engine API calls are PLUMBING, and two components emit them by the
   # thousand: Traefik's swarm provider (--tracing.otlp=true, polling
