@@ -257,6 +257,14 @@ processors:
         - 'resource.attributes["service.name"] == "sso_oauth2-proxy"'
         - 'resource.attributes["service.name"] == "backup_volume-backup"'
         - 'resource.attributes["service.name"] == "backup_seaweedfs"'
+        # MALFORMED BODIES POISON THE WHOLE BATCH. A container writing binary to stdout
+        # (measured: head-to-head-staging_api, 2007 parse failures in 30 minutes) produces lines
+        # carrying NUL bytes. They fail the parsers above by design, travel on with their raw body,
+        # and then the BACKEND rejects the batch they arrived in — "Could not deserialize into JSON
+        # object, Invalid data for Value, no known keys found" — every ten seconds, for every
+        # service on the platform. One app's binary output must not blind the cluster's logs, so a
+        # record no log store can accept is dropped here, where it is attributable.
+        - 'IsMatch(body, "[\\x00]")' 
 
   # Docker Engine API calls are PLUMBING, and two components emit them by the
   # thousand: Traefik's swarm provider (--tracing.otlp=true, polling
