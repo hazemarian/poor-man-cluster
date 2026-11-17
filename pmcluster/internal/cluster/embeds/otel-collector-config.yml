@@ -257,19 +257,18 @@ processors:
         - 'resource.attributes["service.name"] == "sso_oauth2-proxy"'
         - 'resource.attributes["service.name"] == "backup_volume-backup"'
         - 'resource.attributes["service.name"] == "backup_seaweedfs"'
-        # MALFORMED BODIES POISON THE WHOLE BATCH. A container writing binary to stdout
-        # (measured: head-to-head-staging_api, 2007 parse failures in 30 minutes) produces lines
-        # carrying NUL bytes. They fail the parsers above by design, travel on with their raw body,
-        # and then the BACKEND rejects the batch they arrived in — "Could not deserialize into JSON
-        # object, Invalid data for Value, no known keys found" — every ten seconds, for every
-        # service on the platform. One app's binary output must not blind the cluster's logs, so a
-        # record no log store can accept is dropped here, where it is attributable.
-        # NOTE the two forms. A record's body can carry a REAL control byte, or the text of the
-        # escape the container wrote into its log file ("\u0000", six literal characters) — the
-        # second is what an unterminated binary line looks like after Docker's JSON envelope failed
-        # to parse, and it is the form actually seen here. Matching only the byte form changed
-        # nothing, which is what a filter that matches nothing looks like from the outside.
-        - 'IsMatch(body, "[\\x00]") or IsMatch(body, "\\\\u0000")' 
+        # AN UNSET BODY TAKES THE WHOLE BATCH DOWN. A container whose lines the receiver cannot parse
+        # (measured: head-to-head-staging_api, 2007 parse failures in 30 min) leaves the record with no
+        # body at all, and the backend rejects the batch it arrives in — not the record —
+        # "Could not deserialize into JSON object, Invalid data for Value, no known keys found",
+        # every ten seconds, for every service on the platform.
+        #
+        # This condition is the RESULT of measuring the backend's own tolerance, one shape at a time
+        # on the live stream: body as a string, an empty string, a kvlist, real NUL bytes, control
+        # characters, and the literal text "\u0000" are ALL accepted (200); only an ABSENT body
+        # answers 400. Both earlier attempts here matched control characters — shapes the backend
+        # takes happily — and so they changed nothing while looking like fixes.
+        - 'body == nil' 
 
   # Docker Engine API calls are PLUMBING, and two components emit them by the
   # thousand: Traefik's swarm provider (--tracing.otlp=true, polling
