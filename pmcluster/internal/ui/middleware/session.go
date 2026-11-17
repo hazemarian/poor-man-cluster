@@ -11,8 +11,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +56,67 @@ func NewAuth(st *store.Store, secret []byte, cookieName string) *Auth {
 
 // CookieName returns the session cookie name.
 func (a *Auth) CookieName() string { return a.cookie }
+
+// TerminalTokenTTL bounds how long a terminal socket ticket is valid. The page mints it while
+// rendering and connects immediately; two minutes covers a slow first paint, not a shared link.
+const TerminalTokenTTL = 2 * time.Minute
+
+// SignTerminalToken mints the ticket the interactive terminal carries into its websocket.
+//
+// Why a ticket at all: an interactive shell socket cannot ride a forward-auth gate. Traefik's
+// forwardAuth re-issues the request to the auth server and, for a WebSocket upgrade, the browser's
+// handshake never completes — the page loads, the socket dies, and the console never sees it
+// (measured: two "page served" lines, zero "handshake arrived"). The console's /web router is
+// therefore gated for pages only, and this socket proves itself: an HMAC over the stack, the
+// service and an expiry, keyed with the console's own session secret. The page that mints it was
+// gated; the ticket binds the socket to that page's stack and service and dies in two minutes.
+func (a *Auth) SignTerminalToken(stack, service string, now time.Time) string {
+	payload := fmt.Sprintf("%s|%s|%d", stack, service, now.Add(TerminalTokenTTL).Unix())
+	mac := hmac.New(sha256.New, a.secret)
+	mac.Write([]byte("terminal|" + payload))
+	return base64.RawURLEncoding.EncodeToString([]byte(payload)) + "." +
+		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// VerifyTerminalToken reports whether tok was minted for this stack+service and has not expired.
+// A token for another stack, another service, or an earlier life is refused.
+func (a *Auth) VerifyTerminalToken(tok, stack, service string, now time.Time) bool {
+	body, sig, ok := strings.Cut(tok, ".")
+	if !ok || body == "" || sig == "" {
+		return false
+	}
+	rawSig, err := base64.RawURLEncoding.DecodeString(sig)
+	if err != nil {
+		return false
+	}
+	rawBody, err := base64.RawURLEncoding.DecodeString(body)
+	if err != nil {
+		return false
+	}
+	mac := hmac.New(sha256.New, a.secret)
+	mac.Write([]byte("terminal|" + string(rawBody)))
+	if !hmac.Equal(rawSig, mac.Sum(nil)) {
+		return false
+	}
+	// The signed payload is authoritative, not the query: a caller cannot widen the scope of a
+	// ticket it did not mint.
+	gotStack, rest, ok := strings.Cut(string(rawBody), "|")
+	if !ok {
+		return false
+	}
+	gotService, expStr, ok := strings.Cut(rest, "|")
+	if !ok {
+		return false
+	}
+	if gotStack != stack || gotService != service {
+		return false
+	}
+	deadline, err := strconv.ParseInt(expStr, 10, 64)
+	if err != nil || now.After(time.Unix(deadline, 0)) {
+		return false
+	}
+	return true
+}
 
 func (a *Auth) sign(s Session) string {
 	raw, _ := json.Marshal(s)

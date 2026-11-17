@@ -76,6 +76,28 @@ services:
       [[- else]]
       "traefik.http.routers.pmcluster-web.middlewares": "cors-default@file,admin-auth@file"
       [[- end]]
+      # The interactive terminal socket. Its own router, above the console's, WITHOUT the auth
+      # middleware — a deliberate, narrow exemption rather than a hole:
+      #
+      #   * a WebSocket handshake cannot complete behind Traefik's forwardAuth: the gate re-issues
+      #     the request to oauth2-proxy and the browser's upgrade never finishes, so the page loads
+      #     and the socket dies before the console ever sees it (measured: two "terminal: page
+      #     served" lines for one stack, zero "handshake arrived");
+      #   * the console therefore requires a TICKET on the socket — an HMAC over stack+service+expiry
+      #     keyed with its own session secret, minted only while rendering the page, and that page
+      #     is served behind the gate. The ticket binds the socket to one stack, one service, and
+      #     expires in two minutes.
+      #
+      # priority 2000 keeps it ahead of pmcluster-web (default 0) for this exact path only.
+      "traefik.http.routers.pmcluster-terminal-ws.rule": "Host(`pmcluster.${DOMAIN}`) && PathRegexp(`^/web/stacks/[^/]+/terminal/ws$`)"
+      "traefik.http.routers.pmcluster-terminal-ws.entrypoints": "websecure"
+      "traefik.http.routers.pmcluster-terminal-ws.tls": "true"
+      [[- if .ACMEEmail]]
+      "traefik.http.routers.pmcluster-terminal-ws.tls.certresolver": "letsencrypt"
+      [[- end]]
+      "traefik.http.routers.pmcluster-terminal-ws.priority": "2000"
+      "traefik.http.routers.pmcluster-terminal-ws.middlewares": "cors-default@file"
+      "traefik.http.routers.pmcluster-terminal-ws.service": "pmcluster"
       "traefik.http.routers.pmcluster-api.rule": "Host(`pmcluster.${DOMAIN}`) && !PathPrefix(`/web/`) && !Path(`/web`)"
       "traefik.http.routers.pmcluster-api.entrypoints": "websecure"
       "traefik.http.routers.pmcluster-api.tls": "true"

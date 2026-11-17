@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +109,10 @@ func TestTerminalWSBridge(t *testing.T) {
 	cfg.PMAPIToken = "pmc_test"
 	cfg.SessionSecret = []byte("0123456789abcdefgh")
 	cfg.CookieName = "pmui_session"
+	// Login-disabled is the shape the edge runs in: the session middleware admits everything (the
+	// gate in front of /web authenticates the operator), so the ONLY thing standing between an
+	// anonymous caller and a shell on this route is the ticket. That is what this test must prove.
+	cfg.LoginDisabled = true
 	app, err := NewApp(cfg)
 	if err != nil {
 		t.Fatalf("NewApp: %v", err)
@@ -118,14 +123,21 @@ func TestTerminalWSBridge(t *testing.T) {
 	defer engine.Close()
 
 	jar := map[string]*http.Cookie{}
-	doRequest(t, app, http.MethodPost, "/web/setup", "username=admin&password=supersecret&confirm=supersecret", jar)
-	doRequest(t, app, http.MethodPost, "/web/login", "username=admin&password=supersecret", jar)
 
-	// Unauthenticated relay must be refused.
-	bad := map[string]*http.Cookie{}
-	_ = bad
+	// A socket with no ticket is refused: the gate in front of /web cannot cover a websocket
+	// handshake, so the ticket is what proves the socket came from a page this console rendered.
+	bare := "ws" + strings.TrimPrefix(engine.URL, "http") + "/web/stacks/demo/terminal/ws?service=web"
+	if _, resp, err := websocket.DefaultDialer.Dial(bare, http.Header{}); err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a ticketless socket was not refused with 403 (err=%v, resp=%v)", err, resp)
+	}
+	// A ticket minted for another service must not open this one.
+	wrong := app.Auth.SignTerminalToken("demo", "worker", time.Now())
+	if _, resp, err := websocket.DefaultDialer.Dial(bare+"&t="+url.QueryEscape(wrong), http.Header{}); err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("a ticket for another service was accepted (err=%v, resp=%v)", err, resp)
+	}
 
-	wsURL := "ws" + strings.TrimPrefix(engine.URL, "http") + "/web/stacks/demo/terminal/ws?service=web"
+	ticket := app.Auth.SignTerminalToken("demo", "web", time.Now())
+	wsURL := bare + "&t=" + url.QueryEscape(ticket)
 	h := http.Header{}
 	if ck, ok := jar[app.Auth.CookieName()]; ok {
 		h.Set("Cookie", ck.Name+"="+ck.Value)

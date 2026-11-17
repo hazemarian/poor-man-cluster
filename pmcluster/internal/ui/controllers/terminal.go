@@ -47,8 +47,12 @@ func (t Terminal) Page(g *gin.Context) {
 	if host == "" {
 		host = t.Domain
 	}
-	d.WSURL = fmt.Sprintf("%s://%s%s/stacks/%s/terminal/ws?service=%s",
-		scheme, host, WebBase, url.PathEscape(stack), url.QueryEscape(service))
+	// The socket carries its own ticket: a WebSocket handshake cannot ride the forward-auth gate
+	// in front of /web (see middleware.SignTerminalToken), so the console proves the socket came
+	// from a page it rendered, for this stack and this service, two minutes ago.
+	ticket := t.Auth.SignTerminalToken(stack, service, time.Now())
+	d.WSURL = fmt.Sprintf("%s://%s%s/stacks/%s/terminal/ws?service=%s&t=%s",
+		scheme, host, WebBase, url.PathEscape(stack), url.QueryEscape(service), url.QueryEscape(ticket))
 	t.Views.Page(g, "terminal", d)
 }
 
@@ -60,6 +64,15 @@ func (t Terminal) Page(g *gin.Context) {
 func (t Terminal) WS(g *gin.Context) {
 	ctx := g.Request.Context()
 	stack, service := g.Param("name"), g.Query("service")
+	// Verify the ticket BEFORE the upgrade: a bad one is a plain 403, which the browser reports as
+	// a failed handshake rather than a mysterious "closed" after a successful one.
+	if !t.Auth.VerifyTerminalToken(g.Query("t"), stack, service, time.Now()) {
+		t.Log.Warn().Str("stack", stack).Str("service", service).
+			Msg("terminal: refused a socket without a valid ticket")
+		g.AbortWithStatus(http.StatusForbidden)
+		return
+	}
+
 	apiURL, token, configured := t.loadParams(ctx)
 	t.Log.Info().Str("stack", stack).Str("service", service).Bool("configured", configured).
 		Str("upgrade", g.GetHeader("Upgrade")).Str("origin", g.GetHeader("Origin")).
