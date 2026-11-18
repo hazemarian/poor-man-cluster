@@ -83,6 +83,8 @@ func init() {
 		"stack.rev_failed_at":          "فشل %s",
 		"stack.rev_attempts":           "%d محاولات",
 		"stack.deploy_failed_hint":     "لم يكتمل النشر الأخير بنجاح. تحقّق من سجلات النشر (log_level=debug يعرض Compose كل مستوى) ومن مهام الخدمات، ثم أعد النشر.",
+		"stack.error_history_summary":  "%d مدخلات · الأحدث %s",
+		"stack.error_history_tip":      "كل محاولات النشر الفاشلة، الأحدث أولاً",
 		"stack.error_history":          "سجل أخطاء النشر",
 		"stack.badge":                  "شارة الحالة",
 		"stack.badge_services":         "شارة الخدمات",

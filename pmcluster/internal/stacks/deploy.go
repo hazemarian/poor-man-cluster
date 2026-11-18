@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -774,7 +775,14 @@ func (s *Service) waitLevelHealthy(ctx context.Context, stackName string, level 
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out after %s waiting for depends_on level [%s] to become ready", deployWaitTimeout, strings.Join(level, ", "))
+			// SORTED names. The level comes from a map iteration, so this message used to alternate
+			// between "[db, web]" and "[web, db]" for the same failure — which made one broken deploy
+			// look like two different errors and defeated the collapse in RecordStackError: the
+			// console showed ten entries for one revision, all the same timeout.
+			names := append([]string(nil), level...)
+			sort.Strings(names)
+			return fmt.Errorf("timed out after %s waiting for depends_on level [%s] to become ready",
+				deployWaitTimeout, strings.Join(names, ", "))
 		}
 		select {
 		case <-ctx.Done():

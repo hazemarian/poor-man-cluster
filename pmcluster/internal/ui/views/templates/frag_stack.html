@@ -51,20 +51,28 @@
 {{end}}
 
 {{if and .Detail (gt (len .Detail.Stack.LastErrors) 1)}}
-<div class="card">
-  <h2 class="section-head">{{icon "clock"}}{{T "stack.error_history"}}</h2>
+{{/* COLLAPSED BY DEFAULT. This is history: the current state is already carried by the banner above
+     and the pill on the current revision. Left expanded it is the loudest thing on the page — a
+     crash-looping service fills the list — while the one line that matters is the summary. The
+     summary therefore states the count and when the newest attempt was, so nothing needs a click to
+     be understood; opening it is for reading the messages. */}}
+<details class="card details">
+  <summary class="section-head" data-tip="{{T "stack.error_history_tip"}}">
+    {{icon "clock"}}{{T "stack.error_history"}}
+    <span class="t-meta">{{TF "stack.error_history_summary" (len .Detail.Stack.LastErrors) (ts (index .Detail.Stack.LastErrors 0).CreatedAt)}}</span>
+  </summary>
   <ul class="timeline">
     {{range .Detail.Stack.LastErrors}}{{if .Error}}
     <li>
       <div class="t-head">
         <span class="pill bad">{{icon "alert"}}{{T "stack.deploy_failed"}}</span>
-        <span class="t-meta">rev {{N0 .Revision}} · {{ts .CreatedAt}}</span>
+        <span class="t-meta">rev {{N0 .Revision}} · {{ts .CreatedAt}}{{if gt .Count 1}} · {{TF "stack.rev_attempts" .Count}}{{end}}</span>
       </div>
       <p class="muted">{{.Error}}</p>
     </li>
     {{end}}{{end}}
   </ul>
-</div>
+</details>
 {{end}}
 
 {{if .Detail}}

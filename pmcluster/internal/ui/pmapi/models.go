@@ -48,6 +48,9 @@ type StackError struct {
 	Revision  int64  `json:"revision"`
 	Error     string `json:"error"`
 	CreatedAt int64  `json:"created_at"`
+	// Count is how many consecutive identical attempts this entry stands for
+	// (absent on older rows: read as 1).
+	Count int `json:"count"`
 }
 
 // StackFailover is an open storage-failover marker on a stack: it was moved

@@ -179,7 +179,7 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 		write(w, `{"stacks":[{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo","created_at":1,"updated_at":2}]}`)
 	})
 	mux.HandleFunc("/api/stacks/demo", func(w http.ResponseWriter, r *http.Request) {
-		write(w, `{"stack":{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo","last_error":[{"revision":3,"error":"boom","created_at":20}]},"revisions":[{"revision":3,"created_at":30},{"revision":2,"created_at":20}],"last_backup":{"status":"succeeded","started_at":25}}`)
+		write(w, `{"stack":{"name":"demo","current_revision":3,"repo_url":"https://example.com/demo","last_error":[{"revision":3,"error":"boom","created_at":20,"count":4},{"revision":2,"error":"older boom","created_at":10}]},"revisions":[{"revision":3,"created_at":30},{"revision":2,"created_at":20}],"last_backup":{"status":"succeeded","started_at":25}}`)
 	})
 	mux.HandleFunc("/api/stacks/demo/revisions/3", func(w http.ResponseWriter, r *http.Request) {
 		write(w, `{"stack":"demo","revision":3,"created_at":30,"source_yaml":"app: demo\n","rendered_yaml":"services:\n  demo:\n","payload":"{}"}`)
@@ -531,6 +531,45 @@ func TestControllers_Stacks(t *testing.T) {
 	rr := h.get(t, "/web/stacks/nope")
 	if rr.Code != http.StatusOK && rr.Code != http.StatusNotFound {
 		t.Errorf("GET /web/stacks/nope = %d, want 200/404", rr.Code)
+	}
+}
+
+// TestControllers_StackErrorHistoryIsCollapsed — the history panel is a disclosure, not a wall.
+//
+// A crash-looping service fills LastErrors, and left expanded it was the loudest thing on the page
+// while the fact that matters ("this stack is failing now") was already in the banner above. So the
+// panel renders inside <details> with a summary that carries the count and the newest attempt, and
+// the individual messages stay behind a click.
+func TestControllers_StackErrorHistoryIsCollapsed(t *testing.T) {
+	h := newCtrlHarness(t)
+	h.mountStacks()
+
+	body := h.get(t, "/web/stacks/demo").Body.String()
+
+	open := strings.Index(body, "<details")
+	if open < 0 {
+		t.Fatal("error history is not a disclosure — a failing stack renders every attempt flat")
+	}
+	// The details block must be collapsed: no `open` attribute on it.
+	tag := body[open:]
+	if end := strings.Index(tag, ">"); end > 0 {
+		if strings.Contains(tag[:end], " open") {
+			t.Errorf("the disclosure is expanded by default: %s", tag[:end])
+		}
+	}
+	// The summary states what is inside without needing a click.
+	summary := body[open:]
+	if end := strings.Index(summary, "</summary>"); end > 0 {
+		head := summary[:end]
+		if !strings.Contains(head, "entries") {
+			t.Errorf("summary does not say how many entries: %s", head)
+		}
+	} else {
+		t.Error("disclosure has no summary")
+	}
+	// The messages themselves are inside the disclosure, not above it.
+	if strings.Index(body, "older boom") < open {
+		t.Error("an error message is rendered outside the collapsed history")
 	}
 }
 

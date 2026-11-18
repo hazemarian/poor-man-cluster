@@ -73,6 +73,8 @@ func init() {
 		"stack.rev_attempts":           "%d attempts",
 		"stack.deploy_failed_hint":     "The last deployment did not finish cleanly. Check the deploy logs (log_level=debug shows each level's compose) and the service tasks, then deploy again.",
 		"stack.error_history":          "Deploy Error History",
+		"stack.error_history_summary":  "%d entries · newest %s",
+		"stack.error_history_tip":      "Every failed deploy attempt, newest first",
 		"stack.badge":                  "Status badge",
 		"stack.badge_services":         "Services badge",
 		"stack.badge_hint":             "Paste this markdown into any GitHub README to show the stack's live status (healthy / in progress / degraded / error). The badge endpoint is public and reflects the latest deployment outcome.",
