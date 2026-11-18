@@ -63,8 +63,8 @@ func TestLevelNotReady_NamesTheServiceAndItsTaskError(t *testing.T) {
 	if strings.Contains(why, "db") {
 		t.Errorf("a ready service was reported as the problem: %q", why)
 	}
-	if !strings.Contains(why, "last failed task") {
-		t.Errorf("the diagnosis does not say the task FAILED: %q", why)
+	if !strings.Contains(why, "task failed:") {
+		t.Errorf("the diagnosis does not say the task failed: %q", why)
 	}
 	// The NEWEST task must be quoted, not the first one that ever ran: a crash-looping
 	// service's oldest failure is history, its newest is the evidence.
@@ -93,6 +93,28 @@ func TestLevelNotReady_PrefersTheFailedTaskOverAStartingOne(t *testing.T) {
 	}
 	if strings.Contains(why, "starting") {
 		t.Errorf("the diagnosis quoted the transient task: %q", why)
+	}
+}
+
+// TestLevelNotReady_DoesNotCallATransitionTaskAFailure — Docker fills a task's Error with progress
+// words too ("prepared", "starting"). Selecting on Error produced "last failed task ready
+// (\"prepared\")" in production: a sentence that contradicts itself. Only failed/rejected states count.
+func TestLevelNotReady_DoesNotCallATransitionTaskAFailure(t *testing.T) {
+	f := &waitFake{
+		svcs: []runtime.Service{{ID: "web-id", Name: "demo_web", Desired: 1, Replicas: 0}},
+		tasks: map[string][]runtime.ServiceTask{
+			"web-id": {
+				{TaskID: "ready", State: "ready", Error: "prepared", StartedAt: 200},
+			},
+		},
+	}
+	svc := waitService(t, f)
+	_, why := svc.levelNotReady(context.Background(), "demo", []string{"web"})
+	if strings.Contains(why, "task ready:") {
+		t.Errorf("a ready task was reported as a failure: %q", why)
+	}
+	if !strings.Contains(why, "newest task ready") {
+		t.Errorf("the diagnosis does not describe the state it found: %q", why)
 	}
 }
 

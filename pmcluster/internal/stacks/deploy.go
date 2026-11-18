@@ -811,14 +811,16 @@ func (s *Service) levelNotReady(ctx context.Context, stackName string, level []s
 		blocked = append(blocked, name)
 		reason := fmt.Sprintf("%s: %d/%d running", name, sv.Replicas, sv.Desired)
 		if tasks, terr := s.Docker.ServiceTasks(ctx, sv.ID); terr == nil {
-			if t, ok := failingTask(tasks); ok {
-				reason += fmt.Sprintf(", last failed task %s", t.State)
+			if t, ok := failedTask(tasks); ok {
+				// The state is always failed/rejected here, so naming it again reads as
+				// "task failed failed": say WHAT happened, not that it is a failure.
+				reason += ", task " + t.State
 				if t.Error != "" {
-					reason += fmt.Sprintf(" (%q)", t.Error)
+					reason += fmt.Sprintf(": %q", t.Error)
 				}
 			} else if t, ok := newestTask(tasks); ok {
 				// Nothing has failed yet: the task is still coming up, and saying so is the
-				// honest answer. (Quoting "starting" as the newest task when an earlier attempt
+				// honest answer. (Quoting "starting" as the newest task while an earlier attempt
 				// had failed is what made this line hide the real error.)
 				reason += fmt.Sprintf(", newest task %s", t.State)
 			}
@@ -828,14 +830,18 @@ func (s *Service) levelNotReady(ctx context.Context, stackName string, level []s
 	return blocked, strings.Join(reasons, "; ")
 }
 
-// failingTask returns the NEWEST task that carries an error, which is the evidence an operator
-// needs. A crash-looping service almost always has a fresh task in "starting" at the moment the
-// wait expires, and quoting that one hides the failure that caused the loop.
-func failingTask(tasks []runtime.ServiceTask) (runtime.ServiceTask, bool) {
+// failedTask returns the NEWEST task that actually FAILED, which is the evidence an operator needs.
+// A crash-looping service almost always has a fresh task in "starting" (or even "ready") at the moment
+// the wait expires, and quoting that one hides the failure that caused the loop.
+//
+// The state decides, not the Error field: Docker fills Error with transition words too ("prepared",
+// "starting"), and filtering on it produced "last failed task ready (\"prepared\")" — a sentence
+// that contradicts itself.
+func failedTask(tasks []runtime.ServiceTask) (runtime.ServiceTask, bool) {
 	var best runtime.ServiceTask
 	found := false
 	for _, t := range tasks {
-		if t.Error == "" {
+		if t.State != "failed" && t.State != "rejected" {
 			continue
 		}
 		if !found || t.StartedAt > best.StartedAt || (t.StartedAt == best.StartedAt && t.FinishedAt > best.FinishedAt) {
