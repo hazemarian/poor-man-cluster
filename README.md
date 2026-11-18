@@ -40,7 +40,7 @@ One machine is the **manager** (runs `pmcluster` + the platform services); any n
 Internet → Traefik (HTTPS, every manager)
              ├─ pmcluster.<domain>  → pmcluster-edge → operator console (/web)
              │                                       → daemon API + webhooks (/api, /webhook)
-             ├─ observ.<domain>     → OpenObserve (auto-auth, no login prompt)
+             ├─ observ.<domain>     → Parseable (auto-auth, no login prompt)
              ├─ traefik.<domain>    → Traefik dashboard
              └─ your apps           → DSL-deployed stacks
 ```

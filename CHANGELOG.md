@@ -3,6 +3,34 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.386 — the docs stopped saying things that are not true
+
+Five gaps found by auditing the docs against the code, not by reading them.
+
+1. **The observability backend was documented as the one we replaced.** `README.md`, `agent.md` and the
+   in-repo `poor-man-cluster-deploy` skill all described OpenObserve — its admin email, its ingress
+   route, its credential shape — a year after Parseable took its place. The fix states Parseable and the
+   actual login (`admin@<domain>` + `observability_admin_password`, read as `P_USERNAME`/`P_PASSWORD`),
+   and says plainly that OpenObserve is gone.
+2. **`health_timeout` was shipped undocumented.** It is in `pkg/dsl/types.go` and now in the `docs/dsl.md`
+   field table, with the three things an operator needs: it applies per `depends_on` level, an
+   unparseable value falls back rather than failing a deploy, and the default is 2 minutes.
+   `registry`, `env_file` and `backup_before_deploy` were in examples but not in the table either.
+3. **`docs/health.md` did not list two of `doctor`'s checks.** `console telemetry` (the console's OTLP
+   endpoint, whose absence leaves the console with no logs or spans anywhere and nothing saying so) and
+   `shell sessions` (a session that outlived its ceiling means both the socket close and the sweep failed).
+4. **The in-repo skill was 833 lines duplicating a better doc.** Its manifest section documented 18 of
+   `docs/dsl.md`'s 48 fields — a drifted copy of a file in the same repo. It is now a 95-line playbook
+   that points at `docs/`, with the operational sections moved verbatim into `references/`.
+5. **Two settled decisions had no record.** ADR 0011 (the platform owns the log schema; an app's JSON
+   stays in the body) and ADR 0012 (a failure names its cause; an unchanged stack retries on a backoff).
+   Both were reached the expensive way and would otherwise be re-litigated by the next session.
+
+The `depends_on` section also gained what it was missing: the per-level wait, the exact shape of a
+timeout message and why it names services rather than levels, and the retry schedule.
+
+No behaviour changed — this release is documentation, ADRs and the skill split.
+
 ## v0.2.383 — a deploy failure names the service that is down, not the sort that grouped it
 
 `timed out after 2m0s waiting for depends_on level [db, web] to become ready` reads as "a dependency

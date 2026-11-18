@@ -62,7 +62,7 @@ and optionally SSO via GitHub (oauth2-proxy on `https://sso.<domain>`).
                     │
         ┌───────────┼───────────────────────┐
         ▼           ▼                       ▼
-  App stacks   pmcluster-edge (:8042)   OpenObserve
+  App stacks   pmcluster-edge (:8042)   Parseable
   (deployed    ┌────────────────────┐     (observability)
    apps)       │ operator console   │
                │  (gin + HTMX)      │
@@ -502,7 +502,7 @@ Docker, Deployer` (+ `Stdout` where verbose).
   non-storage, non-platform node (or the leader with `backup_store_on=leader`).
 - `embeds/` — the embedded platform DSL manifests: `infra-stack.yml`
   (Traefik, global on managers), `edge-stack.yml`, `observability-stack.yml`
-  (OpenObserve + OTel), `backup-stack.yml` (control-plane archiver + SeaweedFS store),
+  (Parseable + OTel collector), `backup-stack.yml` (control-plane archiver + SeaweedFS store),
   `sso-stack.yml` (oauth2-proxy), `traefik-dynamic.yml`,
   `otel-collector-config.yml`.
 - `sitecert.go` — `ApplyCert`/`RemoveCert`/`GetSiteCert`/`PersistedDomain`/
@@ -1026,8 +1026,10 @@ own values (manager node, domain, GitHub org, root admin email).
 - Console at `https://pmcluster.<domain>/web/`.
 - SSO live: GitHub OAuth (org `<github-org>`), oauth2-proxy on
   `https://sso.<domain>`, `EDGE_LOGIN_DISABLED=true`.
-- OpenObserve root admin email: `admin@<domain>` (derived from domain).
-  Auth = root admin email:password (NOT provisioning API / ingestion token).
+- Observability admin email: `admin@<domain>` (derived from domain), password
+  = the `observability_admin_password` secret. Parseable reads them as
+  `P_USERNAME`/`P_PASSWORD`; the UI is `observ.<domain>` behind auto-auth, so an
+  operator arriving from the console is not asked to log in.
 - `site_certs` rows: `<domain>` + per-host certs for extra subdomains.
 - Traefik auth gates `/web/*` + `observ.<domain>` + traefik dashboard
   (basicAuth when SSO disabled, forwardAuth via oauth2-proxy when enabled).

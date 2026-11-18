@@ -44,6 +44,10 @@ services:                     # required — one or more service definitions
 | `repo_url` | no | metadata only — pmcluster never reads from git |
 | `log_level` | no | `debug`, `info`, `warn` or `error` (`warning` is accepted as an alias of `warn`, and the rendered value is always the canonical `warn`). Any other value fails validation with the allowed set named. This is the level every service in the stack receives as `LOG_LEVEL`; when omitted, the cluster's `app_log_level` setting applies, then `warn`. A service that declares `LOG_LEVEL` in its own `env:` keeps that value — see [What the translator injects](#what-the-translator-injects). |
 | `strict_backup` | no | only meaningful with `backup_before_deploy: true` |
+| `backup_before_deploy` | no | snapshot the stack's volumes on its node before `docker stack deploy`. Best-effort by default: a failed snapshot is recorded and the deploy continues. |
+| `registry` | no | registry prefix, available as `${registry}` in `image:`. Omit for Docker Hub-style names. |
+| `env_file` | no | path to a `.env` file, **recorded for provenance only** — nothing is read from it at deploy time. Substitution uses `${env:VAR}` from the deploying process. |
+| `health_timeout` | no | how long a deploy waits for **one `depends_on` level** to become healthy, as a Go duration (`90s`, `10m`). Default **2m**. Set it for a cold database or a migration that legitimately takes minutes — the alternative is a deploy that fails for being correct. A value that does not parse (or is ≤ 0) falls back to the default rather than failing the deploy. |
 | `platform` | no | **reserved for pmcluster's own platform stacks** (`infra`/`edge`/`observability`/`backup`/`sso`) — stamps `io.pmcluster.platform=true` on every service, excludes the stack from the app drift loop, makes it non-deletable via the API, and is only removed by `cluster down --purge`. User deploys (`pmcluster deploy`, `POST /api/stacks`, webhooks) are **refused** this flag: `platform: true is reserved for pmcluster-managed platform stacks`. |
 | `networks` | no | additional **external** Swarm networks every service joins. When set, the auto-injected private overlay net is **skipped** (not created) — services reach each other by fully-qualified DNS on the named networks. |
 | `volumes` | no | map of top-level named volumes declared verbatim (`name: ""` for a plain local volume, or `name: /host/path` to bind that host path) — **never** relocated under the volume root. Used by platform stacks whose volumes already exist on hosts (`seaweeddata`, `traefik_acme`, `parseable_data`). |
@@ -297,6 +301,39 @@ migration:
 - A `run_once` service with `depends_on` additionally gets `restart_policy: on-failure` with `max_attempts: 3`, so a transient failure retries instead of dying permanently.
 
 Because ordering lives in the deploy step, `depends_on` works for **any** image — no shell wrapper is injected, so baked-entrypoint images (Postgres, MySQL, …), distroless images without `sh`, and images with no declared `command:` all behave identically. A `depends_on` cycle or a reference to a service that does not exist in the manifest fails the deploy loudly before anything is created.
+
+#### How long a level may take, and what a timeout says
+
+Each level waits at most `health_timeout` (app level, default **2m**). The wait is **per level**, not per
+stack: `db → migration → web` can legitimately spend three timeouts before failing.
+
+A timeout names the service that is not healthy, not the level that grouped it:
+
+```
+timed out after 2m0s waiting for web to become healthy — web: 0/1 running, task failed (exit 1)
+```
+
+Three details behind that sentence, each of which was wrong in an earlier version:
+
+- The subject is the **services that are not ready** (from the same service list the diagnosis uses),
+  never the `depends_on` level. `waiting for depends_on level [db, web]` read as "a dependency is broken"
+  on a stack where `web` declared no `depends_on` at all and `db` was healthy the whole time.
+- The quoted task is the newest **failed** one, selected by state (`failed`/`rejected`), not by its error
+  field: Docker fills that field with transition words too (`starting`, `prepared`), which once produced
+  `task failed: "starting"` — true and useless. The exit code is what survives.
+- Only the **current** revision's failure is state. Retries of an unchanged stack reuse the same
+  revision, and identical consecutive errors collapse into one entry with an attempt count, so the
+  console shows one broken deploy rather than one per reconcile pass.
+
+#### Retry backoff
+
+A stack that fails is not retried on the next reconcile tick. Failures back off **2m, 4m, 8m, 16m, then
+30m** (capped), and the delay is cleared by a success or by a **new revision** — a new deploy intent is
+the only thing that should cancel an earned delay. Recording the failure itself does not count as intent;
+that distinction is the difference between a climbing backoff and a 2-minute loop.
+
+Without it, a failing stack was re-deployed on every pass and each attempt blocked two minutes on health
+waits: 58 attempts on one revision, measured.
 
 ---
 
