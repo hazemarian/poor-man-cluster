@@ -109,6 +109,8 @@ func Run(ctx context.Context, in Input) (*Report, error) {
 	add := func(c Check) { rep.Checks = append(rep.Checks, c) }
 
 	add(checkSwarm(ctx, in))
+	add(checkConsoleTelemetry(ctx, in))
+	add(checkShellSessions(ctx, in))
 	add(checkCollectorPlacement(ctx, in))
 	add(checkCollectorExposure(ctx, in))
 	add(checkNodeLabels(ctx, in))

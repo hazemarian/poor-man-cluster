@@ -28,6 +28,12 @@ type App struct {
 	// leave this false.
 	Platform bool `json:"platform,omitempty"`
 
+	// HealthTimeout bounds how long a deploy waits for one depends_on level to
+	// become healthy, as a Go duration ("90s", "10m"). Empty means the platform
+	// default (2m). A cold Postgres or a migration that legitimately takes
+	// minutes should not have to fail every deploy to say so.
+	HealthTimeout string `json:"health_timeout,omitempty"`
+
 	// LogLevel is what every service of this stack receives as the LOG_LEVEL
 	// env var: debug, info, warn or error (warning is accepted as an alias of
 	// warn). Empty means the cluster's app_log_level setting, and then the

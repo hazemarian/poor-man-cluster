@@ -18,6 +18,15 @@ var levelListPattern = regexp.MustCompile(`waiting for depends_on level \[([^\]]
 // canonicalStackError rewrites a failure message into the form that is comparable across attempts.
 // It changes ONLY the parts that describe how a pass happened, never what failed.
 func canonicalStackError(msg string) string {
+	// The diagnosis a deploy appends ("— web: 0/1 running, newest task failed (…)") names the
+	// evidence at one moment: a task error that repeats with a new pid, a replica count that moves.
+	// Two entries describing the same cause must compare equal, so the suffix is dropped for the
+	// KEY — the stored message keeps it.
+	if at := strings.Index(msg, " to become ready"); at >= 0 {
+		if cut := strings.Index(msg[at:], " — "); cut >= 0 {
+			msg = msg[:at+cut]
+		}
+	}
 	return levelListPattern.ReplaceAllStringFunc(msg, func(m string) string {
 		parts := strings.Split(levelListPattern.FindStringSubmatch(m)[1], ",")
 		for i := range parts {
@@ -61,7 +70,8 @@ func (s *Store) PruneDuplicateStackErrors(ctx context.Context, stackName string)
 			continue
 		}
 		e.Count = count
-		e.Error = canonicalStackError(e.Error)
+		// The message is kept VERBATIM: it is the newest attempt's, and the one that carries the
+		// diagnosis. Canonicalisation is for comparison only.
 		index[key] = len(out)
 		out = append(out, e)
 	}

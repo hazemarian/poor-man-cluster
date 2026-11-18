@@ -152,6 +152,15 @@ type Reconciler struct {
 	failoverMu   sync.Mutex
 	lastFailover map[string]time.Time
 
+	// Per-stack retry backoff. A stack that fails its sync is retried after a
+	// growing delay instead of on every pass: the retry itself costs a two-minute
+	// health wait, and one crash-looping service was re-deployed every ~2 minutes
+	// for hours (measured: 58 attempts on one revision). Cleared on success and
+	// whenever the stack row changes — an operator deploy or `stack sync` is a
+	// reason to try immediately, not a reason to keep waiting.
+	backoffMu sync.Mutex
+	backoff   map[string]retryBackoff
+
 	// Per-stack app-sync error state, so a permanently broken stack (e.g. a
 	// manifest written before App.volumes became a map) is logged and recorded
 	// ONCE per distinct error string, not every pass.
@@ -263,6 +272,11 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 			r.tryStorageFailover(ctx, st.Name, node, health, log)
 			continue
 		}
+		if waiting, left := r.inBackoff(st, time.Now()); waiting {
+			log.Debug().Str("stack", st.Name).Dur("retry_in", left).
+				Msg("reconcile — app stack is backing off after a failed sync")
+			continue
+		}
 		res, serr := r.DeployService.Sync(ctx, st.Name)
 		switch {
 		case errors.Is(serr, store.ErrRevisionNotFound):
@@ -275,9 +289,17 @@ func (r *Reconciler) runPass(ctx context.Context, id int64, log zerolog.Logger) 
 			r.noteNoStoredRevision(st.Name, log)
 		case serr != nil:
 			r.handleSyncError(ctx, st.Name, st.CurrentRevision, serr, log)
+			// Retry later, not in two minutes: the retry costs a health wait, and a
+			// crash-looping service should not be re-deployed on every pass.
+			if wait := r.scheduleBackoff(st, time.Now()); wait > 0 {
+				log.Info().Str("stack", st.Name).Dur("retry_in", wait).
+					Msg("reconcile — next attempt for this stack is delayed")
+			}
 		case res != nil && res.Changed:
+			r.clearBackoff(st.Name)
 			log.Info().Str("stack", st.Name).Int64("revision", res.Revision).Msg("reconcile — app stack drifted, synced (new revision)")
 		default:
+			r.clearBackoff(st.Name)
 			log.Debug().Str("stack", st.Name).Msg("reconcile — app stack converged (rendered hash unchanged, no-op)")
 		}
 	}
@@ -297,6 +319,72 @@ const syncErrorHeartbeat = time.Hour
 // storagePauseHeartbeat is the minimum interval between the per-stack "still
 // down" WRN heartbeat for a paused stack (same cadence as the sync error).
 const storagePauseHeartbeat = time.Hour
+
+// retryBackoff is one stack's retry state.
+type retryBackoff struct {
+	failures  int
+	until     time.Time
+	updatedAt int64 // the stack row's updated_at when the failure was scheduled
+}
+
+// backoffDelay is the wait after the Nth consecutive failure: 2m, 4m, 8m, 16m, then
+// 30m. Bounded on purpose — a stack is broken, not gone, and the operator must not
+// have to remember to re-arm it.
+func backoffDelay(failures int) time.Duration {
+	if failures <= 0 {
+		return 0
+	}
+	d := 2 * time.Minute
+	for i := 1; i < failures; i++ {
+		d *= 2
+		if d >= 30*time.Minute {
+			return 30 * time.Minute
+		}
+	}
+	return d
+}
+
+// inBackoff reports whether this stack is waiting out a retry delay. A stack whose
+// row changed since the failure was scheduled is due immediately: a new deploy or a
+// `stack sync` is an operator's answer to the failure, not more of the same.
+func (r *Reconciler) inBackoff(st *store.Stack, now time.Time) (bool, time.Duration) {
+	r.backoffMu.Lock()
+	defer r.backoffMu.Unlock()
+	b, ok := r.backoff[st.Name]
+	if !ok {
+		return false, 0
+	}
+	if b.updatedAt != st.UpdatedAt {
+		delete(r.backoff, st.Name)
+		return false, 0
+	}
+	if now.Before(b.until) {
+		return true, time.Until(b.until).Round(time.Second)
+	}
+	return false, 0
+}
+
+// scheduleBackoff records a failure and returns the wait it earned.
+func (r *Reconciler) scheduleBackoff(st *store.Stack, now time.Time) time.Duration {
+	r.backoffMu.Lock()
+	defer r.backoffMu.Unlock()
+	if r.backoff == nil {
+		r.backoff = map[string]retryBackoff{}
+	}
+	b := r.backoff[st.Name]
+	b.failures++
+	b.until = now.Add(backoffDelay(b.failures))
+	b.updatedAt = st.UpdatedAt
+	r.backoff[st.Name] = b
+	return backoffDelay(b.failures)
+}
+
+// clearBackoff forgets a stack's failures after a successful sync.
+func (r *Reconciler) clearBackoff(stackName string) {
+	r.backoffMu.Lock()
+	defer r.backoffMu.Unlock()
+	delete(r.backoff, stackName)
+}
 
 // handleSyncError logs and persists an app-sync failure exactly once per
 // distinct error string per stack: a permanently broken stack (e.g. a

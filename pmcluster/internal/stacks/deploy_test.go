@@ -1405,8 +1405,8 @@ func TestWaitLevelHealthy_RunOnceRetrySucceeded(t *testing.T) {
 		},
 	}
 	svc := waitService(t, f)
-	if err := svc.waitLevelHealthy(context.Background(), "demo", []string{"migration"}); err != nil {
-		t.Fatalf("waitLevelHealthy([failed, complete]) = %v, want ready (nil)", err)
+	if err := svc.waitLevelHealthy(context.Background(), "demo", []string{"migration"}, 0); err != nil {
+		t.Fatalf("waitLevelHealthy([failed, complete], 0) = %v, want ready (nil)", err)
 	}
 }
 
@@ -1422,9 +1422,9 @@ func TestWaitLevelHealthy_RunOnceAllFailed(t *testing.T) {
 		},
 	}
 	svc := waitService(t, f)
-	err := svc.waitLevelHealthy(context.Background(), "demo", []string{"migration"})
+	err := svc.waitLevelHealthy(context.Background(), "demo", []string{"migration"}, 0)
 	if err == nil || !strings.Contains(err.Error(), "failed during ordered deploy") {
-		t.Fatalf("waitLevelHealthy(all failed) = %v, want a run-once failure error", err)
+		t.Fatalf("waitLevelHealthy(all failed, 0) = %v, want a run-once failure error", err)
 	}
 }
 
@@ -1441,9 +1441,9 @@ func TestWaitLevelHealthy_RunOnceActiveAttempt(t *testing.T) {
 		},
 	}
 	svc := waitService(t, f)
-	err := svc.waitLevelHealthy(context.Background(), "demo", []string{"migration"})
+	err := svc.waitLevelHealthy(context.Background(), "demo", []string{"migration"}, 0)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("waitLevelHealthy(running attempt) = %v, want a timeout (still waiting)", err)
+		t.Fatalf("waitLevelHealthy(running attempt, 0) = %v, want a timeout (still waiting)", err)
 	}
 }
 
@@ -1459,9 +1459,9 @@ func TestWaitLevelHealthy_RunOnceShutdownWithoutComplete(t *testing.T) {
 		},
 	}
 	svc := waitService(t, f)
-	err := svc.waitLevelHealthy(context.Background(), "demo", []string{"migration"})
+	err := svc.waitLevelHealthy(context.Background(), "demo", []string{"migration"}, 0)
 	if err == nil || !strings.Contains(err.Error(), "did not complete") {
-		t.Fatalf("waitLevelHealthy(shutdown only) = %v, want a did-not-complete error", err)
+		t.Fatalf("waitLevelHealthy(shutdown only, 0) = %v, want a did-not-complete error", err)
 	}
 }
 
@@ -1479,8 +1479,8 @@ func TestWaitLevelHealthy_MixedLevel(t *testing.T) {
 		},
 	}
 	svc := waitService(t, f)
-	if err := svc.waitLevelHealthy(context.Background(), "demo", []string{"db", "migration"}); err != nil {
-		t.Fatalf("waitLevelHealthy(db 1/1 + migration complete) = %v, want ready", err)
+	if err := svc.waitLevelHealthy(context.Background(), "demo", []string{"db", "migration"}, 0); err != nil {
+		t.Fatalf("waitLevelHealthy(db 1/1 + migration complete, 0) = %v, want ready", err)
 	}
 }
 
@@ -1498,9 +1498,9 @@ func TestWaitLevelHealthy_MixedLevelDBPending(t *testing.T) {
 		},
 	}
 	svc := waitService(t, f)
-	err := svc.waitLevelHealthy(context.Background(), "demo", []string{"db", "migration"})
+	err := svc.waitLevelHealthy(context.Background(), "demo", []string{"db", "migration"}, 0)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("waitLevelHealthy(db 0/1) = %v, want a timeout (db not ready)", err)
+		t.Fatalf("waitLevelHealthy(db not ready) = %v, want a timeout", err)
 	}
 }
 

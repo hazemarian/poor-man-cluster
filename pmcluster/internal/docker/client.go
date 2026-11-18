@@ -473,8 +473,10 @@ func (r *realClient) ServiceInspect(ctx context.Context, name string) (runtime.S
 		})
 	}
 	var mounts []runtime.Mount
+	var env []string
 	if c := svc.Spec.TaskTemplate.ContainerSpec; c != nil {
 		image = c.Image
+		env = append(env, c.Env...)
 		for _, m := range c.Mounts {
 			mounts = append(mounts, runtime.Mount{Type: string(m.Type), Source: m.Source, Target: m.Target})
 		}
@@ -484,6 +486,7 @@ func (r *realClient) ServiceInspect(ctx context.Context, name string) (runtime.S
 		Name:        svc.Spec.Name,
 		Image:       image,
 		Labels:      labels,
+		Env:         env,
 		Mounts:      mounts,
 		Constraints: constraints,
 		Ports:       ports,

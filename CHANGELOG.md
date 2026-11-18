@@ -3,7 +3,78 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.381 — five things the platform should have said out loud
+
+All five came out of one night of operating this cluster; each closes a question the platform
+answered badly or not at all.
+
+1. **A timed-out deploy says WHY.** `timed out after 2m0s waiting for depends_on level [db, web]`
+   was the whole message — while the answer (a web task exiting 1 with
+   `registering the Telegram webhook: 404`) sat in the task's own error. The timeout now appends the
+   diagnosis: replica counts per unready service and the NEWEST task's state and error.
+2. **Reconcile backs off.** There was no retry backoff anywhere: a failing stack was re-deployed on
+   every pass, each attempt blocking two minutes on health waits — measured, 58 attempts on one
+   revision. Failures now earn 2m, 4m, 8m, 16m, then 30m; success clears it, and so does any operator
+   action (the stack row changing means someone is working on it).
+3. **The health wait is per stack** (`health_timeout: 10m`), so a cold Postgres or a slow migration is
+   not a guaranteed failure. An unparseable value falls back to the default.
+4. **Two doctor checks** for the invisible failures this platform produced: *console telemetry* (the
+   collector does not scrape the edge stack, so a console with no OTLP endpoint has no logs or spans
+   anywhere — which happened for months) and *shell sessions* (a session past its ceiling means both
+   the socket close and the sweep failed, and the container has the stack's secrets mounted).
+5. **One drift question, two paths.** `cluster update` asked the live labels; `stacks.Sync` asked the
+   stored hash — stamped only after a successful apply, so a failed deploy looked like drift forever
+   and the reconcile redeployed a stack the swarm already ran. Both decide from the live labels now,
+   falling back to the stored hash only when there is no engine to ask.
+
+Not done, deliberately: multiline log joining for apps that pretty-print JSON. The generic collector
+fix risks merging unrelated lines; the honest fix is that app logging one object per line.
+
+## v0.2.380 — prune the duplicate failures already stored
+
+`pmcluster stack prune-errors [stack]` merges entries describing the same failure on the same
+revision, summing attempts. The histories written before messages were canonical carried one entry
+per reconcile pass: on this cluster 51 duplicates were removed, one stack going from 20 entries to 7.
+
+## v0.2.379 — the failure message is stable, and the history collapses
+
+The timeout built its level list from a map iteration, so the SAME failure alternated between
+`[db, web]` and `[web, db]` — which defeated the retry collapse and left ten entries for one
+revision. Names are sorted now, and the deploy-error history is a collapsed disclosure whose summary
+carries the entry count ("12 entries · newest 2026-11-18 00:22").
+
+## v0.2.378 — a failing stack retries its revision instead of minting one per pass
+
+The rendered hash is stamped only after a successful apply, so a failing stack looked like drift on
+every pass: 8 consecutive revisions, one distinct rendered manifest, a console panel that read as
+twenty failed deploys. A retry that changes nothing now stays on the same revision, and identical
+consecutive failures collapse into one entry with an attempt count.
+
+## v0.2.377 — an attribute with an empty value was taking the whole logs stream down
+
+An app logging `"category_id": null` produced `{"key":"category_id","value":{}}`, which the backend
+refuses — rejecting the ENTIRE batch it arrived in, every ten seconds, for every service. Found by
+capturing the collector's own payloads and bisecting a 153-record rejected batch down to one record.
+The platform now keeps only the attributes it sets itself; an app's JSON fields stay in the body.
+
+## v0.2.376 / v0.2.375 / v0.2.374 — guards for a shape the backend does not reject
+
+Three attempts to fix the above by matching control characters. They changed nothing: the backend
+accepts every body shape measured (string, empty, kvlist, NUL bytes, control chars, JSON fragments).
+Kept in the history because a guard that matches nothing is indistinguishable from no guard.
+
+## v0.2.373 — an empty body kills the batch it rides in
+
+`{"body":{}}` makes the backend reject the whole batch. A log record with no message produced one.
+The OTel writer now always voices a record: the message, or the event's own JSON.
+
 ## v0.2.372 — the console's telemetry actually arrives
+
+`host.docker.internal:4318` is unreachable from a container on an overlay network (host answers in
+0.6 ms, the container times out). The edge joins `monitoring-net` and exports to
+`http://otel-collector:4318`.
+
+## v0.2.371 — the console logs and traces like every other service
 
 v0.2.371 shipped the instrumentation and delivered nothing: every export failed with
 `Post "http://host.docker.internal:4318/v1/logs": processor export timeout`. The address was the

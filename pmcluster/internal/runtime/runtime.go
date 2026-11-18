@@ -248,6 +248,12 @@ type ServiceInspectResult struct {
 	Name   string
 	Image  string
 	Labels map[string]string
+	// Env is the task template's environment, verbatim. The doctor reads it to
+	// answer questions that are only answerable from the spec — "does the console
+	// actually have an OTLP endpoint", the difference between a component that
+	// ships its own telemetry and one that is invisible because the collector
+	// never scrapes it.
+	Env []string
 	// Constraints are the service's placement constraints, verbatim from the
 	// task template (`node.hostname == x`, `node.labels.y == z`). The doctor reads
 	// them to answer "is this service still where the platform says it should be",

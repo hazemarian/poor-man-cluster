@@ -583,13 +583,21 @@ func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
 	if err == nil {
 		rendered, err = s.renderStamped(ctx, built)
 	}
-	if err == nil && store.ConfigHash(string(rendered)) == latest.RenderedHash && latest.RenderedHash != "" {
-		// The rendered hash still matches the deployed revision.
-		// Additionally check the LIVE swarm: a manual `docker
-		// service update`, a half-applied deploy, or a wiped
-		// service leaves the stored hash unchanged while the live
-		// services no longer match the fresh render (k8s-style,
-		// every service carries its content hash).
+	// ONE QUESTION, ASKED THE SAME WAY THE UPGRADE PATH ASKS IT: is the LIVE swarm
+	// running what this stack would render?
+	//
+	// The stored revision hash used to gate this, and it is not the authority: the hash
+	// is stamped only after a SUCCESSFUL apply, so a deploy that failed leaves it empty
+	// and the stored-hash test said "drifted" even when the swarm already ran exactly
+	// this render — while `cluster update` asked the live labels and answered "nothing
+	// to redeploy". Two paths, two answers, and one of them redeployed for nothing.
+	//
+	// The live label is the fact, so it decides whenever there is an engine to ask.
+	// With no engine (a unit test, a CLI without a socket) nothing can be verified, and
+	// the stored hash remains the only evidence there is — claiming "in sync" from a
+	// comparison nobody ran would be worse than redeploying.
+	storedMatch := latest.RenderedHash != "" && store.ConfigHash(string(rendered)) == latest.RenderedHash
+	if err == nil && (storedMatch || s.Docker != nil) {
 		inSync, reason, syncErr := stackdrift.InSync(ctx, s.Docker, stackName, rendered)
 		switch {
 		case syncErr != nil:
@@ -716,7 +724,7 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 				Msg("deploy stack — waiting for level to become healthy")
 			s.Log.Debug().Str("app", app.Name).Int("level", i).Strs("services", level).
 				Msg("deploy stack — waiting for level to become healthy")
-			if err := s.waitLevelHealthy(ctx, app.Name, level); err != nil {
+			if err := s.waitLevelHealthy(ctx, app.Name, level, healthWaitTimeout(app.HealthTimeout)); err != nil {
 				return err
 			}
 			s.Log.Info().Str("app", app.Name).Int("level", i).Strs("services", level).
@@ -754,16 +762,92 @@ var (
 	deployWaitInterval = 2 * time.Second
 )
 
+// healthWaitTimeout is the per-stack override of deployWaitTimeout, or the default
+// when the manifest does not name one (or names something unparseable — a typo in
+// a timeout must not fail a deploy that would otherwise work).
+func healthWaitTimeout(raw string) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return deployWaitTimeout
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return deployWaitTimeout
+	}
+	return d
+}
+
+// levelNotReady explains a wait that ran out: for each service of the level that
+// is not ready, its replica count and the newest task's own words.
+//
+// One sentence, and it is the difference between "a deploy timed out" and "web
+// exits 1 because the Telegram webhook returns 404". Deploy errors are what an
+// operator reads first, so the diagnosis belongs in the message, not only in a log
+// line nobody has open.
+func (s *Service) levelNotReady(ctx context.Context, stackName string, level []string) string {
+	if s.Docker == nil {
+		return ""
+	}
+	svcs, err := s.Docker.ServiceList(ctx)
+	if err != nil {
+		return ""
+	}
+	byName := make(map[string]runtime.Service, len(svcs))
+	for _, sv := range svcs {
+		byName[sv.Name] = sv
+	}
+	var reasons []string
+	for _, name := range level {
+		full := stackName + "_" + name
+		sv, ok := byName[full]
+		if !ok {
+			reasons = append(reasons, name+": not created")
+			continue
+		}
+		if sv.RunOnce || sv.Desired == 0 || sv.Replicas >= sv.Desired {
+			continue // ready, or a job that is judged elsewhere
+		}
+		reason := fmt.Sprintf("%s: %d/%d running", name, sv.Replicas, sv.Desired)
+		if tasks, terr := s.Docker.ServiceTasks(ctx, sv.ID); terr == nil {
+			if t, ok := newestTask(tasks); ok {
+				reason += fmt.Sprintf(", newest task %s", t.State)
+				if t.Error != "" {
+					reason += fmt.Sprintf(" (%q)", t.Error)
+				}
+			}
+		}
+		reasons = append(reasons, reason)
+	}
+	return strings.Join(reasons, "; ")
+}
+
+// newestTask returns the task that best explains the current state: the one that
+// started last, so a crash-looping service reports its newest attempt rather than
+// the first one that ever ran.
+func newestTask(tasks []runtime.ServiceTask) (runtime.ServiceTask, bool) {
+	var best runtime.ServiceTask
+	found := false
+	for _, t := range tasks {
+		if !found || t.StartedAt > best.StartedAt {
+			best, found = t, true
+		}
+	}
+	return best, found
+}
+
 // waitLevelHealthy blocks until every service in the level is ready: a
 // long-running service once Replicas >= Desired, a run-once job once its
 // task reaches a terminal state (completion = ready; failure = deploy
 // error, surfaced loudly). A nil Docker client (tests, standalone CLI)
 // skips the wait.
-func (s *Service) waitLevelHealthy(ctx context.Context, stackName string, level []string) error {
+func (s *Service) waitLevelHealthy(ctx context.Context, stackName string, level []string, timeout time.Duration) error {
 	if s.Docker == nil {
 		return nil
 	}
-	deadline := time.Now().Add(deployWaitTimeout)
+	if timeout <= 0 {
+		timeout = deployWaitTimeout
+	}
+	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(deployWaitInterval)
 	defer ticker.Stop()
 	for {
@@ -781,8 +865,15 @@ func (s *Service) waitLevelHealthy(ctx context.Context, stackName string, level 
 			// console showed ten entries for one revision, all the same timeout.
 			names := append([]string(nil), level...)
 			sort.Strings(names)
-			return fmt.Errorf("timed out after %s waiting for depends_on level [%s] to become ready",
-				deployWaitTimeout, strings.Join(names, ", "))
+			base := fmt.Sprintf("timed out after %s waiting for depends_on level [%s] to become ready",
+				timeout, strings.Join(names, ", "))
+			// …and then say WHY. "timed out waiting for level [db, web]" cost hours on this
+			// platform: the answer was a web task exiting 1 with a Telegram 404, visible in the
+			// task's own error and nowhere in the deploy message.
+			if why := s.levelNotReady(ctx, stackName, level); why != "" {
+				return fmt.Errorf("%s — %s", base, why)
+			}
+			return errors.New(base)
 		}
 		select {
 		case <-ctx.Done():

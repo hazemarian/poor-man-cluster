@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -74,8 +75,14 @@ func TestPruneDuplicateStackErrors(t *testing.T) {
 		// failure, so six merges into one and the seventh stays its own entry.
 		t.Errorf("merged count = %d, want 6", merged.Count)
 	}
-	if got := canonicalStackError(merged.Error); got != merged.Error {
-		t.Errorf("canonical message still varies: %q", merged.Error)
+	// The kept message is the NEWEST attempt's, verbatim — canonicalisation is only for the
+	// comparison key, so an operator still reads the wording the platform actually produced
+	// (including any diagnosis a deploy appended).
+	if !strings.Contains(merged.Error, "depends_on level") {
+		t.Errorf("kept message lost its shape: %q", merged.Error)
+	}
+	if canonicalStackError(merged.Error) == "" {
+		t.Errorf("canonical form of the kept message is empty: %q", merged.Error)
 	}
 	if other := after[0]; other.Revision == 99 && other.Error != "image pull failed" {
 		t.Errorf("unrelated failure was rewritten: %+v", other)
