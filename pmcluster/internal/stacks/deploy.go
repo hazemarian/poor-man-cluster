@@ -815,7 +815,10 @@ func (s *Service) levelNotReady(ctx context.Context, stackName string, level []s
 				// The state is always failed/rejected here, so naming it again reads as
 				// "task failed failed": say WHAT happened, not that it is a failure.
 				reason += ", task " + t.State
-				if t.Error != "" {
+				if t.ExitCode != 0 {
+					reason += fmt.Sprintf(" (exit %d)", t.ExitCode)
+				}
+				if informativeTaskError(t.Error) {
 					reason += fmt.Sprintf(": %q", t.Error)
 				}
 			} else if t, ok := newestTask(tasks); ok {
@@ -828,6 +831,17 @@ func (s *Service) levelNotReady(ctx context.Context, stackName string, level []s
 		reasons = append(reasons, reason)
 	}
 	return blocked, strings.Join(reasons, "; ")
+}
+
+// informativeTaskError reports whether Docker's task error says anything. A container that dies
+// during startup records the literal "starting" (or "prepared"), which describes the STATE MACHINE,
+// not the failure — quoting it produced `task failed: "starting"`, true and useless at once.
+func informativeTaskError(errText string) bool {
+	switch strings.ToLower(strings.TrimSpace(errText)) {
+	case "", "starting", "prepared", "ready", "starting container", "created":
+		return false
+	}
+	return true
 }
 
 // failedTask returns the NEWEST task that actually FAILED, which is the evidence an operator needs.

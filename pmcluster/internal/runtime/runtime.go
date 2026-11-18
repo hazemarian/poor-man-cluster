@@ -313,11 +313,16 @@ type HostMount struct {
 
 // ServiceTask is one row of `docker service ps` — a task's lifecycle state.
 type ServiceTask struct {
-	TaskID     string
-	Node       string
-	Slot       int64
-	State      string // running | failed | shutdown | rejected | ...
-	Error      string // task error message, "" when running
+	TaskID string
+	Node   string
+	Slot   int64
+	State  string // running | failed | shutdown | rejected | ...
+	// Error is Docker's reason string. It is NOT always informative: a container that
+	// dies during startup often records the literal "starting". ExitCode is the number
+	// that survives that. (Measured on a crash-looping service: state failed, error
+	// "starting", exit code 1 — the exit code is the only part worth quoting.)
+	Error      string
+	ExitCode   int
 	StartedAt  int64
 	FinishedAt int64
 }

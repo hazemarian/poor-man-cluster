@@ -118,6 +118,28 @@ func TestLevelNotReady_DoesNotCallATransitionTaskAFailure(t *testing.T) {
 	}
 }
 
+// TestLevelNotReady_QuotesTheExitCodeWhenDockerSaysNothing — live, the message read
+// `task failed: "starting"`: true, and useless. When Docker's reason is a transition word the exit
+// code is the only fact worth printing, because it is what tells an operator the process died.
+func TestLevelNotReady_QuotesTheExitCodeWhenDockerSaysNothing(t *testing.T) {
+	f := &waitFake{
+		svcs: []runtime.Service{{ID: "web-id", Name: "demo_web", Desired: 1, Replicas: 0}},
+		tasks: map[string][]runtime.ServiceTask{
+			"web-id": {
+				{TaskID: "t", State: "failed", Error: "starting", ExitCode: 1, StartedAt: 100, FinishedAt: 160},
+			},
+		},
+	}
+	svc := waitService(t, f)
+	_, why := svc.levelNotReady(context.Background(), "demo", []string{"web"})
+	if !strings.Contains(why, "exit 1") {
+		t.Errorf("the diagnosis lost the exit code: %q", why)
+	}
+	if strings.Contains(why, "starting") {
+		t.Errorf("the diagnosis quoted a transition word as the cause: %q", why)
+	}
+}
+
 // TestLevelNotReady_QuietWhenEverythingIsReady — no false alarms in the message of a healthy deploy.
 func TestLevelNotReady_QuietWhenEverythingIsReady(t *testing.T) {
 	f := &waitFake{svcs: []runtime.Service{{ID: "db-id", Name: "demo_db", Desired: 1, Replicas: 1}}}

@@ -523,12 +523,19 @@ func (r *realClient) ServiceTasks(ctx context.Context, serviceID string) ([]runt
 		if msg == "" {
 			msg = t.Status.Err
 		}
+		// ContainerStatus is nil for a task that never got a container (pending, rejected),
+		// so the exit code has to be read defensively — the task list must not panic on it.
+		exitCode := 0
+		if t.Status.ContainerStatus != nil {
+			exitCode = int(t.Status.ContainerStatus.ExitCode)
+		}
 		out = append(out, runtime.ServiceTask{
 			TaskID:     t.ID,
 			Node:       hosts[t.NodeID],
 			Slot:       int64(t.Slot),
 			State:      string(t.Status.State),
 			Error:      msg,
+			ExitCode:   exitCode,
 			StartedAt:  started,
 			FinishedAt: finished,
 		})
