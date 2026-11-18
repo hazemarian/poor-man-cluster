@@ -322,9 +322,14 @@ const storagePauseHeartbeat = time.Hour
 
 // retryBackoff is one stack's retry state.
 type retryBackoff struct {
-	failures  int
-	until     time.Time
-	updatedAt int64 // the stack row's updated_at when the failure was scheduled
+	failures int
+	until    time.Time
+	// revision is the stack's current revision when the failure was scheduled. A NEW
+	// revision means a new deploy intent and clears the delay. It is deliberately not
+	// updated_at: recording the failure itself bumps that column, so keying on it made
+	// every retry look like an operator action and the ladder never grew — measured live,
+	// three passes in a row each reporting retry_in=120000.
+	revision int64
 }
 
 // backoffDelay is the wait after the Nth consecutive failure: 2m, 4m, 8m, 16m, then
@@ -354,7 +359,7 @@ func (r *Reconciler) inBackoff(st *store.Stack, now time.Time) (bool, time.Durat
 	if !ok {
 		return false, 0
 	}
-	if b.updatedAt != st.UpdatedAt {
+	if b.revision != st.CurrentRevision {
 		delete(r.backoff, st.Name)
 		return false, 0
 	}
@@ -374,7 +379,7 @@ func (r *Reconciler) scheduleBackoff(st *store.Stack, now time.Time) time.Durati
 	b := r.backoff[st.Name]
 	b.failures++
 	b.until = now.Add(backoffDelay(b.failures))
-	b.updatedAt = st.UpdatedAt
+	b.revision = st.CurrentRevision
 	r.backoff[st.Name] = b
 	return backoffDelay(b.failures)
 }

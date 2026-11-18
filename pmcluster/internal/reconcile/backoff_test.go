@@ -36,7 +36,7 @@ func TestBackoffDelay(t *testing.T) {
 func TestBackoff_SkipsUntilDueAndClearsOnChange(t *testing.T) {
 	r := &Reconciler{}
 	now := time.Date(2026, 11, 18, 3, 0, 0, 0, time.UTC)
-	st := &store.Stack{Name: "aarma", CurrentRevision: 10, UpdatedAt: 1000}
+	st := &store.Stack{Name: "aarma", CurrentRevision: 10}
 
 	// Nothing recorded: not in backoff.
 	if waiting, _ := r.inBackoff(st, now); waiting {
@@ -54,9 +54,9 @@ func TestBackoff_SkipsUntilDueAndClearsOnChange(t *testing.T) {
 		t.Error("still skipped after the delay expired")
 	}
 
-	// Operator action: the row changed, so try now.
+	// A new revision (an operator deploy, or their fix landing as one) clears the delay.
 	r.scheduleBackoff(st, now)
-	touched := &store.Stack{Name: "aarma", CurrentRevision: 10, UpdatedAt: 2000}
+	touched := &store.Stack{Name: "aarma", CurrentRevision: 11}
 	if waiting, _ := r.inBackoff(touched, now.Add(10*time.Second)); waiting {
 		t.Error("a stack the operator touched is still backing off")
 	}
@@ -74,7 +74,7 @@ func TestBackoff_SkipsUntilDueAndClearsOnChange(t *testing.T) {
 func TestBackoff_GrowsPerFailure(t *testing.T) {
 	r := &Reconciler{}
 	now := time.Date(2026, 11, 18, 3, 0, 0, 0, time.UTC)
-	st := &store.Stack{Name: "demo", UpdatedAt: 1000}
+	st := &store.Stack{Name: "demo", CurrentRevision: 1}
 
 	var got []time.Duration
 	for i := 0; i < 3; i++ {
