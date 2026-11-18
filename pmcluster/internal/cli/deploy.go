@@ -58,6 +58,23 @@ var stackShowCmd = &cobra.Command{
 	RunE:  runStackShow,
 }
 
+var stackPruneErrorsCmd = &cobra.Command{
+	Use:   "prune-errors [stack-name]",
+	Short: "Merge duplicate entries in a stack's deploy error history",
+	Long: `Merges entries that describe the same failure on the same revision, summing
+their attempt counts and keeping the newest timestamp.
+
+Histories written before failure messages were canonical (the depends_on level
+list came from a map iteration, so one timeout read "[db, web]" and "[web, db]")
+and before the store collapsed identical retries carry one entry per reconcile
+pass for a single broken deploy. This is what turns twenty of those into one
+entry reading "7 attempts".
+
+Idempotent, and safe to re-run. With no argument it prunes every stack.`,
+	Args: cobra.MaximumNArgs(1),
+	RunE: runStackPruneErrors,
+}
+
 var stackBadgeCmd = &cobra.Command{
 	Use:   "badge <stack-name>",
 	Short: "Print the README status-badge markdown for a stack",
@@ -124,7 +141,7 @@ func init() {
 	deployCmd.Flags().String("file", "", "manifest path inside the source repo (provenance, e.g. deploy/test-lms.yaml)")
 	deployCmd.Flags().String("version", "", "override the manifest's version (image tag)")
 
-	stackCmd.AddCommand(stackListCmd, stackShowCmd, stackBadgeCmd, stackMoveCmd, stackAckCmd)
+	stackCmd.AddCommand(stackListCmd, stackShowCmd, stackBadgeCmd, stackMoveCmd, stackAckCmd, stackPruneErrorsCmd)
 	stackBadgeCmd.Flags().Bool("services", false, "print the combined badge: stack main health + one segment per service")
 	stackMoveCmd.Flags().String("to", "", "target node hostname to move the stack's storage to")
 	_ = stackMoveCmd.MarkFlagRequired("to")
@@ -445,6 +462,52 @@ func runStackMove(cmd *cobra.Command, args []string) error {
 		"\n✅ Moved %s storage to %s (pinned via %s — reconcile will not move it back)\n",
 		args[0], to, stacks.StackPinKey(args[0]),
 	)
+	return nil
+}
+
+func runStackPruneErrors(cmd *cobra.Command, args []string) error {
+	defer initCLITelemetry()()
+
+	// A maintenance pass over the control-plane STORE, so it runs where the store
+	// is: on the leader. There is deliberately no remote form — the operation
+	// rewrites a column in place, and pretending it works over the API would mean
+	// inventing an endpoint for a one-time cleanup.
+	if remoteClient(cmd) != nil {
+		return errors.New("prune-errors reads and rewrites this cluster's store; run it on the leader")
+	}
+	svc, _, closeFn, err := openDeploySvc(cmd)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+
+	ctx := cmd.Context()
+	names := args
+	if len(names) == 0 {
+		list, lerr := svc.List(ctx)
+		if lerr != nil {
+			return lerr
+		}
+		for _, st := range list {
+			names = append(names, st.Name)
+		}
+	}
+
+	out := cmd.OutOrStdout()
+	total := 0
+	for _, name := range names {
+		removed, kept, perr := svc.PruneStackErrors(ctx, name)
+		if perr != nil {
+			return fmt.Errorf("%s: %w", name, perr)
+		}
+		total += removed
+		if removed > 0 {
+			fmt.Fprintf(out, "  %-28s %d → %d entries (−%d duplicates)\n", name, kept+removed, kept, removed)
+		} else {
+			fmt.Fprintf(out, "  %-28s %d entries, nothing to merge\n", name, kept)
+		}
+	}
+	fmt.Fprintf(out, "\n%d duplicate entr%s removed.\n", total, map[bool]string{true: "y", false: "ies"}[total == 1])
 	return nil
 }
 

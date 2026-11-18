@@ -66,6 +66,12 @@ func (s *Service) List(ctx context.Context) ([]Stack, error) {
 	return Local{Store: s.Store}.List(ctx)
 }
 
+// PruneStackErrors merges duplicate entries in a stack's deploy-error history
+// (same failure, same revision) and reports how many it removed.
+func (s *Service) PruneStackErrors(ctx context.Context, name string) (removed, kept int, err error) {
+	return s.Store.PruneDuplicateStackErrors(ctx, name)
+}
+
 // Revisions returns a stack's revision history via the engine's store.
 func (s *Service) Revisions(ctx context.Context, name string, limit int) ([]Revision, error) {
 	return Local{Store: s.Store}.Revisions(ctx, name, limit)
