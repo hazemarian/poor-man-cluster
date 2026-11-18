@@ -47,9 +47,12 @@ func TestLevelNotReady_NamesTheServiceAndItsTaskError(t *testing.T) {
 	}
 	svc := waitService(t, f)
 
-	why := svc.levelNotReady(context.Background(), "demo", []string{"db", "web"})
+	blocked, why := svc.levelNotReady(context.Background(), "demo", []string{"db", "web"})
 	if why == "" {
 		t.Fatal("no diagnosis produced for an unready level")
+	}
+	if len(blocked) != 1 || blocked[0] != "web" {
+		t.Fatalf("blocked = %v, want [web]: the message must name the service that is not healthy, not the level", blocked)
 	}
 	if !strings.Contains(why, "web: 0/1 running") {
 		t.Errorf("diagnosis does not give the replica count: %q", why)
@@ -60,6 +63,9 @@ func TestLevelNotReady_NamesTheServiceAndItsTaskError(t *testing.T) {
 	if strings.Contains(why, "db") {
 		t.Errorf("a ready service was reported as the problem: %q", why)
 	}
+	if !strings.Contains(why, "last failed task") {
+		t.Errorf("the diagnosis does not say the task FAILED: %q", why)
+	}
 	// The NEWEST task must be quoted, not the first one that ever ran: a crash-looping
 	// service's oldest failure is history, its newest is the evidence.
 	if strings.Contains(why, "non-zero exit") {
@@ -67,11 +73,34 @@ func TestLevelNotReady_NamesTheServiceAndItsTaskError(t *testing.T) {
 	}
 }
 
+// TestLevelNotReady_PrefersTheFailedTaskOverAStartingOne — at the instant a wait expires, a
+// crash-looping service usually has a brand-new task in "starting". Quoting that one (the old
+// behaviour: "newest task starting (\"starting\")") hides the failure that keeps causing it.
+func TestLevelNotReady_PrefersTheFailedTaskOverAStartingOne(t *testing.T) {
+	f := &waitFake{
+		svcs: []runtime.Service{{ID: "web-id", Name: "demo_web", Desired: 1, Replicas: 0}},
+		tasks: map[string][]runtime.ServiceTask{
+			"web-id": {
+				{TaskID: "failed", State: "failed", Error: "registering the Telegram webhook: 404", StartedAt: 100, FinishedAt: 160},
+				{TaskID: "starting", State: "starting", StartedAt: 200},
+			},
+		},
+	}
+	svc := waitService(t, f)
+	_, why := svc.levelNotReady(context.Background(), "demo", []string{"web"})
+	if !strings.Contains(why, "404") {
+		t.Errorf("the diagnosis hid the failure behind a fresh task: %q", why)
+	}
+	if strings.Contains(why, "starting") {
+		t.Errorf("the diagnosis quoted the transient task: %q", why)
+	}
+}
+
 // TestLevelNotReady_QuietWhenEverythingIsReady — no false alarms in the message of a healthy deploy.
 func TestLevelNotReady_QuietWhenEverythingIsReady(t *testing.T) {
 	f := &waitFake{svcs: []runtime.Service{{ID: "db-id", Name: "demo_db", Desired: 1, Replicas: 1}}}
 	svc := waitService(t, f)
-	if why := svc.levelNotReady(context.Background(), "demo", []string{"db"}); why != "" {
-		t.Errorf("diagnosis for a ready level = %q, want empty", why)
+	if blocked, why := svc.levelNotReady(context.Background(), "demo", []string{"db"}); why != "" || len(blocked) != 0 {
+		t.Errorf("diagnosis for a ready level = %q / %v, want empty", why, blocked)
 	}
 }

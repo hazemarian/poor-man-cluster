@@ -15,6 +15,11 @@ import (
 // histories with one entry per reconcile pass for a single broken deploy.
 var levelListPattern = regexp.MustCompile(`waiting for depends_on level \[([^\]]*)\] to become ready`)
 
+// healthyListPattern is the CURRENT wording ("waiting for [web] to become healthy"). Both shapes are
+// normalised: histories carry the old one for months after a rename, and a comparison that only knows
+// the new spelling would let the same failure accumulate again as two different errors.
+var healthyListPattern = regexp.MustCompile(`waiting for \[([^\]]*)\] to become healthy`)
+
 // canonicalStackError rewrites a failure message into the form that is comparable across attempts.
 // It changes ONLY the parts that describe how a pass happened, never what failed.
 func canonicalStackError(msg string) string {
@@ -22,11 +27,22 @@ func canonicalStackError(msg string) string {
 	// evidence at one moment: a task error that repeats with a new pid, a replica count that moves.
 	// Two entries describing the same cause must compare equal, so the suffix is dropped for the
 	// KEY — the stored message keeps it.
-	if at := strings.Index(msg, " to become ready"); at >= 0 {
-		if cut := strings.Index(msg[at:], " — "); cut >= 0 {
-			msg = msg[:at+cut]
+	for _, marker := range []string{" to become ready", " to become healthy"} {
+		if at := strings.Index(msg, marker); at >= 0 {
+			if cut := strings.Index(msg[at:], " — "); cut >= 0 {
+				msg = msg[:at+cut]
+			}
+			break
 		}
 	}
+	msg = healthyListPattern.ReplaceAllStringFunc(msg, func(m string) string {
+		parts := strings.Split(healthyListPattern.FindStringSubmatch(m)[1], ",")
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
+		}
+		sort.Strings(parts)
+		return "waiting for [" + strings.Join(parts, ", ") + "] to become healthy"
+	})
 	return levelListPattern.ReplaceAllStringFunc(msg, func(m string) string {
 		parts := strings.Split(levelListPattern.FindStringSubmatch(m)[1], ",")
 		for i := range parts {

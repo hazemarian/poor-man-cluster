@@ -3,6 +3,27 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.383 — a deploy failure names the service that is down, not the sort that grouped it
+
+`timed out after 2m0s waiting for depends_on level [db, web] to become ready` reads as "a dependency
+is broken". On aarma it was the opposite: `web` declares no `depends_on` at all — `[db, web]` is just
+level 0 of the topological sort — and `web` alone was crash-looping. The level is how the deploy
+ORDERS services, not a diagnosis, so it no longer appears in the failure:
+
+    timed out after 2m0s waiting for web to become healthy
+      — web: 0/1 running, last failed task failed ("registering the Telegram webhook: 404")
+
+Two supporting changes:
+
+- The diagnosis quotes the newest task that CARRIES AN ERROR, not simply the newest task. A
+  crash-looping service usually has a fresh task in `starting` at the instant the wait expires, and
+  quoting that one hid the failure it was looping on (`last task failed ("starting")`).
+- `canonicalStackError` knows both wordings, so retries of the same failure still collapse after the
+  rename; the history carries the old phrasing for months.
+
+Also: the backoff's remaining time is measured against the caller's clock (`b.until.Sub(now)`), not
+the wall — a test with an injected clock exposed `time.Until` answering −8h.
+
 ## v0.2.381 — five things the platform should have said out loud
 
 All five came out of one night of operating this cluster; each closes a question the platform

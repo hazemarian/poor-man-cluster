@@ -784,13 +784,13 @@ func healthWaitTimeout(raw string) time.Duration {
 // exits 1 because the Telegram webhook returns 404". Deploy errors are what an
 // operator reads first, so the diagnosis belongs in the message, not only in a log
 // line nobody has open.
-func (s *Service) levelNotReady(ctx context.Context, stackName string, level []string) string {
+func (s *Service) levelNotReady(ctx context.Context, stackName string, level []string) (blocked []string, why string) {
 	if s.Docker == nil {
-		return ""
+		return nil, ""
 	}
 	svcs, err := s.Docker.ServiceList(ctx)
 	if err != nil {
-		return ""
+		return nil, ""
 	}
 	byName := make(map[string]runtime.Service, len(svcs))
 	for _, sv := range svcs {
@@ -801,24 +801,48 @@ func (s *Service) levelNotReady(ctx context.Context, stackName string, level []s
 		full := stackName + "_" + name
 		sv, ok := byName[full]
 		if !ok {
+			blocked = append(blocked, name)
 			reasons = append(reasons, name+": not created")
 			continue
 		}
 		if sv.RunOnce || sv.Desired == 0 || sv.Replicas >= sv.Desired {
 			continue // ready, or a job that is judged elsewhere
 		}
+		blocked = append(blocked, name)
 		reason := fmt.Sprintf("%s: %d/%d running", name, sv.Replicas, sv.Desired)
 		if tasks, terr := s.Docker.ServiceTasks(ctx, sv.ID); terr == nil {
-			if t, ok := newestTask(tasks); ok {
-				reason += fmt.Sprintf(", newest task %s", t.State)
+			if t, ok := failingTask(tasks); ok {
+				reason += fmt.Sprintf(", last failed task %s", t.State)
 				if t.Error != "" {
 					reason += fmt.Sprintf(" (%q)", t.Error)
 				}
+			} else if t, ok := newestTask(tasks); ok {
+				// Nothing has failed yet: the task is still coming up, and saying so is the
+				// honest answer. (Quoting "starting" as the newest task when an earlier attempt
+				// had failed is what made this line hide the real error.)
+				reason += fmt.Sprintf(", newest task %s", t.State)
 			}
 		}
 		reasons = append(reasons, reason)
 	}
-	return strings.Join(reasons, "; ")
+	return blocked, strings.Join(reasons, "; ")
+}
+
+// failingTask returns the NEWEST task that carries an error, which is the evidence an operator
+// needs. A crash-looping service almost always has a fresh task in "starting" at the moment the
+// wait expires, and quoting that one hides the failure that caused the loop.
+func failingTask(tasks []runtime.ServiceTask) (runtime.ServiceTask, bool) {
+	var best runtime.ServiceTask
+	found := false
+	for _, t := range tasks {
+		if t.Error == "" {
+			continue
+		}
+		if !found || t.StartedAt > best.StartedAt || (t.StartedAt == best.StartedAt && t.FinishedAt > best.FinishedAt) {
+			best, found = t, true
+		}
+	}
+	return best, found
 }
 
 // newestTask returns the task that best explains the current state: the one that
@@ -859,18 +883,26 @@ func (s *Service) waitLevelHealthy(ctx context.Context, stackName string, level 
 			return nil
 		}
 		if time.Now().After(deadline) {
-			// SORTED names. The level comes from a map iteration, so this message used to alternate
-			// between "[db, web]" and "[web, db]" for the same failure — which made one broken deploy
-			// look like two different errors and defeated the collapse in RecordStackError: the
-			// console showed ten entries for one revision, all the same timeout.
-			names := append([]string(nil), level...)
-			sort.Strings(names)
-			base := fmt.Sprintf("timed out after %s waiting for depends_on level [%s] to become ready",
-				timeout, strings.Join(names, ", "))
-			// …and then say WHY. "timed out waiting for level [db, web]" cost hours on this
-			// platform: the answer was a web task exiting 1 with a Telegram 404, visible in the
-			// task's own error and nowhere in the deploy message.
-			if why := s.levelNotReady(ctx, stackName, level); why != "" {
+			// NAME THE BLOCKED SERVICE, NOT THE MECHANISM. This used to read
+			// "waiting for depends_on level [db, web] to become ready", which an operator
+			// reasonably read as "a dependency is broken" — on a stack where `web` declared no
+			// depends_on at all and was simply crash-looping. The level is how the deploy
+			// ORDERS services (a topological sort); it is not a diagnosis.
+			//
+			// SORTED, because the level comes from a map iteration and one failure must not read
+			// as two different errors (that defeated the collapse in RecordStackError).
+			blocked, why := s.levelNotReady(ctx, stackName, level)
+			names := blocked
+			if len(names) == 0 {
+				names = append([]string(nil), level...)
+				sort.Strings(names)
+			}
+			subject := strings.Join(names, ", ")
+			if len(names) > 1 {
+				subject = "[" + subject + "]"
+			}
+			base := fmt.Sprintf("timed out after %s waiting for %s to become healthy", timeout, subject)
+			if why != "" {
 				return fmt.Errorf("%s — %s", base, why)
 			}
 			return errors.New(base)

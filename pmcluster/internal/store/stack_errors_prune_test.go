@@ -98,6 +98,34 @@ func TestPruneDuplicateStackErrors(t *testing.T) {
 	}
 }
 
+// TestCanonicalStackError_HandlesBothWordings — the deploy timeout was renamed from "depends_on level
+// [a, b] ... to become ready" to "waiting for [a] to become healthy". A comparison that knew only one
+// spelling would let the same failure pile up again under two names, and the history is full of the old
+// one.
+func TestCanonicalStackError_HandlesBothWordings(t *testing.T) {
+	oldForm := "Deploying stack to the swarm: timed out after 2m0s waiting for depends_on level [web, db] to become ready"
+	newForm := "Deploying stack to the swarm: timed out after 2m0s waiting for [web, db] to become healthy"
+
+	if canonicalStackError(oldForm) == oldForm {
+		t.Error("the old wording was not normalised")
+	}
+	if canonicalStackError(newForm) == newForm {
+		t.Error("the new wording was not normalised")
+	}
+	// Same failure, same diagnosis appended or not: one key.
+	mixed := []string{
+		newForm + " — web: 0/1 running, last failed task failed (\"starting\")",
+		newForm + " — web: 0/1 running, last failed task failed (\"exited 1\")",
+		newForm,
+	}
+	first := canonicalStackError(mixed[0])
+	for _, m := range mixed[1:] {
+		if got := canonicalStackError(m); got != first {
+			t.Errorf("canonicalStackError(%q) = %q, want %q", m, got, first)
+		}
+	}
+}
+
 // TestCanonicalStackError_LeavesOtherMessagesAlone — the canonical form touches ONE message shape.
 func TestCanonicalStackError_LeavesOtherMessagesAlone(t *testing.T) {
 	for _, msg := range []string{

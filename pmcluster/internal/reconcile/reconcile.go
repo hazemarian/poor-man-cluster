@@ -364,7 +364,10 @@ func (r *Reconciler) inBackoff(st *store.Stack, now time.Time) (bool, time.Durat
 		return false, 0
 	}
 	if now.Before(b.until) {
-		return true, time.Until(b.until).Round(time.Second)
+		// Sub(now), not time.Until: the caller may pass an injected clock (tests, and any
+		// future "what would the next pass do" preview), and the answer must be measured
+		// against THAT clock rather than the wall.
+		return true, b.until.Sub(now).Round(time.Second)
 	}
 	return false, 0
 }
