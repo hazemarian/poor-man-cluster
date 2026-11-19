@@ -82,8 +82,11 @@ func (r *realClient) ShellCreate(ctx context.Context, spec runtime.ShellServiceS
 			ContainerSpec: &swarm.ContainerSpec{
 				Image:   spec.Image,
 				Command: cmd,
-				// The clients need a working /tmp and HOME=/root for psql's history.
-				Env:     []string{"HOME=/root", "PGHOST=" + spec.Stack + "_db", "PS1=\\w \\$ "},
+				// HOME for psql's history, and NO PGHOST: a default host is a guess, and a guess
+				// that happens to resolve connects an operator to the wrong database quietly.
+				// Without it, psql fails immediately (no local socket) and says so, which is the
+				// correct answer to "which database?" — the operator names it: `psql -h aarma_db`.
+				Env:     ShellEnv(),
 				Secrets: mounts,
 				Configs: cfgMounts,
 				// A shell is interactive; keep it readable and writable by root only.
@@ -165,6 +168,13 @@ func (r *realClient) ShellRemove(ctx context.Context, serviceID string) error {
 		return fmt.Errorf("remove shell service: %w", err)
 	}
 	return nil
+}
+
+// ShellEnv returns the environment a shell session gets. It exists so the absence of PGHOST is a
+// tested decision rather than a missing line: a default host that resolves is worse than none,
+// because it connects the operator to whatever answers first.
+func ShellEnv() []string {
+	return []string{"HOME=/root", "PS1=\\w \\$ "}
 }
 
 // StackNetworks returns the network IDs the stack's services are attached to, de-duplicated. A

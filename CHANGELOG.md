@@ -3,6 +3,19 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.388 — the shell stops guessing which database you meant
+
+A shell session used to export `PGHOST=<stack>_db`, assuming the stack's database service is called
+`db`. When that name resolved, `psql` connected — to a database the operator never named. When it did
+not, the error was about a missing host rather than about the name they should have typed.
+
+The session environment is now `HOME=/root` and a `PS1`. With no host and no local socket, `psql` fails
+immediately and says so, and the operator names the database: `psql -h aarma_db -U … -d …`. Credentials
+are still mounted under `/run/secrets`, which is what makes that one-line command enough.
+
+`internal/docker/shell_env_test.go` pins it in both directions: no `PG*` variable may come back, and
+`HOME`/`PS1` must stay, because they are what makes the clients usable interactively.
+
 ## v0.2.387 — the e2e suite stops blaming the platform for the swarm's mood
 
 Two failures that were re-run into passing one too many times, fixed at the cause.
