@@ -63,6 +63,40 @@ service terminal does.
 shell that cannot open the database whose credentials it has mounted answers the wrong question.
 `PMCLUSTER_SHELL_IMAGE` overrides the image for a fleet; `?image=` for one session.
 
+## The session's writable space is bounded (2026-11-18)
+
+A shell mounts a **200 MiB tmpfs on `/tmp`** and carries a **512 MiB memory limit**. Nothing else in
+the container is sized, because nothing else is written to.
+
+Why `/tmp` and not the container's writable layer: `/tmp` is where an operator puts a dump before
+restoring it, and it is the only place a session writes anything large. Capping the writable layer
+itself would need `storage-opt size`, which requires a filesystem and driver combination most hosts do
+not have — and when it is unsupported the container is **refused**, not limited. A sized tmpfs works on
+every host.
+
+Why the memory limit travels with it: a 200 MiB tmpfs is memory. Without a limit, an oversized download
+moves the cost from the node's disk (shared with the control plane) to the node's memory, which is not
+an improvement. With it, the failure is an OOM kill of one throwaway container.
+
+Measured on production before shipping (`docker service create --mount
+type=tmpfs,destination=/tmp,tmpfs-size=209715200`):
+
+```
+tmpfs                   200.0M         0    200.0M   0% /tmp
+200+0 records out
+209715200 bytes (200.0MB) copied, 0.264363 seconds
+```
+
+— a 300 MB write stops at exactly 200 MiB with `ENOSPC`.
+
+**The operator-visible consequence:** a dump larger than 200 MiB does not fit, and streaming is the
+answer rather than a bigger volume:
+
+```sh
+curl -fsSL <url> | pg_restore -h aarma_db -U aarma -d aarma --no-owner --no-acl   # custom/tar dump
+curl -fsSL <url> | psql      -h aarma_db -U aarma -d aarma                        # plain SQL
+```
+
 ## Consequences
 
 - A terminal now works for **any** stack regardless of where its containers run, because the shell is

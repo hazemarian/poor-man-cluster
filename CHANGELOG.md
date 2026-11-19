@@ -3,6 +3,28 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.389 — a shell's disk is 200 MiB, and it is memory
+
+A shell session downloaded a dump into `/tmp` on the node's disk — the same disk the control plane
+writes to — with nothing bounding it. `/tmp` is now a **200 MiB tmpfs** and the container carries a
+**512 MiB memory limit**, so an oversized download fails inside one throwaway container instead of
+filling a manager's disk.
+
+Capping the writable layer (`storage-opt size`) was rejected: it needs a filesystem/driver combination
+these hosts do not have, and when unsupported the container is refused rather than limited. A sized
+tmpfs works everywhere, and it moves the cost from shared disk to memory the container's own limit
+bounds.
+
+Verified on production before shipping: `df -h /tmp` reports `200.0M`, and `dd` of 300 MB stops at
+`209715200 bytes` — `ENOSPC` at exactly the cap.
+
+The consequence an operator will meet: **a dump larger than 200 MiB does not fit**, and the answer is
+to stream it, not to raise the volume —
+
+```sh
+curl -fsSL <url> | pg_restore -h aarma_db -U aarma -d aarma --no-owner --no-acl
+```
+
 ## v0.2.388 — the shell stops guessing which database you meant
 
 A shell session used to export `PGHOST=<stack>_db`, assuming the stack's database service is called

@@ -15,6 +15,24 @@ import (
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/runtime"
 )
 
+// A shell's writable space is capped, and the cap is on /tmp — that is where an operator puts a
+// dump before restoring it, and it is the only place in the container anything large is written.
+//
+// The alternative, capping the container's writable LAYER (storage-opt size), is not portable: it
+// needs a filesystem and driver combination most of these hosts do not have, and when unsupported
+// the container is refused rather than limited. A sized tmpfs works everywhere and moves the cost
+// from the node's disk (shared with the control plane) to memory that the container's own limit
+// bounds — so an oversized download fails inside the shell instead of filling a manager.
+const (
+	// ShellTmpfsBytes is the size of /tmp in a shell session: enough for a compressed database
+	// dump, not enough to matter to the host.
+	ShellTmpfsBytes = 200 << 20 // 200 MiB
+	// ShellMemoryBytes leaves room for the tmpfs plus the clients (psql, pg_restore, curl) and
+	// their buffers. A session that exceeds it is OOM-killed, which is the correct blast radius:
+	// one throwaway container, not the node.
+	ShellMemoryBytes = 512 << 20 // 512 MiB
+)
+
 // ShellCreate creates the throwaway container an operator's terminal session runs in.
 //
 // It is a SERVICE, not `docker run`, for one measured reason: a stack's networks are created by
@@ -89,9 +107,16 @@ func (r *realClient) ShellCreate(ctx context.Context, spec runtime.ShellServiceS
 				Env:     ShellEnv(),
 				Secrets: mounts,
 				Configs: cfgMounts,
+				// Downloads land in /tmp; give it a ceiling that belongs to the session.
+				Mounts: shellMounts(),
 				// A shell is interactive; keep it readable and writable by root only.
 				User: "0:0",
 				TTY:  false,
+			},
+			// The sized tmpfs and the memory limit travel together: without the limit, a 200 MiB
+			// tmpfs is a way to pressure the node's memory instead of its disk.
+			Resources: &swarm.ResourceRequirements{
+				Limits: &swarm.Limit{MemoryBytes: ShellMemoryBytes},
 			},
 			RestartPolicy: &swarm.RestartPolicy{Condition: swarm.RestartPolicyConditionNone},
 			Placement: &swarm.Placement{
@@ -168,6 +193,19 @@ func (r *realClient) ShellRemove(ctx context.Context, serviceID string) error {
 		return fmt.Errorf("remove shell service: %w", err)
 	}
 	return nil
+}
+
+// shellMounts is the session's only mount: a sized tmpfs on /tmp, which is where an operator puts a
+// dump. It is a function so the mount and the constant cannot drift apart — the tests read it.
+func shellMounts() []mount.Mount {
+	return []mount.Mount{{
+		Type:   mount.TypeTmpfs,
+		Target: "/tmp",
+		TmpfsOptions: &mount.TmpfsOptions{
+			SizeBytes: ShellTmpfsBytes,
+			Mode:      0o1777, // as /tmp should be: sticky, writable inside the shell
+		},
+	}}
 }
 
 // ShellEnv returns the environment a shell session gets. It exists so the absence of PGHOST is a
