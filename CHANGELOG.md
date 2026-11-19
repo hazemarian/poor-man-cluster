@@ -3,27 +3,26 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
-## v0.2.389 — a shell's disk is 200 MiB, and it is memory
+## v0.2.389 — a shell's disk is 200 MiB, and a deploy survives a concurrent writer
 
-A shell session downloaded a dump into `/tmp` on the node's disk — the same disk the control plane
-writes to — with nothing bounding it. `/tmp` is now a **200 MiB tmpfs** and the container carries a
-**512 MiB memory limit**, so an oversized download fails inside one throwaway container instead of
-filling a manager's disk.
+**The shell's writable space is bounded.** A session downloaded its dump into `/tmp` on the node's
+disk — the same disk the control plane writes to — with nothing bounding it. `/tmp` is a **200 MiB
+tmpfs** now and the container carries a **512 MiB memory limit**, so an oversized download fails
+inside one throwaway container instead of filling a manager. Capping the writable layer
+(`storage-opt size`) was rejected: it needs a filesystem/driver combination these hosts do not have,
+and when unsupported the container is refused rather than limited. Verified on production before
+shipping: `df -h /tmp` reports `200.0M` and `dd` of 300 MB stops at `209715200 bytes`.
 
-Capping the writable layer (`storage-opt size`) was rejected: it needs a filesystem/driver combination
-these hosts do not have, and when unsupported the container is refused rather than limited. A sized
-tmpfs works everywhere, and it moves the cost from shared disk to memory the container's own limit
-bounds.
+Consequence an operator will meet: a dump over 200 MiB is **streamed**, not stored —
+`curl -fsSL <url> | pg_restore -h aarma_db -U aarma -d aarma --no-owner --no-acl`.
 
-Verified on production before shipping: `df -h /tmp` reports `200.0M`, and `dd` of 300 MB stops at
-`209715200 bytes` — `ENOSPC` at exactly the cap.
-
-The consequence an operator will meet: **a dump larger than 200 MiB does not fit**, and the answer is
-to stream it, not to raise the volume —
-
-```sh
-curl -fsSL <url> | pg_restore -h aarma_db -U aarma -d aarma --no-owner --no-acl
-```
+**A deploy now survives a concurrent writer.** `docker stack deploy` lists a stack's services and then
+creates the missing ones; a service created between those two steps makes the create fail with
+`name conflicts with an existing object` for a service that exists and only needs an update. That is
+what happens when a reconcile pass and an operator's deploy collide — measured in CI, where a stack
+that was healthy was reported as failing to deploy 30 reconcile passes in a row. The retry that
+already existed for `update out of sequence` now covers both answers, and a test pins that a real
+failure (an unschedulable service) is still reported on the first attempt.
 
 ## v0.2.388 — the shell stops guessing which database you meant
 

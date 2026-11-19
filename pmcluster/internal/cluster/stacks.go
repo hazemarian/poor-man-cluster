@@ -133,7 +133,7 @@ func (d *dockerCLIDeployer) deployStack(ctx context.Context, name string, compos
 
 	out, err := deploy()
 	if err != nil {
-		if strings.Contains(out, "update out of sequence") {
+		if transientDeployError(out) {
 			for i := 1; i <= forceUpdateRetries; i++ {
 				select {
 				case <-ctx.Done():
@@ -146,7 +146,7 @@ func (d *dockerCLIDeployer) deployStack(ctx context.Context, name string, compos
 				} else {
 					out = retryOut
 					err = retryErr
-					if !strings.Contains(retryOut, "update out of sequence") {
+					if !transientDeployError(retryOut) {
 						break
 					}
 				}
@@ -366,6 +366,23 @@ func (d *dockerCLIDeployer) RemoveStack(ctx context.Context, name string) error 
 		return fmt.Errorf("docker stack rm %s: %w", name, err)
 	}
 	return nil
+}
+
+// transientDeployError reports the answers Docker gives when ANOTHER writer touched the stack while
+// this one was working. Two of them matter and they are the same situation seen from different ends:
+//
+//   - "update out of sequence" — Swarm's optimistic-concurrency refusal: the spec moved after we
+//     read its version.
+//   - "name conflicts with an existing object" — `docker stack deploy` LISTS a stack's services and
+//     then creates the missing ones; a service created between those two steps has a name that is
+//     already taken, so the create fails for a service that now exists and only needs an update.
+//
+// The second one is not hypothetical: a reconcile pass and an operator's `pmcluster deploy` running
+// in the same second produce exactly this, and it used to surface as a deploy that failed while the
+// stack was fine and running.
+func transientDeployError(out string) bool {
+	return strings.Contains(out, "update out of sequence") ||
+		strings.Contains(out, "name conflicts with an existing object")
 }
 
 // forceUpdateRetries is how many times a single service's forced update is
