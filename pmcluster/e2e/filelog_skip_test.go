@@ -179,24 +179,43 @@ func TestE2EFilelogAttributionAndSkip(t *testing.T) {
 	// rather than sleep a fixed time so a fast host does not wait and a slow one
 	// is not judged early.
 	var keptSeen bool
-	deadline := time.Now().Add(180 * time.Second)
+	var last parseableQuery
+	streamNoted := false
+	deadline := time.Now().Add(240 * time.Second)
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
 			t.Fatalf("context done while waiting for ingestion: %v", ctx.Err())
 		default:
 		}
-		if parseableContains(t, ctx, pport, user, pass, stream, keptMarker) {
+		last = parseableLook(t, ctx, pport, user, pass, stream, keptMarker)
+		if last.found {
 			keptSeen = true
 			break
+		}
+		// Say it ONCE. A stream that does not exist yet is the expected state until the first
+		// batch lands; repeating it every five seconds buried the real failure when there was one.
+		if !last.streamExists && !streamNoted {
+			streamNoted = true
+			t.Logf("stream %q does not exist yet — Parseable creates it on the first successful ingest, so nothing has arrived", stream)
 		}
 		time.Sleep(5 * time.Second)
 	}
 	if !keptSeen {
 		logs, _ := run("logs", "--tail", "400", collectorName)
 		labels, _ := run("inspect", "--format", "{{.Name}} {{json .Config.Labels}}", keptName, skippedName)
-		t.Fatalf("kept container's stdout never reached Parseable: no filelog attribution.\n"+
-			"Emitter labels (what the receiver rule reads):\n%s\nCollector log tail:\n%s", labels, tail(logs, 6000))
+		// Two different failures, and they used to share one message:
+		//   the stream never appeared  → ingestion never happened (collector/receiver/endpoint)
+		//   the stream exists, no mark → ingestion works, attribution does not (the rule/labels)
+		verdict := "the stream exists but the kept marker never appeared: ingestion works, the filelog ATTRIBUTION does not"
+		if !last.streamExists {
+			verdict = "the stream never appeared: NOTHING was ingested at all (collector, receiver or endpoint — not attribution)"
+		}
+		if last.err != "" {
+			verdict += "\nlast query error: " + last.err
+		}
+		t.Fatalf("kept container's stdout never reached Parseable — %s\n"+
+			"Emitter labels (what the receiver rule reads):\n%s\nCollector log tail:\n%s", verdict, labels, tail(logs, 6000))
 	}
 	t.Logf("✅ %s attributed and ingested (service identity + filelog path work)", keptMarker)
 
@@ -217,7 +236,22 @@ func TestE2EFilelogAttributionAndSkip(t *testing.T) {
 
 // parseableContains reports whether the stream holds a row whose body contains
 // marker within the last 15 minutes.
+// parseableQuery is the outcome of one look at the backend. It is deliberately not a bool: "the
+// stream does not exist yet" and "the query failed" lead to different diagnoses, and the old
+// bool conflated them into a stream of HTTP 400 lines followed by a failure that blamed attribution.
+type parseableQuery struct {
+	found        bool // the marker is in the stream
+	streamExists bool // the stream itself exists (Parseable creates it on first successful ingest)
+	err          string
+}
+
 func parseableContains(t *testing.T, ctx context.Context, port int, user, pass, stream, marker string) bool {
+	t.Helper()
+	return parseableLook(t, ctx, port, user, pass, stream, marker).found
+}
+
+// parseableLook asks the backend once and says WHY it answered the way it did.
+func parseableLook(t *testing.T, ctx context.Context, port int, user, pass, stream, marker string) parseableQuery {
 	t.Helper()
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -234,29 +268,35 @@ func parseableContains(t *testing.T, ctx context.Context, port int, user, pass, 
 	req, err := http.NewRequestWithContext(cctx, http.MethodPost,
 		fmt.Sprintf("http://127.0.0.1:%d/api/v1/query", port), bytes.NewReader(payload))
 	if err != nil {
-		return false
+		return parseableQuery{err: err.Error()}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(user+":"+pass)))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Logf("query request error (backend may still be starting): %v", err)
-		return false
+		// A backend that is still starting is not a verdict; the caller polls.
+		return parseableQuery{err: err.Error()}
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		t.Logf("query returned HTTP %d: %s", resp.StatusCode, tail(string(raw), 400))
-		return false
+		body := string(raw)
+		// Parseable creates a stream on the FIRST successful ingest, so a query that arrives
+		// before anything has ever been written answers 400 naming a table that does not exist.
+		// That is "no data yet", not a broken query — and treating it as an error is what made a
+		// fresh e2e look like a filelog attribution failure.
+		if strings.Contains(body, "not found") && strings.Contains(body, stream) {
+			return parseableQuery{streamExists: false}
+		}
+		return parseableQuery{streamExists: true, err: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, tail(body, 400))}
 	}
 	var rows []struct {
 		N int64 `json:"n"`
 	}
 	if err := json.Unmarshal(raw, &rows); err != nil || len(rows) == 0 {
-		t.Logf("unparseable query response: %s", tail(string(raw), 400))
-		return false
+		return parseableQuery{streamExists: true, err: fmt.Sprintf("unparseable response: %s", tail(string(raw), 400))}
 	}
-	return rows[0].N > 0
+	return parseableQuery{found: rows[0].N > 0, streamExists: true}
 }
 
 // tail returns the last n bytes of s, so a failure message stays readable.

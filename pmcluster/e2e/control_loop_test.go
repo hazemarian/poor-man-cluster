@@ -195,9 +195,11 @@ services:
 	if out, errOut, code := runCmd(t, cl.homeDir, "config", "create", config, "--scope", "service", "--stack", stack, "--value", "hello"); code != 0 {
 		t.Fatalf("config create exited %d:\n%s\n%s", code, out, errOut)
 	}
-	if out, errOut, code := runCmd(t, cl.homeDir, "deploy", path); code != 0 {
-		t.Fatalf("deploy exited %d:\n%s\n%s", code, out, errOut)
-	}
+	// This swarm is shared and self-hosted: a previous run whose job was killed (or a test that
+	// crashed) leaves the stack behind, and the deploy then dies with
+	// "service loop-drift_web already exists" — which reads as a platform bug and is not one.
+	clearLeftoverStack(t, cl.homeDir, stack)
+	deployWithRetry(t, cl.homeDir, stack, path)
 	t.Cleanup(func() {
 		if out, errOut, code := runCmd(t, cl.homeDir, "stack", "remove", stack); code != 0 {
 			t.Logf("stack remove %s exited %d (best-effort):\n%s\n%s", stack, code, out, errOut)
@@ -205,6 +207,70 @@ services:
 	})
 
 	body(ctx, t, loopApp{stack: stack, config: config, manifest: manifest})
+}
+
+// clearLeftoverStack removes a stack of the same name that a previous run left on this swarm and
+// waits for its services to actually disappear. Without the wait, the removal races the deploy.
+func clearLeftoverStack(t *testing.T, homeDir, stack string) {
+	t.Helper()
+	ctx := context.Background()
+	svc, _ := dockerRunNoFail(ctx, "service", "ls", "--filter", "name="+stack+"_", "--format", "{{.Name}}")
+	if strings.TrimSpace(svc) == "" {
+		return // nothing left over
+	}
+	t.Logf("a previous run left %s on this swarm (%s); removing it before deploying", stack, strings.TrimSpace(svc))
+	if out, errOut, code := runCmd(t, homeDir, "stack", "remove", stack); code != 0 {
+		t.Logf("stack remove %s exited %d (continuing):\n%s\n%s", stack, code, out, errOut)
+	}
+	deadline := time.Now().Add(90 * time.Second)
+	for time.Now().Before(deadline) {
+		left, _ := dockerRunNoFail(ctx, "service", "ls", "--filter", "name="+stack+"_", "--format", "{{.Name}}")
+		if strings.TrimSpace(left) == "" {
+			return
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Fatalf("stack %s still has services after 90s; the swarm is not in a state this test can use", stack)
+}
+
+// deployWithRetry deploys, retrying docker's own concurrency errors. "already exists" and
+// "update out of sequence" are Swarm's optimistic-concurrency answers — one arrives with a stale
+// service left by a killed run, the other when two updates touch the same service within the
+// version window. Neither describes a bad manifest, and a test that fails on them reports the
+// swarm's mood as a platform defect.
+func deployWithRetry(t *testing.T, homeDir, stack, path string) {
+	t.Helper()
+	const attempts = 3
+	var out, errOut string
+	for attempt := 1; attempt <= attempts; attempt++ {
+		var code int
+		out, errOut, code = runCmd(t, homeDir, "deploy", path)
+		if code == 0 {
+			return
+		}
+		combined := out + errOut
+		transient := strings.Contains(combined, "already exists") || strings.Contains(combined, "update out of sequence")
+		if !transient || attempt == attempts {
+			t.Fatalf("deploy exited %d (attempt %d/%d):\n%s\n%s", code, attempt, attempts, out, errOut)
+		}
+		t.Logf("deploy attempt %d/%d hit a Swarm concurrency error (%s); clearing and retrying",
+			attempt, attempts, firstLineContaining(combined, "already exists", "update out of sequence"))
+		clearLeftoverStack(t, homeDir, stack)
+		time.Sleep(3 * time.Second)
+	}
+}
+
+// firstLineContaining returns the first line of s that contains one of the needles, for a log
+// message that says what happened rather than dumping the whole output.
+func firstLineContaining(s string, needles ...string) string {
+	for _, line := range strings.Split(s, "\n") {
+		for _, n := range needles {
+			if strings.Contains(line, n) {
+				return strings.TrimSpace(line)
+			}
+		}
+	}
+	return ""
 }
 
 // waitBadgeStatus polls the public DB-driven badge endpoint until the stack reports one of the

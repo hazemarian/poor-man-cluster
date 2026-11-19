@@ -3,6 +3,28 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.387 — the e2e suite stops blaming the platform for the swarm's mood
+
+Two failures that were re-run into passing one too many times, fixed at the cause.
+
+1. **`filelog_skip_test` reported an attribution failure when nothing had been ingested at all.**
+   Parseable creates a stream on the FIRST successful ingest, so a query arriving before that answers
+   HTTP 400 naming a table that does not exist. The query helper treated every non-2xx as "no data",
+   logged it as an error every five seconds, and then failed with "no filelog attribution" — three
+   different failures sharing one symptom. The helper now reports `found` / `streamExists` / `err`
+   separately, the "stream does not exist yet" note is printed once, and the failure message says which
+   of the two it is: nothing ingested (collector, receiver or endpoint) or ingested without attribution
+   (the rule and labels). The wait also went 180s → 240s.
+2. **The control-loop phases assumed a clean swarm.** The drift phase died with `service loop-drift_web
+   already exists` because a previous run's stack survived a killed job — which reads as a platform
+   defect and is not one. Each phase now clears a same-named leftover stack and waits for its services
+   to actually disappear before deploying, and a deploy that still hits Docker's optimistic-concurrency
+   answers (`already exists`, `update out of sequence`) is retried twice with a cleared stack and the
+   reason logged. The platform's own retry for `update out of sequence` is unchanged — it already
+   exists in `internal/cluster/stacks.go`; the test was reporting a race it should have absorbed.
+
+No production code changed. `go test ./internal/... ./pkg/...` green, `golangci-lint` 0 issues, e2e vet ok.
+
 ## v0.2.386 — the docs stopped saying things that are not true
 
 Five gaps found by auditing the docs against the code, not by reading them.
