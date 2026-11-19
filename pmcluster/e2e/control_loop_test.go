@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"syscall"
 	"testing"
@@ -222,15 +223,40 @@ func clearLeftoverStack(t *testing.T, homeDir, stack string) {
 	if out, errOut, code := runCmd(t, homeDir, "stack", "remove", stack); code != 0 {
 		t.Logf("stack remove %s exited %d (continuing):\n%s\n%s", stack, code, out, errOut)
 	}
-	deadline := time.Now().Add(90 * time.Second)
+	// Wait for the NAMES to be reaped, not for the listing to empty. `docker service ls` drops a
+	// service as soon as it is marked for removal; the name stays reserved until swarm removes the
+	// object from the store, and a deploy in that window still fails with "already exists".
+	// Measured: two deploys seconds apart hit it twice, with an empty listing in between.
+	for _, name := range strings.Fields(svc) {
+		waitServiceReaped(t, name, 90*time.Second)
+	}
+}
+
+// waitServiceReaped blocks until `docker service inspect <name>` reports the object gone. inspect
+// reads the store, so it is the only check that answers "may this name be used again?".
+func waitServiceReaped(t *testing.T, name string, timeout time.Duration) {
+	t.Helper()
+	ctx := context.Background()
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		left, _ := dockerRunNoFail(ctx, "service", "ls", "--filter", "name="+stack+"_", "--format", "{{.Name}}")
-		if strings.TrimSpace(left) == "" {
+		out, err := dockerRunNoFail(ctx, "service", "inspect", name)
+		if err != nil && strings.Contains(out, "no such service") {
 			return
 		}
 		time.Sleep(2 * time.Second)
 	}
-	t.Fatalf("stack %s still has services after 90s; the swarm is not in a state this test can use", stack)
+	t.Fatalf("service %s was still in the swarm store after %s; the swarm is not in a state this "+
+		"test can use", name, timeout)
+}
+
+// conflictingServiceName pulls "service <name> already exists" out of a docker stack deploy failure,
+// so the retry waits for exactly the object that is blocking it.
+func conflictingServiceName(output string) string {
+	re := regexp.MustCompile(`service ([A-Za-z0-9_.-]+) already exists`)
+	if m := re.FindStringSubmatch(output); len(m) == 2 {
+		return m[1]
+	}
+	return ""
 }
 
 // deployWithRetry deploys, retrying docker's own concurrency errors. "already exists" and
@@ -255,7 +281,16 @@ func deployWithRetry(t *testing.T, homeDir, stack, path string) {
 		}
 		t.Logf("deploy attempt %d/%d hit a Swarm concurrency error (%s); clearing and retrying",
 			attempt, attempts, firstLineContaining(combined, "already exists", "update out of sequence"))
-		clearLeftoverStack(t, homeDir, stack)
+		if name := conflictingServiceName(combined); name != "" {
+			// A name conflict is not about the stack as a whole: wait for THAT object to leave the
+			// store, because that is what the next attempt needs.
+			if out, errOut, code := runCmd(t, homeDir, "stack", "remove", stack); code != 0 {
+				t.Logf("stack remove %s exited %d (continuing):\n%s\n%s", stack, code, out, errOut)
+			}
+			waitServiceReaped(t, name, 90*time.Second)
+		} else {
+			clearLeftoverStack(t, homeDir, stack)
+		}
 		time.Sleep(3 * time.Second)
 	}
 }
