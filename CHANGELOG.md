@@ -3,6 +3,21 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.391 — a rollback is a deploy, so it takes the lock too
+
+Found while testing v0.2.390 on the cluster, not by reading the code: two `pmcluster rollback` calls
+on the same stack ran **concurrently** and neither noticed. `Rollback` records a revision and applies
+it to the swarm — the third of the three ways a stack reaches production, after `Deploy` and `Sync` —
+and it was the one entry point the new lock did not cover.
+
+It takes the same lock now, with a test that holds it from another open file description (what flock
+sees for another process) and asserts the rollback names the contention instead of proceeding.
+
+The lesson is the shape of the mistake: the lock was applied where I *remembered* deploys happening,
+and the verification tier is what found the door I forgot. `cluster update` deploys platform stacks
+through a different path and stays outside this lock, deliberately — platform stacks are excluded from
+the drift loop, so there is no second writer to serialize against.
+
 ## v0.2.390 — the docs check that would have caught the missing field, and a lock instead of a retry
 
 Four things, one of them the honest version of a fix from v0.2.389.

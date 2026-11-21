@@ -1125,7 +1125,25 @@ func hasJSONKey(raw, key string) bool {
 
 // Rollback re-applies a stored revision as a NEW revision so the audit
 // trail records both deploys. PayloadJSON carries a rollback_of marker.
-func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision int64) (res *Result, retErr error) {
+// Rollback re-applies a stored revision as a NEW revision. It takes the same stack lock a deploy does:
+// it records a revision and applies it, so leaving it unlocked would have made the lock's guarantee
+// true for two of the three ways a stack reaches the swarm.
+func (s *Service) Rollback(ctx context.Context, stackName string, sourceRevision int64) (*Result, error) {
+	var (
+		res *Result
+		err error
+	)
+	lockErr := s.withStackLock(ctx, stackName, func(ctx context.Context) error {
+		res, err = s.rollbackUnlocked(ctx, stackName, sourceRevision)
+		return err
+	})
+	if lockErr != nil && err == nil {
+		err = lockErr
+	}
+	return res, err
+}
+
+func (s *Service) rollbackUnlocked(ctx context.Context, stackName string, sourceRevision int64) (res *Result, retErr error) {
 	counter, hist, tracer := instruments()
 	ctx, span := tracer.Start(ctx, "pmcluster.rollback",
 		trace.WithSpanKind(trace.SpanKindInternal),

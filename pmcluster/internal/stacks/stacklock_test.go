@@ -157,6 +157,36 @@ func TestWithStackLock_ReentrantWithinOneCallChain(t *testing.T) {
 	}
 }
 
+// TestRollback_TakesTheStackLock — a rollback records a revision and applies it, so it is one of the
+// three ways a stack reaches the swarm and it must be serialized like the other two. Found in
+// production shape: two rollbacks of the same stack ran concurrently and neither noticed.
+func TestRollback_TakesTheStackLock(t *testing.T) {
+	old := stackLockWaitTimeout
+	stackLockWaitTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { stackLockWaitTimeout = old })
+
+	a, b := lockPair(t)
+	held := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_ = a.withStackLock(context.Background(), "demo", func(context.Context) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+
+	_, err := b.Rollback(context.Background(), "demo", 1)
+	close(release)
+	if err == nil {
+		t.Fatal("Rollback ran while another deploy of the same stack held the lock")
+	}
+	if !strings.Contains(err.Error(), `another deploy of "demo" is in progress`) {
+		t.Errorf("Rollback's error does not name the contention: %v", err)
+	}
+}
+
 // TestWithStackLock_NoStoreRunsUnlocked — render-only callers have no store, so no shared lock dir to
 // agree on. They must still work.
 func TestWithStackLock_NoStoreRunsUnlocked(t *testing.T) {
