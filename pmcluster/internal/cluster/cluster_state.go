@@ -109,6 +109,13 @@ const (
 	// daemon" and "quiet my apps" the same action.
 	settingAppLogLevel = "app_log_level"
 
+	// settingDeployHealthTimeout is the FLEET default for how long one depends_on level may take to
+	// become healthy, as a Go duration ("90s", "5m"). It is the middle rung of a three-step chain:
+	// the stack manifest's `health_timeout`, then this setting, then the built-in 2m. Without it every
+	// stack that needs longer has to say so in its own manifest, which is the kind of detail a
+	// manifest forgets and a cold database punishes.
+	settingDeployHealthTimeout = "deploy_health_timeout"
+
 	// settingReconcileInterval is how often the leader daemon runs the
 	// control-plane reconcile loop (0 disables the loop entirely).
 	settingReconcileInterval = "reconcile_interval"
@@ -248,12 +255,13 @@ func SettingBackupS3Region() string                   { return settingBackupS3Re
 func SettingBackupStoreOn() string                    { return settingBackupStoreOn }
 
 // SettingBackupKeepLocal is the node-disk retention mode.
-func SettingBackupKeepLocal() string   { return settingBackupKeepLocal }
-func SettingLogLevel() string          { return settingLogLevel }
-func SettingAppLogLevel() string       { return settingAppLogLevel }
-func SettingReconcileInterval() string { return settingReconcileInterval }
-func SettingStorageNodes() string      { return settingStorageNodes }
-func SettingStorageFailover() string   { return settingStorageFailover }
+func SettingBackupKeepLocal() string     { return settingBackupKeepLocal }
+func SettingLogLevel() string            { return settingLogLevel }
+func SettingAppLogLevel() string         { return settingAppLogLevel }
+func SettingDeployHealthTimeout() string { return settingDeployHealthTimeout }
+func SettingReconcileInterval() string   { return settingReconcileInterval }
+func SettingStorageNodes() string        { return settingStorageNodes }
+func SettingStorageFailover() string     { return settingStorageFailover }
 
 // The self-hosted runner settings, exposed for the setup wizard and the
 // runner reconcile loop (which read them through the store directly).

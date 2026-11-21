@@ -510,7 +510,7 @@ func runServe(cmd *cobra.Command, _ []string) error {
 	// used directly.
 	backupS3 := backupS3Config(cmd.Context(), st, cipher)
 
-	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Docker: dc, Cipher: cipher}, VolumeRoot: st.SettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), CertResolver: cluster.CertResolverForMode(st.SettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), Pins: &stacks.PinResolver{StorageNodes: stacks.ParseStorageNodes(st.SettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
+	deploySvc := &stacks.Service{Store: st, Deployer: deployer, Docker: dc, Backup: backups.LocalTrigger{Store: st}, Resolver: &stacks.StoreConfigResolver{Store: st, Docker: dc, Cipher: cipher}, VolumeRoot: st.SettingDefault(cmd.Context(), cluster.SettingVolumeRoot(), ""), DeployHealthTimeout: st.SettingDefault(cmd.Context(), cluster.SettingDeployHealthTimeout(), ""), CertResolver: cluster.CertResolverForMode(st.SettingDefault(cmd.Context(), cluster.SettingTLSMode(), "")), Pins: &stacks.PinResolver{StorageNodes: stacks.ParseStorageNodes(st.SettingDefault(cmd.Context(), cluster.SettingStorageNodes(), "")), StackPin: func(ctx context.Context, stackName string) (string, error) {
 		return st.SettingDefault(ctx, stacks.StackPinKey(stackName), ""), nil
 	}, SetStackPin: func(ctx context.Context, stackName, node string) error {
 		return st.SetSetting(ctx, stacks.StackPinKey(stackName), node)

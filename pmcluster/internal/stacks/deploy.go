@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+	"sigs.k8s.io/yaml"
 
 	"github.com/rs/zerolog"
 
@@ -89,6 +90,10 @@ type Service struct {
 	// (subpaths /<app>/<name>). Empty falls back to
 	// manifest.DefaultVolumeRoot (/var/stack/data). Applied by the writer.
 	VolumeRoot string
+	// DeployHealthTimeout is the cluster's default for one depends_on level's health wait (the
+	// `deploy_health_timeout` setting), used when a stack does not set `health_timeout` itself.
+	// Empty means the built-in 2 minutes. Read once with the other settings, like VolumeRoot.
+	DeployHealthTimeout string
 	// CertResolver names the ACME resolver to attach to every exposed Traefik
 	// router as traefik.http.routers.<scope>.tls.certresolver ("letsencrypt"
 	// when the cluster uses ACME; empty for BYO-cert clusters — see
@@ -304,7 +309,41 @@ func (s *Service) DeployAsync(ctx context.Context, p Payload) (*Result, error) {
 	return s.deploy(ctx, p, true)
 }
 
-func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Result, retErr error) {
+// stackNameForLock resolves the lock key before the pipeline runs: the payload's override, else the
+// manifest's `app:`. A manifest that cannot be parsed here is not this function's problem — the
+// pipeline reports it — and an unresolvable name simply means the deploy is not serialized.
+func stackNameForLock(p Payload) string {
+	if p.AppName != "" {
+		return p.AppName
+	}
+	var head struct {
+		App string `yaml:"app"`
+	}
+	if err := yaml.Unmarshal([]byte(p.Manifest), &head); err != nil {
+		return ""
+	}
+	return head.App
+}
+
+// deploy runs the pipeline holding this stack's deploy lock. The lock is taken HERE, not around the
+// docker call: a lock taken only for the apply would let the reconcile decide "needs deploying" against
+// state an operator's deploy has already replaced, and then apply the older render over it.
+func (s *Service) deploy(ctx context.Context, p Payload, async bool) (*Result, error) {
+	var (
+		res *Result
+		err error
+	)
+	lockErr := s.withStackLock(ctx, stackNameForLock(p), func(ctx context.Context) error {
+		res, err = s.deployUnlocked(ctx, p, async)
+		return err
+	})
+	if lockErr != nil && err == nil {
+		err = lockErr
+	}
+	return res, err
+}
+
+func (s *Service) deployUnlocked(ctx context.Context, p Payload, async bool) (res *Result, retErr error) {
 	counter, hist, tracer := instruments()
 	ctx, span := tracer.Start(ctx, "pmcluster.deploy",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -553,7 +592,23 @@ func (s *Service) deploy(ctx context.Context, p Payload, async bool) (res *Resul
 // against the DB, so edits to a stack's configs are applied to the running
 // stack. This is the k8s-style reconcile: applying the stored desired state
 // after the underlying inputs changed. It records a new revision.
+// Sync re-applies the stack's latest revision, holding the same lock a deploy takes.
 func (s *Service) Sync(ctx context.Context, stackName string) (*Result, error) {
+	var (
+		res *Result
+		err error
+	)
+	lockErr := s.withStackLock(ctx, stackName, func(ctx context.Context) error {
+		res, err = s.syncUnlocked(ctx, stackName)
+		return err
+	})
+	if lockErr != nil && err == nil {
+		err = lockErr
+	}
+	return res, err
+}
+
+func (s *Service) syncUnlocked(ctx context.Context, stackName string) (*Result, error) {
 	revs, err := s.Store.ListRevisions(ctx, stackName, 1)
 	if err != nil {
 		telemetry.RecordReconcile(ctx, stackName, telemetry.ReconcileError)
@@ -724,7 +779,7 @@ func (s *Service) applyToSwarm(ctx context.Context, app *dsl.App, ir *manifest.I
 				Msg("deploy stack — waiting for level to become healthy")
 			s.Log.Debug().Str("app", app.Name).Int("level", i).Strs("services", level).
 				Msg("deploy stack — waiting for level to become healthy")
-			if err := s.waitLevelHealthy(ctx, app.Name, level, healthWaitTimeout(app.HealthTimeout)); err != nil {
+			if err := s.waitLevelHealthy(ctx, app.Name, level, s.healthWait(app.HealthTimeout)); err != nil {
 				return err
 			}
 			s.Log.Info().Str("app", app.Name).Int("level", i).Strs("services", level).
@@ -762,19 +817,40 @@ var (
 	deployWaitInterval = 2 * time.Second
 )
 
-// healthWaitTimeout is the per-stack override of deployWaitTimeout, or the default
-// when the manifest does not name one (or names something unparseable — a typo in
-// a timeout must not fail a deploy that would otherwise work).
-func healthWaitTimeout(raw string) time.Duration {
+// parseHealthDuration reads a duration from a manifest field or a setting. Loose on purpose: a typo
+// in a timeout must not fail a deploy that would otherwise work.
+func parseHealthDuration(raw string) (time.Duration, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return deployWaitTimeout
+		return 0, false
 	}
 	d, err := time.ParseDuration(raw)
 	if err != nil || d <= 0 {
-		return deployWaitTimeout
+		return 0, false
 	}
-	return d
+	return d, true
+}
+
+// healthWaitTimeout is the manifest's override, or the built-in default — the chain without the
+// cluster setting, kept because it is what the tests and callers outside a Service use.
+func healthWaitTimeout(raw string) time.Duration {
+	if d, ok := parseHealthDuration(raw); ok {
+		return d
+	}
+	return deployWaitTimeout
+}
+
+// healthWait is the three-step chain for one deploy: the stack's `health_timeout`, then the cluster's
+// `deploy_health_timeout`, then the built-in 2m. It is why a slow shared database does not have to be
+// declared in every manifest that touches it.
+func (s *Service) healthWait(raw string) time.Duration {
+	if d, ok := parseHealthDuration(raw); ok {
+		return d
+	}
+	if d, ok := parseHealthDuration(s.DeployHealthTimeout); ok {
+		return d
+	}
+	return deployWaitTimeout
 }
 
 // levelNotReady explains a wait that ran out: for each service of the level that

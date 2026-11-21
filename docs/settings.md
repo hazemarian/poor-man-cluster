@@ -94,6 +94,7 @@ the switch it constrains.
 | `backup_store_on` | `""` (= worker/auto) | setup wizard / operator | where the in-cluster SeaweedFS store runs: `leader`, or a non-storage non-platform worker (auto) |
 | `backup_s3_endpoint` / `_bucket` / `_access_key` / `_secret_key` / `_region` | unset (`_region` defaults `auto`) | setup wizard / operator | the offsite S3/R2 destination — when set, agents double-write every archive offsite |
 | `reconcile_interval` | `60` (seconds) | operator | the control loop's safety tick; `0` disables the loop |
+| `deploy_health_timeout` | *(empty → 2m)* | operator | the fleet default for how long one `depends_on` level may take to become healthy, as a Go duration (`90s`, `10m`). A stack's own `health_timeout` overrides it. Refused at write time if it is not a positive duration — a fleet default that does not parse would silently fall back to 2m, which is the value the operator was trying to change |
 | `edge_login_disabled` | `true` in swarm deployments | setup wizard / edge stack | hides the console's own login (the Traefik admin-auth/SSO gate is the authenticator); `false` keeps password login (standalone) |
 | `sso_enabled` / `sso_provider` / `sso_client_id` / `sso_client_secret` / `sso_github_org` / `sso_github_repos` / `sso_cookie_expire` | off / `github` / unset / unset / unset / unset / `1h` | setup wizard (`--sso-*`) / operator | GitHub SSO via oauth2-proxy: org (and optional repo) restriction, tightened 1h default session |
 | `domain` | — | `cluster up` / setup wizard | the cluster's base domain |

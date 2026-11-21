@@ -80,6 +80,7 @@ func init() {
 	withScopeGuard()
 
 	rootCmd.AddCommand(doctorCmd, versionCmd)
+	rootCmd.AddCommand(newShellCmd())
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.AddCommand(clusterCmd)

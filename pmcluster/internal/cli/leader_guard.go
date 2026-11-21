@@ -54,6 +54,11 @@ var topLevelScopes = map[string]commandScope{
 	// it on leadership would leave the node nobody can log into unwatched.
 	"health-watch": scopeNode,
 
+	// shell creates a swarm SERVICE on this node and talks to the daemon's API, so it is a leader
+	// command: on a worker it would either fail to find the daemon or create a service against a
+	// store that has no authoritative view. The session itself is throwaway.
+	"shell": scopeLeader,
+
 	// Bootstrap and lifecycle.
 	"init":    scopeBootstrap,
 	"setup":   scopeBootstrap,

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/cluster"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/logging"
@@ -61,6 +62,7 @@ var clusterSettingKeys = []string{
 	cluster.SettingBackupEnabled(),
 	cluster.SettingLogLevel(),
 	cluster.SettingAppLogLevel(),
+	cluster.SettingDeployHealthTimeout(),
 	cluster.SettingReconcileInterval(),
 	cluster.SettingStorageNodes(),
 	cluster.SettingStorageAdoptNodes(),
@@ -176,6 +178,13 @@ func (l *Local) Update(ctx context.Context, values Settings) (Settings, error) {
 			if l.ApplyLogLevel != nil {
 				if err := l.ApplyLogLevel(v); err != nil {
 					return nil, fmt.Errorf("apply log level %q: %w", v, err)
+				}
+			}
+		case cluster.SettingDeployHealthTimeout():
+			if v != "" {
+				d, derr := time.ParseDuration(v)
+				if derr != nil || d <= 0 {
+					return nil, fmt.Errorf("deploy_health_timeout must be a positive Go duration (e.g. 90s, 10m), got %q", v)
 				}
 			}
 		case cluster.SettingStorageNodes():

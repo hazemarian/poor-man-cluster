@@ -29,6 +29,41 @@ func TestHealthWaitTimeout(t *testing.T) {
 	}
 }
 
+// TestHealthWait_ManifestThenSettingThenDefault pins the three-step chain, because the middle rung is
+// the one that makes a fleet-wide default possible without editing every manifest.
+func TestHealthWait_ManifestThenSettingThenDefault(t *testing.T) {
+	old := deployWaitTimeout
+	deployWaitTimeout = 2 * time.Minute
+	t.Cleanup(func() { deployWaitTimeout = old })
+
+	svc := &Service{DeployHealthTimeout: "5m"}
+	cases := []struct {
+		manifest string
+		want     time.Duration
+		why      string
+	}{
+		{"90s", 90 * time.Second, "the manifest wins over the cluster default"},
+		{"", 5 * time.Minute, "no manifest value: the cluster setting applies"},
+		{"nonsense", 5 * time.Minute, "an unparseable manifest value falls to the setting, not to 2m"},
+	}
+	for _, tc := range cases {
+		if got := svc.healthWait(tc.manifest); got != tc.want {
+			t.Errorf("healthWait(%q) = %v, want %v (%s)", tc.manifest, got, tc.want, tc.why)
+		}
+	}
+
+	// No setting either: the built-in default.
+	bare := &Service{}
+	if got := bare.healthWait(""); got != 2*time.Minute {
+		t.Errorf("healthWait with nothing set = %v, want the built-in 2m", got)
+	}
+	// A broken setting falls back too — a typo must never extend or shorten a deploy's wait.
+	broken := &Service{DeployHealthTimeout: "10 minutes"}
+	if got := broken.healthWait(""); got != 2*time.Minute {
+		t.Errorf("healthWait with an unparseable setting = %v, want the built-in 2m", got)
+	}
+}
+
 // TestLevelNotReady_NamesTheServiceAndItsTaskError is the whole point of item one: "timed out waiting
 // for level [db, web]" cost hours on this platform, while the answer — a web task exiting 1 with a
 // Telegram 404 — was in the task's own error the whole time.

@@ -3,6 +3,45 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.390 — the docs check that would have caught the missing field, and a lock instead of a retry
+
+Four things, one of them the honest version of a fix from v0.2.389.
+
+1. **`docscheck` now fails when a manifest field is undocumented.** `health_timeout` shipped with no
+   mention in `docs/dsl.md` — findable only in a CHANGELOG entry — and nothing caught it. The check
+   reflects over `dsl.App` and `dsl.Service` and requires each JSON field to be named somewhere in the
+   reference; a second check fails when one field has two rows in the SAME table (two sets of rules),
+   while allowing the app-level and service-level rows that legitimately share a name.
+2. **`deploy_health_timeout` is a cluster setting.** The manifest field existed with no fleet default,
+   so every stack that needs more than two minutes had to say so in its own manifest. The chain is now
+   manifest → setting → built-in 2m, and the setting is refused at write time if it is not a positive
+   duration: a fleet default that does not parse would fall back to exactly the 2m the operator was
+   trying to change.
+3. **`pmcluster shell <stack>`** — an interactive session without the browser. The console already did
+   this; an operator on a manager with a terminal open had to open a browser to reach a shell the CLI
+   could serve. Same endpoints, same token, `Ctrl-]` or `exit` to leave, session deleted on exit.
+4. **Deploys of one stack are serialized across processes**, by a `flock` on
+   `<data dir>/locks/stack-<name>.lock`. v0.2.389 made the platform *survive* two writers racing
+   (`name conflicts with an existing object`); this stops the race. The lock is taken at the ENTRY of a
+   deploy — before the revision and the render are read — because a lock taken only around the docker
+   call lets the reconcile decide "needs deploying" against state an operator's deploy already
+   replaced, and then apply the older render over it. It waits at most the deploy timeout and then
+   fails naming the holder (`pid=… at=…`), so a contended deploy is a message, not a hang. On a
+   filesystem without advisory locks it logs once and deploys unserialized rather than refusing every
+   deploy.
+
+   The first version of this deadlocked every sync, and the suite said so before production could:
+   the pipeline nests — `Sync` re-applies a revision by calling the deploy path — and `flock` is per
+   open file description, so the inner acquisition waited on the outer lock (`withStackLock → deploy →
+   withStackLock`). Re-entrancy is now explicit through the context: a nested call on a stack the chain
+   already holds runs inside the outer lock, while a different stack still locks normally.
+
+**Not done — measured, not assumed:** moving `test`/`lint` to the self-hosted runners is impossible for
+this repository. Those runners are **org-level** (`orgs/nextrum-sy`, labels
+`self-hosted,linux,x64,pmcluster`), and `poor-man-cluster` belongs to a **user** (`hazemarian`), so no
+job of this repo can ever be scheduled on them. It would need the repo moved into the org, or
+repo-level runner support in the platform's runner provisioning — which is org-scoped today.
+
 ## v0.2.389 — a shell's disk is 200 MiB, and a deploy survives a concurrent writer
 
 **The shell's writable space is bounded.** A session downloaded its dump into `/tmp` on the node's

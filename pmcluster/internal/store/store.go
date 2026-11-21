@@ -34,6 +34,11 @@ var ErrClosed = errors.New("store is closed")
 // *Store (the daemon passes one pointer into the HTTP server, the reconciler
 // and the CLI services). Swap therefore keeps the *Store identity stable and
 // swaps the underlying *sql.DB — see Swap.
+// Path returns the store's database file. It exists for the per-installation side files that must be
+// found by every process on this host without another setting to keep in sync — today the per-stack
+// deploy locks.
+func (s *Store) Path() string { return s.path }
+
 type Store struct {
 	// mu guards db. Every query takes it for the read side just long enough to
 	// read the current handle; Swap takes the write side for the whole
