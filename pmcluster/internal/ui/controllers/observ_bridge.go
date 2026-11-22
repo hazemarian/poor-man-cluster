@@ -41,7 +41,7 @@ const observBasicAuthEnv = "OBSERVABILITY_BASIC_AUTH"
 func (b ObservBridge) Page(g *gin.Context) {
 	basicAuth := os.Getenv(observBasicAuthEnv)
 
-	if !observBridgeGate(g.Request) {
+	if !b.onObservabilityHost(g.Request) || !observBridgeGate(g.Request) {
 		g.Header("Cache-Control", "no-store")
 		g.Status(http.StatusForbidden)
 		_, _ = g.Writer.Write([]byte("forbidden\n"))
@@ -106,6 +106,25 @@ p{opacity:.8;animation:pulse 1.4s ease-in-out infinite}
 </body>
 </html>
 `))
+}
+
+// onObservabilityHost requires the request to arrive on the observability host.
+//
+// This is the fix for H1 of the 2026-11-21 audit. The identity headers below are only proof when the
+// request passed oauth2-proxy — and on the CONSOLE host Traefik's catch-all `pmcluster-api` router has
+// no auth middleware at all, so a request to `/sso-bridge` there carries whatever headers the client
+// invented. Host is the one thing the client cannot forge past Traefik: the observ router applies
+// sso-auth/admin-auth, so reaching this handler with this Host means something authenticated first.
+func (b ObservBridge) onObservabilityHost(r *http.Request) bool {
+	domain := strings.ToLower(strings.TrimSpace(b.Domain))
+	if domain == "" {
+		return false // fail closed: without the domain we cannot tell which router served us
+	}
+	host := strings.ToLower(r.Host)
+	if h, _, ok := strings.Cut(host, ":"); ok {
+		host = h
+	}
+	return host == "observ."+domain
 }
 
 // observBridgeGate reports whether the request may be served. The page hands the

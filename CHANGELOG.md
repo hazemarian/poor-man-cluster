@@ -3,6 +3,41 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.392 — C3, H1 and H4 from the security audit: the three that turned an app into root
+
+The 2026-11-21 audit's critical findings were read, re-verified against the source, and answered in
+`SECURITY-RESPONSE.md`. This release is the first three code fixes.
+
+**C3 — the shell socket is not a key to every service.** `/api/shell/{id}/exec/ws` accepted any valid
+bearer token and resolved whatever service id it was given through `ShellContainer`, so a stack-scoped
+token could exec into `infra_traefik` — which mounts the Docker socket, i.e. root on the manager — and
+the close handler then removed that service. Both the socket and `DELETE /api/shells/{id}` now require
+the target to carry `pmcluster.shell=true` and, for a scoped token, to belong to that token's stack.
+Unlabelled services are refused (403), not "not found": the difference tells a scoped caller their
+token is scoped rather than their id being wrong.
+
+**H1 — the observability bridge is only served on the observability host.** `/sso-bridge` hands out the
+managed Parseable credential, and its only gate was identity headers — which a client supplies freely
+on the CONSOLE host, where Traefik's catch-all router applies no auth at all. The handler now requires
+`Host: observ.<domain>` (fails closed when the domain is unknown) in addition to the identity check.
+The credential itself must still be treated as leaked and rotated.
+
+**H4 — opening a shell is a write.** `GET /web/stacks/{name}/shell` created a container on the leader
+with the stack's secrets mounted, so a link, a prefetch or a same-site GET from a compromised app could
+start one — with an image the caller named in a query parameter. Now: POST only (the stack page's
+button is a form), the caller cannot choose the image (the fleet's `PMCLUSTER_SHELL_IMAGE` is the
+allow-list, and the daemon picks it), and both terminal sockets check `Origin` against the request host
+instead of accepting any origin.
+
+Tests: four for C3 (including "a scoped token cannot exec into `infra_traefik`"), two for H1 (including
+"the console host is refused with forged identity headers"), three for H4 (origin matrix, GET refusal,
+image path removed). The existing bridge tests were updated to assert the new host requirement rather
+than being deleted — they encoded the old contract, and the old contract was the bug.
+
+**Deliberately not in this release**, though H4 names them: the SSO cookie scope and the credentialed
+CORS on the console/dashboard routers. Both change how every browser authenticates; they belong in a
+change with a coordinated re-login, not bundled with a route fix.
+
 ## v0.2.391 — a rollback is a deploy, so it takes the lock too
 
 Found while testing v0.2.390 on the cluster, not by reading the code: two `pmcluster rollback` calls

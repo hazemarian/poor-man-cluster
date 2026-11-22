@@ -305,7 +305,10 @@ func (a *App) Mount(engine *gin.Engine) {
 	// The on-demand shell: a throwaway container on the daemon's own node, joined to the stack's
 	// networks with its secrets and configs, destroyed when the socket closes. This is what makes a
 	// terminal reach a container that lives on another node than the console's daemon.
-	op.GET("/stacks/:name/shell", tm.ShellPage)
+	// A write, not a view: it creates a container on the leader with the stack's secrets mounted.
+	// GET made it reachable by a link, an <img>, or a same-site GET from a compromised app (H4 of the
+	// 2026-11-21 audit). The console's Origin/Referer guard covers POST; it exempts GET by design.
+	op.POST("/stacks/:name/shell", tm.ShellPage)
 	op.GET("/shells/:id/ws", tm.ShellWS)
 	op.POST("/shells/:id/report", tm.ShellReport)
 	// The page beacons the browser's reason for a failed handshake; it is a diagnostic, not an

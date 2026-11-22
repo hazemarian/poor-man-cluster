@@ -63,6 +63,24 @@ func (t Terminal) Page(g *gin.Context) {
 	t.Views.Page(g, "terminal", d)
 }
 
+// sameOrigin accepts a WebSocket upgrade whose Origin host matches the request host, and refuses one
+// that does not. A browser cannot lie about Origin; a non-browser client (the CLI) sends none, and an
+// absent Origin is allowed because there is no ambient session to ride.
+//
+// This is the difference between "any page on any subdomain of yours can open a terminal with the
+// operator's cookie" and "the console can".
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Host, r.Host)
+}
+
 // ShellPage opens an on-demand shell for a stack and renders the terminal bound to it.
 //
 // This is the answer to placement: instead of exec'ing into a service container (which only works
@@ -74,8 +92,14 @@ func (t Terminal) ShellPage(g *gin.Context) {
 	stack := g.Param("name")
 	g.Header("Cache-Control", "no-store, must-revalidate")
 	ctx := g.Request.Context()
-	image := g.Query("image")
-	sess, err := t.API.OpenShell(ctx, stack, image)
+	// No caller-chosen image. The fleet runs ONE shell image (PMCLUSTER_SHELL_IMAGE), and letting a
+	// query parameter name any image on the leader — as root, with the stack's secrets mounted — was
+	// H4's sharpest edge. An operator who needs a different image changes it for the fleet.
+	if g.Request.Method != http.MethodPost {
+		g.Status(http.StatusMethodNotAllowed)
+		return
+	}
+	sess, err := t.API.OpenShell(ctx, stack, "")
 	if err != nil {
 		t.Log.Warn().Err(err).Str("stack", stack).Msg("terminal: could not open a shell session")
 		g.Status(http.StatusBadGateway)
@@ -127,7 +151,7 @@ func (t Terminal) ShellWS(g *gin.Context) {
 	up := websocket.Upgrader{
 		ReadBufferSize:  4096,
 		WriteBufferSize: 4096,
-		CheckOrigin:     func(*http.Request) bool { return true },
+		CheckOrigin:     sameOrigin,
 	}
 	client, err := up.Upgrade(g.Writer, g.Request, nil)
 	if err != nil {
@@ -206,7 +230,7 @@ func (t Terminal) WS(g *gin.Context) {
 		WriteBufferSize: 4096,
 		// Same-origin by construction (the page and this route share the
 		// console host); be permissive for X-Forwarded-Proto variations.
-		CheckOrigin: func(*http.Request) bool { return true },
+		CheckOrigin: sameOrigin,
 	}
 	client, err := up.Upgrade(g.Writer, g.Request, nil)
 	if err != nil {

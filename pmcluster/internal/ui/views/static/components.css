@@ -884,3 +884,7 @@ details.panel-details[open] > summary { border-bottom: 1px solid var(--border-de
   }
   .savebar .btn { margin-inline-start: 0; flex: 1; min-height: 44px; }
 }
+
+/* A form that belongs in a row of buttons rather than on its own line (the stack page's shell
+   action is a POST form so opening a session cannot be triggered by a GET). */
+form.inline { display: inline; }

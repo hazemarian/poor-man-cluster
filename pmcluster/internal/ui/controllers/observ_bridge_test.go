@@ -45,9 +45,10 @@ func TestObservBridgePageSeedsTheSession(t *testing.T) {
 	rec := httptest.NewRecorder()
 	g, _ := gin.CreateTestContext(rec)
 	g.Request = httptest.NewRequest("GET", "/sso-bridge", nil)
+	g.Request.Host = "observ.example.com" // the route is only servable on the observability host
 	g.Request.Header.Set("X-Forwarded-User", "ops@example.com")
 
-	ObservBridge{}.Page(g)
+	ObservBridge{Controller: &Controller{Domain: "example.com"}}.Page(g)
 
 	if rec.Code != 200 {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -72,6 +73,29 @@ func TestObservBridgePageSeedsTheSession(t *testing.T) {
 	}
 }
 
+// TestObservBridgeRefusesTheConsoleHost is H1 of the 2026-11-21 audit: the catch-all
+// `pmcluster-api` router on the CONSOLE host has no auth middleware, so a request to /sso-bridge
+// there carries whatever identity headers the client invented — and the page hands out the managed
+// observability credential. Host is the one thing a client cannot talk its way past Traefik.
+func TestObservBridgeRefusesTheConsoleHost(t *testing.T) {
+	t.Setenv(observBasicAuthEnv, "b3BzQGV4YW1wbGUuY29tOnB3")
+
+	rec := httptest.NewRecorder()
+	g, _ := gin.CreateTestContext(rec)
+	g.Request = httptest.NewRequest("GET", "/sso-bridge", nil)
+	g.Request.Host = "pmcluster.example.com"                // NOT the observability host
+	g.Request.Header.Set("X-Auth-Request-User", "attacker") // supplied by the client, not by oauth2-proxy
+
+	ObservBridge{Controller: &Controller{Domain: "example.com"}}.Page(g)
+
+	if rec.Code != 403 {
+		t.Fatalf("status = %d, want 403 on the console host", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "authToken") {
+		t.Error("the credential was served on a host where identity headers are not proof")
+	}
+}
+
 // An anonymous caller must never be handed the credential.
 func TestObservBridgePageRefusesAnonymous(t *testing.T) {
 	t.Setenv(observBasicAuthEnv, "b3BzQGV4YW1wbGUuY29tOnB3")
@@ -79,8 +103,9 @@ func TestObservBridgePageRefusesAnonymous(t *testing.T) {
 	rec := httptest.NewRecorder()
 	g, _ := gin.CreateTestContext(rec)
 	g.Request = httptest.NewRequest("GET", "/sso-bridge", nil)
+	g.Request.Host = "observ.example.com"
 
-	ObservBridge{}.Page(g)
+	ObservBridge{Controller: &Controller{Domain: "example.com"}}.Page(g)
 
 	if rec.Code != 403 {
 		t.Fatalf("anonymous status = %d, want 403", rec.Code)

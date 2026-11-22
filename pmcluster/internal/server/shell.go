@@ -63,6 +63,43 @@ func ShellOpenHandler(d Deps) http.HandlerFunc {
 
 // shellExecWSHandler serves the interactive session inside an on-demand shell container and removes
 // the container when the socket closes, whatever closed it.
+// authorizeShellTarget is the guard C3 of the 2026-11-21 audit was about.
+//
+// The socket used to require only a valid bearer token and then resolve whatever id the caller named
+// through ShellContainer — so any token, including a stack-scoped one, could exec into `infra_traefik`,
+// which mounts the Docker socket: root on the manager, and the close handler then removed the service.
+//
+// A shell target must be a shell session (the label the platform stamps on its own throwaway services)
+// and, when the token carries a stack scope, that session's stack must be the token's. Unlabelled
+// services are refused rather than "not found": the difference between the two is what tells an
+// operator their token is scoped rather than their id being wrong.
+func authorizeShellTarget(w http.ResponseWriter, r *http.Request, d Deps, id string) bool {
+	u := auth.FromContext(r.Context())
+	if u == nil {
+		writeErr(w, http.StatusUnauthorized, "authentication required")
+		return false
+	}
+	if d.Docker == nil {
+		writeErr(w, http.StatusNotImplemented, "interactive exec unavailable on this node")
+		return false
+	}
+	svc, err := d.Docker.ServiceInspect(r.Context(), id)
+	if err != nil || svc.Name == "" {
+		writeErr(w, http.StatusNotFound, "no such shell session: "+id)
+		return false
+	}
+	if svc.Labels[runtime.ShellLabel] != "true" {
+		writeErr(w, http.StatusForbidden,
+			"not a shell session: "+svc.Name+" is not labelled "+runtime.ShellLabel+"=true")
+		return false
+	}
+	if target := svc.Labels[runtime.ShellStackLabel]; u.Stack != "" && target != u.Stack {
+		writeErr(w, http.StatusForbidden, "token scoped to stack "+u.Stack)
+		return false
+	}
+	return true
+}
+
 func shellExecWSHandler(d Deps) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -75,6 +112,9 @@ func shellExecWSHandler(d Deps) http.Handler {
 			return
 		}
 		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !authorizeShellTarget(w, r, d, id) {
+				return
+			}
 			serveShellExecWS(w, r, d, id)
 		})
 		auth.Bearer(d.Lookup)(next).ServeHTTP(w, r)
@@ -145,6 +185,10 @@ func ShellRemoveHandler(d Deps) http.HandlerFunc {
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, shellResourcePrefix), "/")
 		if id == "" || strings.Contains(id, "/") {
 			http.Error(w, "shell id is required", http.StatusBadRequest)
+			return
+		}
+		// Same guard as the socket: DELETE by id used to remove ANY service for any valid token.
+		if !authorizeShellTarget(w, r, d, id) {
 			return
 		}
 		if err := d.CloseShell(r.Context(), id); err != nil {

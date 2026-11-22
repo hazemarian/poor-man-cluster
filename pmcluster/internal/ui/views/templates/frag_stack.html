@@ -324,10 +324,14 @@
       {{/* A shell for the whole stack — not a service's terminal: a throwaway container on the
            console's node, joined to this stack's networks with its secrets and configs mounted, so it
            reaches services that run on OTHER nodes. A full page, so no htmx swap. */}}
-      <a class="btn btn-ghost btn-sm" href="/web/stacks/{{.Detail.Stack.Name}}/shell" target="_blank"
-         rel="noopener" data-tip="{{T "stacks.shell_tip"}}">
-        {{icon "console"}}<span>{{T "stacks.shell"}}</span>
-      </a>
+      {{/* A POST, not a link: opening a shell creates a container on the leader with this stack's
+           secrets mounted, so it must not be reachable by a link, a prefetch, or a same-site GET from
+           another app. A form keeps the new-tab behaviour without the GET (H4, audit 2026-11-21). */}}
+      <form class="inline" method="post" action="/web/stacks/{{.Detail.Stack.Name}}/shell" target="_blank">
+        <button type="submit" class="btn btn-ghost btn-sm" data-tip="{{T "stacks.shell_tip"}}">
+          {{icon "console"}}<span>{{T "stacks.shell"}}</span>
+        </button>
+      </form>
       <a class="btn btn-ghost btn-sm" href="/web/backups"
          hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-tip="{{T "stacks.act_backups"}}">
         {{icon "backups"}}<span>{{T "stacks.act_backups"}}</span>
