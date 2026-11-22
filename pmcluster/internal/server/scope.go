@@ -16,6 +16,23 @@ import (
 // own 1 MiB body limit; anything larger can never deploy anyway.
 const maxDeployScanBytes = 1 << 20
 
+// shellSurfacePrefixes are the two routes that name a shell session rather than a stack. No stack can
+// be parsed out of them, so the fail-closed rule refused them for every scoped token — which meant a
+// scoped token could open a shell and then never close it, leaving the session to run to its
+// 30-minute ceiling with the stack's secrets mounted. They are handed to the handler instead, where
+// authorizeShellTarget applies a check this guard cannot: it inspects the target service, requires
+// runtime.ShellLabel=true, and compares the session's own stack label against the token's scope.
+var shellSurfacePrefixes = []string{"/api/shell/", "/api/shells/"}
+
+func isShellSurface(path string) bool {
+	for _, p := range shellSurfacePrefixes {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // stackScopeGuard runs directly after auth.Bearer on the /api subtree and
 // enforces per-stack API token scoping.
 //
@@ -40,6 +57,11 @@ func stackScopeGuard(next http.Handler) http.Handler {
 		u := auth.FromContext(r.Context())
 		if u == nil || u.Stack == "" {
 			// Unscoped token: full access, exactly as before.
+			next.ServeHTTP(w, r)
+			return
+		}
+		if isShellSurface(r.URL.Path) {
+			// The handler is the authority here — see shellSurfacePrefixes.
 			next.ServeHTTP(w, r)
 			return
 		}
