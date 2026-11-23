@@ -3,6 +3,28 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.393 — a scoped token could open a shell it was not allowed to close
+
+Found by verifying v0.2.392 against production instead of trusting it. C3 taught the shell routes to
+check their target, but `stackScopeGuard` sits in front of them on the whole `/api` subtree and fails
+closed whenever it cannot parse a stack out of the path — and `/api/shells/{id}` names a session, not a
+stack. Measured with a token scoped to `adam-world-dev`:
+
+```
+POST /api/stacks/adam-world-dev/shell    -> shell created
+DELETE /api/shells/<its own shell id>    -> 403 token scoped to stack adam-world-dev
+```
+
+The session then ran to its 30-minute ceiling with the stack's secrets mounted: a leak the operator
+could not close, which is worse than the check being over-strict. The two shell prefixes now reach
+their handler, where `authorizeShellTarget` applies a check the guard could not make — it inspects the
+target, requires `pmcluster.shell=true`, and compares the session's own `pmcluster.shell.stack` label
+against the token's scope. Every other `/api` route stays fail-closed.
+
+The old tests called `authorizeShellTarget` directly, so the middleware in front of it was never in the
+test; the five new ones drive the real chain (bearer → guard → handler), including the case that
+matters — a scoped token closing its own shell and getting 204.
+
 ## v0.2.392 — C3, H1 and H4 from the security audit: the three that turned an app into root
 
 The 2026-11-21 audit's critical findings were read, re-verified against the source, and answered in
