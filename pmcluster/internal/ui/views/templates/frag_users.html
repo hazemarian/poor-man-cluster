@@ -172,7 +172,9 @@
 </div>
 {{end}}
 
-{{define "users_actions"}}{{if not .Disabled}}
+{{define "users_actions"}}{{/* Permission, not auth mode: an SSO console is exactly where
+     you invite people, and hiding this button because the password form is off was
+     how "create a user" disappeared from the one deployment that needed it. */}}{{if can "users.manage"}}
     <button type="button" class="btn btn-primary btn-sm" hx-get="/web/users/new" hx-target="#modal-body" hx-swap="innerHTML" hx-on::after-request="openModal()" data-tip="{{T "users.new"}}">
       {{icon "plus"}}<span>{{T "users.new"}}</span>
     </button>

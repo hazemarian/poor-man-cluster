@@ -1514,6 +1514,33 @@ func TestInviteByLoginForHiddenEmail(t *testing.T) {
 	}
 }
 
+// TestUsersPageOffersTheInviteButtonBehindSSO — the page used to hide its create
+// button whenever the password form was off, which is precisely the SSO console
+// where accounts are invited. The button must be gated on users.manage, like the
+// route it posts to.
+func TestUsersPageOffersTheInviteButtonBehindSSO(t *testing.T) {
+	app, bossIdent, bossJar := newSSOApp(t)
+
+	body := readBody(t, doRequestWithHeaders(t, app, http.MethodGet, "/web/users", bossIdent, bossJar))
+	if !strings.Contains(body, `hx-get="/web/users/new"`) {
+		t.Errorf("admin on an SSO console is not offered the invite button")
+	}
+
+	// And somebody without users.manage must not see it, nor reach the route.
+	if _, err := app.Store.CreateRole(t.Context(), "reader", "", []string{"console.view"}); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	if _, err := app.Store.InviteSSOAccount(t.Context(), "rita@example.com", "", "reader"); err != nil {
+		t.Fatalf("invite rita: %v", err)
+	}
+	rita := map[string]string{"X-Auth-Request-Email": "rita@example.com"}
+	jar := map[string]*http.Cookie{}
+	doRequestWithHeaders(t, app, http.MethodGet, "/web/", rita, jar)
+	if got := doRequestWithHeaders(t, app, http.MethodGet, "/web/users", rita, jar); got.StatusCode != http.StatusForbidden {
+		t.Errorf("reader on /web/users = %d, want 403", got.StatusCode)
+	}
+}
+
 // TestStrangerStillQueues — pre-provisioning must not turn the gate into an
 // open door: an address nobody invited still waits.
 func TestStrangerStillQueues(t *testing.T) {

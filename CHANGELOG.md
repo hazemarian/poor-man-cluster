@@ -3,6 +3,16 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.407 — the invite button actually appears
+
+v0.2.406 shipped the invite path and then hid its button: the create control was
+still wrapped in `{{if not .Disabled}}`, a leftover from when `EDGE_LOGIN_DISABLED`
+meant accounts were ignored, so on an SSO console the one deployment that needs
+invites was the one without the button. It is gated on `users.manage` now — the same
+permission the route behind it requires — and a test asserts the button is present on
+an SSO console for an admin and that the page is refused for a role without
+`users.manage`.
+
 ## v0.2.406 — invite an account so it never sees the approval queue
 
 Approval was the only way in: every SSO identity that was not already a row landed
