@@ -3,6 +3,24 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.398 — the break-glass reaches the volume the normal way
+
+`pmcluster ui` opened `/var/lib/docker/volumes/edge_pmui-data/_data/…` directly, as root. That is not
+how a named volume is meant to be used, and it is what produced the root-owned database the console
+could not write. It now mounts the volume into a throwaway container and runs there as the console's
+own uid, so ownership stays with the console and no host path is touched:
+
+```
+docker run --rm -u 10001 -v edge_pmui-data:/data <this binary>:ro … ui approve who@example.com --role admin
+```
+
+Verified on the live node: a pending identity approved through that path leaves the database owned
+`10001:10001`.
+
+Two verbs that offboarding needed and that the new model implies: `ui disable <email>` keeps the
+account and stops it signing in, `ui delete <email>` removes it outright. Both refuse to strand a
+console by removing the last active admin.
+
 ## v0.2.397 — two things v0.2.396 broke, found by verifying it
 
 Both were found by pointing a request at the live console rather than trusting the tests.
