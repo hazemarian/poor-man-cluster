@@ -1302,6 +1302,48 @@ func TestLoginDisabled_StillRequiresASession(t *testing.T) {
 	}
 }
 
+// TestPendingPageRedirectsAnApprovedAccount — /web/pending belongs to people who
+// are waiting. An approved account that refreshes a stale tab (or bookmarks the
+// page) must land back in the console, not on a page telling it its access is
+// pending.
+func TestPendingPageRedirectsAnApprovedAccount(t *testing.T) {
+	cfg := FromEnv()
+	cfg.DataDir = t.TempDir()
+	cfg.PMAPIURL = "http://127.0.0.1:1"
+	cfg.PMAPIToken = "pmc_test"
+	cfg.SessionSecret = []byte("0123456789abcdefgh")
+	cfg.CookieName = "pmui_session"
+	cfg.SSOEnabled = true
+	cfg.LoginDisabled = true
+	app, err := NewApp(cfg)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	ident := map[string]string{"X-Auth-Request-Email": "late@example.com", "X-Auth-Request-User": "late"}
+	jar := map[string]*http.Cookie{}
+
+	// First sight: pending, so the page renders.
+	if resp := doRequestWithHeaders(t, app, http.MethodGet, "/web/pending", ident, jar); resp.StatusCode != http.StatusOK {
+		t.Fatalf("pending account on /web/pending = %d, want 200", resp.StatusCode)
+	}
+	row, err := app.Store.ByEmail(t.Context(), "late@example.com")
+	if err != nil {
+		t.Fatalf("row: %v", err)
+	}
+	if err := app.Store.SetStatus(t.Context(), row.ID, "active", "operator"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	// Approved: the same URL must send them into the console.
+	resp := doRequestWithHeaders(t, app, http.MethodGet, "/web/pending", ident, jar)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("approved account on /web/pending = %d, want 302", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); !strings.HasSuffix(loc, "/web/") {
+		t.Fatalf("redirected to %q, want the console root", loc)
+	}
+}
+
 // TestSSOSignOutAffordance verifies that when SSO is the gate (login disabled
 // + EDGE_SSO_ENABLED) the console shell renders a sign-out affordance pointing
 // at oauth2-proxy's /oauth2/sign_out — the console session cookie is not the

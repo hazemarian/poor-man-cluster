@@ -4,6 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/middleware"
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/ui/store"
 )
 
 // Access is the page a pending identity may see, and nothing else.
@@ -18,8 +19,17 @@ type Access struct{ *Controller }
 // Pending renders the waiting page with the identity that is waiting, so the
 // operator can tell the admin exactly which account to approve.
 func (c Access) Pending(g *gin.Context) {
+	u := middleware.CurrentUser(g)
+	// This page belongs to people who are waiting. An account that has been
+	// approved and then refreshes a stale tab (or bookmarks it) is not waiting for
+	// anything — send it where it was trying to go instead of showing it a page
+	// that says its access is pending.
+	if u == nil || u.Status != store.StatusPending {
+		redirect(g, WebBase+"/")
+		return
+	}
 	page := accessPage{Version: c.Version, SSO: c.Auth.SSO}
-	if u := middleware.CurrentUser(g); u != nil {
+	if u != nil {
 		page.Email = u.Email
 		if page.Email == "" {
 			page.Email = u.Username

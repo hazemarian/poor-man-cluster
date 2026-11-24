@@ -3,6 +3,15 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.401 — an approved account does not sit on the waiting page
+
+`/web/pending` rendered for anyone who reached it, including accounts that had already been approved.
+An operator who refreshed a stale tab, or bookmarked the URL, was shown "waiting for approval" about a
+decision that had already been made — the worst kind of message, because it is confidently wrong.
+
+The page now belongs only to identities whose status IS pending; everyone else is redirected to the
+console root. Two lines, one test, but it is the sort of thing a user hits before an operator does.
+
 ## v0.2.400 — `pmcluster ui grant`: bootstrap a console identity
 
 `approve` answers a request that exists. On a fresh console nobody has logged in, so there is no row
