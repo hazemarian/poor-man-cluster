@@ -3,6 +3,29 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.404 — the Users page stops describing a console that no longer exists
+
+The banner still read "EDGE_LOGIN_DISABLED is set, so every request is treated as an
+admin. Accounts are ignored while it is on." That was true before the console learned
+to identify people; v0.2.397 made the flag retire the password form only, so the page
+was describing a lie on the very screen where an admin approves strangers.
+
+Two states wore the same flag and now say different things:
+
+- **SSO configured** — "People sign in through SSO here": the identity provider
+  authenticates, and anyone the console does not know appears above and waits for a
+  role. This is the normal deployed state.
+- **SSO not configured** — "Nobody can sign in": the password form is off and nothing
+  replaces it. A lockout, not a configuration, and it now says so instead of claiming
+  anonymous admin access.
+
+## v0.2.403 — the break-glass can grant any role
+
+`pmcluster ui approve` and `ui grant` validated the role against three hardcoded
+names, so the command could not grant a role somebody had just created in the console
+— the one thing roles-as-data is for. They now ask the store, and on a typo they print
+the roles that exist.
+
 ## v0.2.402 — roles are data, and every check is a permission
 
 Until now the console had three hardcoded roles and gated routes by RANK
