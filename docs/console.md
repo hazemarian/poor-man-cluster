@@ -64,7 +64,10 @@ model.
 - **Webhooks** — create/list/remove CI webhook sources (secrets shown once) +
   delivery history.
 - **API keys** — issue and revoke bearer tokens for other users/CI systems
-  (operator-tier).
+  (operator-tier). The create form takes a **stack scope**: leave it empty for a key
+  that may touch every stack, or name one stack so the daemon answers 403 on every
+  other stack's routes. The table shows each key's scope, because a fleet-wide key
+  and a one-stack key are otherwise indistinguishable.
 - **TLS** — rotate the cluster's own (main) certificate and manage per-host
   certificates for customer domains, with expiry warnings
   ([`tls.md`](tls.md)).

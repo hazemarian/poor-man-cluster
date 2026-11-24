@@ -480,8 +480,17 @@ func (c *Client) ListAPIKeys(ctx context.Context) ([]APIKey, error) {
 }
 
 // CreateAPIKey creates an API user and returns its one-time bearer token.
-func (c *Client) CreateAPIKey(ctx context.Context, name string) (*APIKeyCreated, error) {
+//
+// The scope is the token's whole blast radius: empty means every stack, and a
+// non-empty stack narrows it to that stack's routes (the daemon answers 403
+// everywhere else). The console used to send only a name, so every key it minted
+// was fleet-wide — the one property an operator most wants to choose at the moment
+// they mint it.
+func (c *Client) CreateAPIKey(ctx context.Context, name, stack string) (*APIKeyCreated, error) {
 	body := map[string]string{"name": name}
+	if stack != "" {
+		body["stack"] = stack
+	}
 	var out APIKeyCreated
 	err := c.do(ctx, http.MethodPost, "/api_keys", body, &out)
 	return &out, err

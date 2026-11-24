@@ -225,9 +225,15 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/api_keys", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			write(w, `{"keys":[{"id":1,"name":"ci","created_at":10,"last_used_at":20}]}`)
+			write(w, `{"keys":[{"id":1,"name":"ci","created_at":10,"last_used_at":20,"stack":"demo"}]}`)
 		case http.MethodPost:
-			write(w, `{"id":2,"name":"ci2","token":"pmc_abcdef_restofsecret"}`)
+			// Echo the scope back: the console used to send only a name, so a form
+			// field that is collected but not forwarded would look identical here
+			// unless the fake reports what it actually received.
+			var body struct{ Name, Stack string }
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			write(w, fmt.Sprintf(`{"id":2,"name":%q,"token":"pmc_abcdef_restofsecret","stack":%q}`,
+				body.Name, body.Stack))
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -699,6 +705,15 @@ func TestControllers_APIKeys(t *testing.T) {
 	}
 	if b := rr.Body.String(); !strings.Contains(b, "pmc_abcdef") {
 		t.Errorf("add response missing one-time token: %s", b)
+	}
+	// The scope travels: a key minted for one stack must reach the daemon as a
+	// scoped key, not as a fleet-wide one.
+	if rr := h.post(t, "/web/apikeys/add", "name=ci3&stack=adam-world-dev"); !strings.Contains(rr.Body.String(), "adam-world-dev") {
+		t.Errorf("scoped create lost its scope; the daemon would mint a fleet-wide key: %s", rr.Body.String())
+	}
+	// And the existing key's scope is visible in the table.
+	if rr := h.get(t, "/web/apikeys"); !strings.Contains(rr.Body.String(), "demo") {
+		t.Errorf("key list does not show the scope column: %s", rr.Body.String())
 	}
 	// Blank name refused without calling the daemon.
 	if rr := h.post(t, "/web/apikeys/add", "name="); rr.Code != http.StatusOK {

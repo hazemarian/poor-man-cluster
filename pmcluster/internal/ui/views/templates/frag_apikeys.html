@@ -27,6 +27,7 @@
     </div>
     <div class="kv">
       <div class="kv-row"><span class="k">{{T "apikeys.token_prefix"}}</span><span class="v mono iso" dir="ltr">{{.TokenPrefix}}…</span></div>
+      <div class="kv-row"><span class="k">{{T "apikeys.col_scope"}}</span><span class="v">{{if .TokenStack}}<span class="mono">{{.TokenStack}}</span>{{else}}<span class="muted">{{T "apikeys.scope_all"}}</span>{{end}}</span></div>
       {{if .NewID}}<div class="kv-row"><span class="k">{{T "common.id"}}</span><span class="v num">{{.NewID}}</span></div>{{end}}
     </div>
     <p class="muted mt-16">{{T "apikeys.token_usage"}}</p>
@@ -43,6 +44,11 @@
         <label for="apikey-name">{{T "common.name"}}</label>
         <input id="apikey-name" class="finput" name="name" placeholder="{{T "apikeys.name_placeholder"}}" autocomplete="off" required data-focus>
         <span class="hint">{{T "apikeys.create_sub"}}</span>
+      </div>
+      <div class="field">
+        <label for="apikey-stack">{{T "apikeys.stack_label"}}</label>
+        <input id="apikey-stack" class="finput mono" name="stack" placeholder="{{T "apikeys.stack_placeholder"}}" autocomplete="off" dir="ltr">
+        <span class="hint">{{T "apikeys.stack_hint"}}</span>
       </div>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary" data-tip="{{T "apikeys.create_action"}}">{{icon "plus"}}<span>{{T "apikeys.create_action"}}</span></button>
@@ -65,6 +71,7 @@
             <tr>
               <th>{{T "common.name"}}</th>
               <th>{{T "apikeys.col_token"}}</th>
+              <th>{{T "apikeys.col_scope"}}</th>
               <th>{{T "common.created"}}</th>
               <th>{{T "apikeys.col_last_used"}}</th>
               <th><span class="sr-only">{{T "common.actions"}}</span></th>
@@ -78,6 +85,7 @@
                 {{if .Prefix}}<span class="mono iso" dir="ltr">{{.Prefix}}…</span>
                 {{else}}<span class="secret-mask" data-tip="{{T "apikeys.token_gone_hint"}}">••••••••</span> <span class="muted">{{T "apikeys.token_gone"}}</span>{{end}}
               </td>
+              <td>{{if .Stack}}<span class="mono">{{.Stack}}</span>{{else}}<span class="muted">{{T "apikeys.scope_all"}}</span>{{end}}</td>
               <td class="muted num">{{ts .CreatedAt}}</td>
               <td class="muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "apikeys.never_used"}}{{end}}</td>
               <td>
@@ -100,6 +108,7 @@
             {{if .Prefix}}<span class="mono iso" dir="ltr">{{.Prefix}}…</span>
             {{else}}<span class="secret-mask">••••••••</span> <span class="muted">{{T "apikeys.token_gone"}}</span>{{end}}
           </span></div>
+          <div class="kv-row"><span class="k">{{T "apikeys.col_scope"}}</span><span class="v">{{if .Stack}}<span class="mono">{{.Stack}}</span>{{else}}<span class="muted">{{T "apikeys.scope_all"}}</span>{{end}}</span></div>
           <div class="kv-row"><span class="k">{{T "common.created"}}</span><span class="v muted num">{{ts .CreatedAt}}</span></div>
           <div class="kv-row"><span class="k">{{T "apikeys.col_last_used"}}</span><span class="v muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "apikeys.never_used"}}{{end}}</span></div>
           <div class="action-bar">

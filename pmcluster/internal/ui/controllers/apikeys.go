@@ -28,6 +28,10 @@ type apiKeyRow struct {
 	LastUsedAt  int64 // 0 means the daemon records no use yet
 	Prefix      string
 	JustCreated bool
+	// Stack is the token's scope: "" means every stack, and a name means this
+	// key is refused everywhere else. Shown because a fleet-wide key and a
+	// one-stack key look identical in every other column.
+	Stack string
 }
 
 type apiKeysData struct {
@@ -44,6 +48,7 @@ type apiKeysData struct {
 	Token       string
 	TokenName   string
 	TokenPrefix string
+	TokenStack  string
 	NewID       int64
 }
 
@@ -73,6 +78,7 @@ func (c APIKeys) Page(g *gin.Context) {
 func (c APIKeys) Add(g *gin.Context) {
 	ctx := g.Request.Context()
 	name := strings.TrimSpace(g.PostForm("name"))
+	stack := strings.TrimSpace(g.PostForm("stack"))
 	d := apiKeysData{}
 	if c.apiRefused(g, &d) {
 		c.Views.Fragment(g, "apikeys", d)
@@ -85,12 +91,13 @@ func (c APIKeys) Add(g *gin.Context) {
 		c.Views.Fragment(g, "apikeys", d)
 		return
 	}
-	created, err := c.API.CreateAPIKey(ctx, name)
+	created, err := c.API.CreateAPIKey(ctx, name, stack)
 	if err != nil {
 		d.fail("apikeys.err_create", err.Error())
 	} else {
 		d.Token, d.NewID = created.Token, created.ID
 		d.TokenName, d.TokenPrefix = created.Name, tokenPrefix(created.Token)
+		d.TokenStack = created.Stack
 		d.MsgKey, d.MsgArg = "apikeys.msg_created", created.Name
 	}
 	c.loadKeys(ctx, &d)
@@ -135,6 +142,7 @@ func (c APIKeys) loadKeys(ctx context.Context, d *apiKeysData) {
 	for _, k := range keys {
 		rows = append(rows, apiKeyRow{
 			ID: k.ID, Name: k.Name, CreatedAt: k.CreatedAt, LastUsedAt: k.LastUsedAt,
+			Stack: k.Stack,
 		})
 	}
 	d.Keys, d.Count, d.Known = rows, len(rows), true

@@ -3,6 +3,21 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.394 — the console could mint API keys, but not scoped ones
+
+The daemon has accepted a `stack` on `POST /api/api_keys` since scoping existed, and
+`pmcluster user create --stack` passes it. The console's create form collected a name and nothing else,
+so every key minted from the UI was fleet-wide — the one property an operator most wants to choose at
+the moment they mint it, and the one the CLI could already set.
+
+The form now takes a **stack scope** (empty = every stack), the table shows each key's scope, and the
+one-time token panel states it next to the prefix. `pmapi.CreateAPIKey` forwards the field only when
+it is set, so an unscoped key posts exactly what it posted before.
+
+The test that would have caught it: the fake daemon now echoes the scope it received and the test
+asserts a scoped create arrives scoped and renders in the table. A field that is collected but not
+forwarded looks identical to a field that works, unless the fake reports what it actually got.
+
 ## v0.2.393 — a scoped token could open a shell it was not allowed to close
 
 Found by verifying v0.2.392 against production instead of trusting it. C3 taught the shell routes to
