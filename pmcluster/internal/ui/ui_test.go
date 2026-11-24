@@ -1514,6 +1514,58 @@ func TestInviteByLoginForHiddenEmail(t *testing.T) {
 	}
 }
 
+// TestLoginDisabledWithoutSSOStillAllowsPasswordLogin — the flag retires the
+// password form only when an identity provider replaces it. With SSO off there is
+// nothing to replace it with, so the password path must keep working: otherwise an
+// operator who set the flag defensively would brick their own console, and the
+// "nobody can sign in" banner would be the only thing left telling them why.
+func TestLoginDisabledWithoutSSOStillAllowsPasswordLogin(t *testing.T) {
+	cfg := FromEnv()
+	cfg.DataDir = t.TempDir()
+	cfg.PMAPIURL = "http://127.0.0.1:1"
+	cfg.PMAPIToken = "pmc_test"
+	cfg.SessionSecret = []byte("0123456789abcdefgh")
+	cfg.CookieName = "pmui_session"
+	cfg.SSOEnabled = false
+	cfg.LoginDisabled = true
+	app, err := NewApp(cfg)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+
+	// The login page still exists and still posts.
+	if got := doRequest(t, app, http.MethodGet, "/web/login", "", map[string]*http.Cookie{}); got.StatusCode != http.StatusOK {
+		t.Fatalf("login page with SSO off = %d, want 200", got.StatusCode)
+	}
+	// Bootstrap the first admin through /web/setup — the real first-run path —
+	// then sign in with the password it set.
+	setupJar := map[string]*http.Cookie{}
+	setup := url.Values{"username": {"local"}, "password": {"correct-horse-1"}, "confirm": {"correct-horse-1"}}
+	setupResp := doPostFormWithHeaders(t, app, "/web/setup", nil, setupJar, setup)
+	if setupResp.StatusCode != http.StatusOK || setupJar[app.Auth.CookieName()] == nil {
+		t.Fatalf("setup = %d (cookie %v), want 200 with a session", setupResp.StatusCode, setupJar[app.Auth.CookieName()] != nil)
+	}
+	jar := map[string]*http.Cookie{} // start clean, so this is a fresh login
+	form := url.Values{"username": {"local"}, "password": {"correct-horse-1"}}
+	resp := doPostFormWithHeaders(t, app, "/web/login", nil, jar, form)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("password login with SSO off = %d, want 302 into the console", resp.StatusCode)
+	}
+	if got := doRequest(t, app, http.MethodGet, "/web/", "", jar); got.StatusCode != http.StatusOK {
+		t.Fatalf("console after password login = %d, want 200", got.StatusCode)
+	}
+
+	// The page must say the flag is inert, not that nobody can sign in — the
+	// second was a lie that would send an operator hunting for a broken IdP.
+	body := readBody(t, doRequest(t, app, http.MethodGet, "/web/users", "", jar))
+	if !strings.Contains(body, "EDGE_LOGIN_DISABLED has no effect here") {
+		t.Errorf("users page does not explain that the flag is inert without SSO")
+	}
+	if strings.Contains(body, "Nobody can sign in") {
+		t.Errorf("users page still claims nobody can sign in, which is false without SSO")
+	}
+}
+
 // TestUsersPageOffersTheInviteButtonBehindSSO — the page used to hide its create
 // button whenever the password form was off, which is precisely the SSO console
 // where accounts are invited. The button must be gated on users.manage, like the

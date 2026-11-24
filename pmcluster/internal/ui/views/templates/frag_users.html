@@ -69,7 +69,7 @@
 {{if .SSO}}
 {{template "banner" (dict "Tone" "info" "Icon" "shield" "Title" (T "users.sso_only_title") "Body" (T "users.sso_only_body"))}}
 {{else}}
-{{template "banner" (dict "Tone" "warn" "Icon" "lock" "Title" (T "users.no_signin_title") "Body" (T "users.no_signin_body"))}}
+{{template "banner" (dict "Tone" "info" "Icon" "info" "Title" (T "users.flag_inert_title") "Body" (T "users.flag_inert_body"))}}
 {{end}}
 {{end}}
 

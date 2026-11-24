@@ -3,6 +3,21 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.408 — with SSO off, the password is the way in (and the banner says so)
+
+v0.2.404 replaced the stale login-disabled banner with two states, and got the
+second one wrong: it claimed that `EDGE_LOGIN_DISABLED` without SSO leaves "nobody
+able to sign in". It does not. The flag is consulted only as
+`SSO && LoginDisabled`, so without an identity provider it is inert — `/web/setup`
+bootstraps the first admin, `/web/login` keeps working, and the session cookie signs
+people in exactly as before. A test now proves that end to end (setup → logout-shaped
+fresh jar → password login → console) and asserts the page says the flag is inert
+instead of claiming a lockout.
+
+The one case that genuinely cannot sign in without SSO is an account created through
+SSO, which has no password by design (`auth_source=sso`, `password_set=0`). Give it one
+with Edit before turning SSO off; the banner says that too.
+
 ## v0.2.407 — the invite button actually appears
 
 v0.2.406 shipped the invite path and then hid its button: the create control was
