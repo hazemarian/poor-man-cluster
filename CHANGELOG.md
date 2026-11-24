@@ -3,6 +3,21 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.400 — `pmcluster ui grant`: bootstrap a console identity
+
+`approve` answers a request that exists. On a fresh console nobody has logged in, so there is no row
+to approve — the operator is the one who should be let in. `ui grant <email> --role <role>` creates the
+identity if it is absent and activates it with the role, which is how the first admin on a new volume is
+established (and how this release's own author got into the console).
+
+Also fixes `grant` shipping without its `--role` flag registered — caught by running it, not by reading
+it.
+
+Outstanding gap this exposed, not fixed here: the platform creates volume-root directories but not their
+OWNERSHIP. A bind target for a non-root container has to be chowned by hand (`/var/stack/data/<app>/<vol>`
+→ the container's uid), and the next deploy on a different node recreates it root-owned, where the
+container silently cannot write. Tenant stacks never hit it because they run as root.
+
 ## v0.2.399 — the console's volume moves under the platform volume root
 
 `pmui-data` was declared in the edge manifest with an empty value, which the compose writer turns into

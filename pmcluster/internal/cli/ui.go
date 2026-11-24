@@ -67,6 +67,20 @@ var uiRejectCmd = &cobra.Command{
 	RunE:  runUIReject,
 }
 
+var uiGrantCmd = &cobra.Command{
+	Use:   "grant <email>",
+	Short: "Create-or-activate a console identity with a role (bootstrap)",
+	Args:  cobra.ExactArgs(1),
+	Long: `Grants a role to an SSO identity, creating the row if the person has never
+signed in.
+
+'approve' answers a request that exists; 'grant' is for the case where it does not
+yet — a fresh console, or an operator who wants their own account ready before the
+first login. The identity is still only reachable through the SSO proxy: this row
+says what it may do, not that GitHub will authenticate it.`,
+	RunE: runUIGrant,
+}
+
 var uiDisableCmd = &cobra.Command{
 	Use:   "disable <email>",
 	Short: "Keep an account but stop it signing in (offboarding)",
@@ -89,7 +103,8 @@ func init() {
 	uiCmd.PersistentFlags().String("image", "alpine:3.20", "image used to mount the volume")
 	uiCmd.PersistentFlags().Bool("in-volume", false, "internal: already running inside the volume container")
 	uiApproveCmd.Flags().String("role", uistore.RoleViewer, "role to grant: admin, operator or viewer")
-	uiCmd.AddCommand(uiUsersCmd, uiPendingCmd, uiApproveCmd, uiRejectCmd, uiDisableCmd, uiDeleteCmd)
+	uiGrantCmd.Flags().String("role", uistore.RoleViewer, "role to grant: admin, operator or viewer")
+	uiCmd.AddCommand(uiUsersCmd, uiPendingCmd, uiApproveCmd, uiRejectCmd, uiGrantCmd, uiDisableCmd, uiDeleteCmd)
 	rootCmd.AddCommand(uiCmd)
 }
 
@@ -291,6 +306,44 @@ func runUIReject(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "removed pending identity %s\n", email)
+	return nil
+}
+
+// runUIGrant creates the identity if it is absent and makes it active with the
+// given role. Bootstrapping a console needs this because an approval presupposes a
+// request: on a fresh volume nobody has logged in yet, so there is no row to
+// approve, and the operator is the one who should be let in.
+func runUIGrant(cmd *cobra.Command, args []string) error {
+	if done, err := inVolume(cmd); done {
+		return err
+	}
+	role, _ := cmd.Flags().GetString("role")
+	if !validUIRole(role) {
+		return fmt.Errorf("role must be one of admin, operator, viewer (got %q)", role)
+	}
+	st, err := openUIStore(cmd)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = st.Close() }()
+	email := strings.TrimSpace(strings.ToLower(args[0]))
+	if email == "" {
+		return errors.New("email cannot be empty")
+	}
+	u, err := st.ByEmail(cmd.Context(), email)
+	if err != nil {
+		// First sight: the row is created pending by the SSO path, so create it
+		// here the same way and then activate it — one code path for identity
+		// creation, one extra step for the decision.
+		u, err = st.EnsureSSOUser(cmd.Context(), email, email)
+		if err != nil {
+			return fmt.Errorf("create identity %q: %w", email, err)
+		}
+	}
+	if err := st.SetStatus(cmd.Context(), u.ID, uistore.StatusActive, role); err != nil {
+		return err
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "granted %s: %s, active\n", email, role)
 	return nil
 }
 
