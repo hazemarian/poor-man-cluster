@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -261,6 +262,17 @@ func (a *Auth) Require() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		u, ok := a.identify(c)
 		if !ok {
+			// Under SSO there is nothing here to redirect TO: the sign-in page and
+			// the setup form are the proxy's (they bounce), so a redirect becomes a
+			// loop — /web/ -> /web/setup -> /web/ … Answering 401 is the honest
+			// response, and it is what a request that did not come through the proxy
+			// deserves.
+			if a.SSO {
+				c.String(http.StatusUnauthorized,
+					"authentication required: this console signs in through the SSO proxy")
+				c.Abort()
+				return
+			}
 			a.redirect(c, a.target(c.Request.Context()))
 			return
 		}
@@ -281,7 +293,9 @@ func (a *Auth) Require() gin.HandlerFunc {
 			return
 		}
 
-		if !u.PasswordSet && u.AuthSource != store.AuthSSO && a.NudgeSetup != nil {
+		// The setup nudge only makes sense where the password form exists; under SSO
+		// the first admin is approved, not created here.
+		if !a.SSO && !u.PasswordSet && u.AuthSource != store.AuthSSO && a.NudgeSetup != nil {
 			if need, e := a.NudgeSetup(c.Request.Context()); e == nil && need {
 				a.redirect(c, WebBase+"/setup")
 				return
@@ -314,6 +328,10 @@ func (a *Auth) identify(c *gin.Context) (*store.User, bool) {
 		}
 		u, err := a.st.EnsureSSOUser(c.Request.Context(), email, user)
 		if err != nil || u == nil {
+			// Silence here cost an afternoon: a console whose store could not be
+			// written answered every SSO login with a redirect loop and logged
+			// nothing at all. Say which identity failed and why.
+			log.Printf("sso: cannot resolve identity %q: %v", email, err)
 			return nil, false
 		}
 		return u, true

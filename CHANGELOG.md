@@ -3,6 +3,26 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.397 — two things v0.2.396 broke, found by verifying it
+
+Both were found by pointing a request at the live console rather than trusting the tests.
+
+**The edge forced an in-memory store.** `cmd/edge/main.go` set `DataDir = ":memory:"` whenever login was
+disabled — the old "cluster mode is stateless" assumption. The template change in v0.2.396 (a real
+`/data` on the `pmui-data` volume) could not take effect, so every pending SSO identity lived for one
+request: the console answered `/web/pending` and the row was gone by the next query. Removed; `DATA_DIR`
+is honoured in both modes, because the approval table is state.
+
+**An unidentified request looped.** With SSO on, the sign-in page and the setup form both bounce
+(they belong to the proxy), so redirecting an unauthenticated request produced
+`/web/ -> /web/setup -> /web/` forever. Under SSO the answer is now a 401 with a sentence: a request
+that did not come through the proxy has nowhere here to go.
+
+**And two silent failures around them:** the console now logs why an SSO identity could not be
+resolved (it logged nothing at all, which is why this took measuring instead of reading), and
+`pmcluster ui` refuses to *create* the console's database — a root-run CLI creating it first leaves it
+owned by root, and every write the console then makes fails. That is exactly what happened here.
+
 ## v0.2.396 — the console knows who is calling
 
 C1 of the 2026-11-21 audit was the room behind C3/H1/H4: `EDGE_LOGIN_DISABLED` made the

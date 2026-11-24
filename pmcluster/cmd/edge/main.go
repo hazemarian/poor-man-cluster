@@ -63,13 +63,13 @@ func run() error {
 	uiCfg := ui.FromEnv()
 	uiCfg.PMAPIURL = proxyCfg.Upstream
 
-	// Cluster mode (EDGE_LOGIN_DISABLED) is stateless: the console is driven
-	// entirely by env (PMCLUSTER_API_URL + PMCLUSTER_API_TOKEN, synthetic admin
-	// behind the Traefik gate) so it needs no volume. Force an in-memory store;
-	// standalone/local runs keep their SQLite dataDir.
-	if uiCfg.LoginDisabled {
-		uiCfg.DataDir = ":memory:"
-	}
+	// The console is NOT stateless any more, in either mode. It owns an approval
+	// table — SSO identities that signed in and are waiting for a role — so an
+	// in-memory store would forget every pending request on restart, which is
+	// precisely when an operator is trying to see who asked for access. This used
+	// to force ":memory:" whenever login was disabled, on the reasoning that a
+	// Traefik gate stood in front and the console held nothing worth keeping;
+	// both halves of that changed (ADR 0013). DATA_DIR is honoured as-is.
 
 	// The console's own failures (an interactive terminal that cannot dial the daemon, for one)
 	// used to leave no trace anywhere: the page showed a status line and the server said nothing.

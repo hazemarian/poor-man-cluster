@@ -3,6 +3,8 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -71,6 +73,14 @@ func openUIStore(cmd *cobra.Command) (*uistore.Store, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
 		return nil, errors.New("--data-dir is required")
+	}
+	// Refuse to CREATE the database. The console runs as an unprivileged user
+	// inside its container; a root-run CLI that creates the file first leaves it
+	// owned by root, and every write the console then makes fails — silently, as
+	// a redirect. That is exactly what happened on 2026-11-24.
+	dbPath := filepath.Join(dir, "pmcluster-ui.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, fmt.Errorf("no console database at %s — start the console once (the edge service) so it creates it, then retry", dbPath)
 	}
 	return uistore.Open(dir)
 }

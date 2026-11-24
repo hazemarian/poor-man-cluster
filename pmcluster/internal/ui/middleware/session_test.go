@@ -162,6 +162,30 @@ func TestRequire_LoginDisabledPassThrough(t *testing.T) {
 
 // TestVerify_RoundTrip checks a freshly signed cookie verifies back to the
 // same session.
+// TestRequire_SSOWithoutIdentityAnswers401 — the regression that shipped in
+// v0.2.396: under SSO, sign-in and setup bounce, so redirecting an unidentified
+// request loops forever (/web/ -> /web/setup -> /web/). Measured on the live
+// cluster with the proxy off the path.
+func TestRequire_SSOWithoutIdentityAnswers401(t *testing.T) {
+	a := newAuth(t)
+	a.SSO = true
+	a.LoginDisabled = true
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/web/", a.Require(), func(c *gin.Context) { c.String(http.StatusOK, "should not be reached") })
+
+	req := httptest.NewRequest(http.MethodGet, "/web/", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("request without identity under SSO = %d, want 401 (a redirect here is a loop)", rr.Code)
+	}
+	if rr.Header().Get("Location") != "" {
+		t.Errorf("answered with a redirect to %q; under SSO there is nowhere to redirect to", rr.Header().Get("Location"))
+	}
+}
+
 func TestVerify_RoundTrip(t *testing.T) {
 	a := newAuth(t)
 	v := a.sign(Session{Username: "alice", Exp: time.Now().Add(time.Hour).Unix()})
