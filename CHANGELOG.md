@@ -3,6 +3,41 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.402 — roles are data, and every check is a permission
+
+Until now the console had three hardcoded roles and gated routes by RANK
+(`RequireRole`): admin > operator > viewer, written into the router and into the
+templates. A cluster that needed "deploys but cannot touch accounts and cannot open
+shells" had no way to say so.
+
+Roles are rows now: a name, a description, and a set of permissions from a fixed
+catalogue of eleven (`store.Permissions`). Accounts point at the name, so a new
+role is a new kind of operator with no code change and no restart.
+
+- **One resolver.** `middleware.Can(ctx, store, role, perm)` is the only place that
+  answers "may this role do this". The route guard and the template helper both
+  call it, so a hidden control and a refused request cannot disagree.
+- **`{{can "perm"}}` in templates,** bound per request like `{{T}}`: nav entries,
+  the role editor's buttons, the Users approval queue and the settings forms all
+  ask the same question the server will ask. Nothing is gated by a role name any
+  more — `{{if eq .User.Role "admin"}}` is gone from the chrome.
+- **The route map is a table,** not a gate per handler: `PermissionFor(method,
+  path)` decides what each console route needs. Rendered configs need
+  `secrets.write` (they embed credentials), the settings page needs only
+  `console.view`, saving settings needs `settings.write`, TLS and webhooks need
+  `platform.configure` — the writes split by consequence.
+- **Built-ins keep the old behaviour** (viewer reads, operator operates, admin
+  everything), so an untouched cluster is unchanged. Built-ins can be edited but
+  not deleted; the admin role cannot be edited at all, because a console whose
+  admin role grants nothing has no way back in.
+- **Two tests keep it honest:** every catalogue permission must be required by a
+  route (a checkbox nobody reads is a lie), and a custom read-only role must both
+  miss the nav entry and get 403 on the page.
+
+Lock-out invariants stay role-based on purpose: "do not demote yourself" and "do
+not remove the last admin" are statements about the admin role, not about
+authorization, and a permission cannot express them.
+
 ## v0.2.401 — an approved account does not sit on the waiting page
 
 `/web/pending` rendered for anyone who reached it, including accounts that had already been approved.

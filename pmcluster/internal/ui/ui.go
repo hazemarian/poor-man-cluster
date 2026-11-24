@@ -100,6 +100,16 @@ func NewApp(cfg Config) (*App, error) {
 	// With SSO, oauth2-proxy asserts the identity on every request and the user
 	// table decides the role. Without it, the session cookie does.
 	auth.SSO = cfg.SSOEnabled
+	// One resolver for the chrome and for the routes: the template helper 'can'
+	// and RequirePermission both land here, so hiding a button and refusing a
+	// request can never disagree.
+	renderer.Can = func(c *gin.Context, perm string) bool {
+		u := middleware.CurrentUser(c)
+		if u == nil {
+			return false
+		}
+		return middleware.Can(c.Request.Context(), st, u.Role, perm)
+	}
 	auth.NudgeSetup = func(ctx context.Context) (bool, error) {
 		n, err := st.CountUsers(ctx)
 		if err != nil {
@@ -199,7 +209,9 @@ func (a *App) Mount(engine *gin.Engine) {
 
 	// ---- viewer: read-only console (all GET page/fragment/list routes) ----
 	vr := g.Group("")
-	vr.Use(a.ctrl.Auth.RequireRole(store.RoleViewer))
+	// Permission, not rank: the role table decides, so a role created in the
+	// console is a real grant and not a label.
+	vr.Use(a.ctrl.Auth.RequirePermission())
 
 	ov := controllers.Overview{Controller: a.ctrl}
 	vr.GET("/", ov.App)
@@ -291,7 +303,7 @@ func (a *App) Mount(engine *gin.Engine) {
 	// ---- operator: mutations (sync/rollback/remove, service ops, backups,
 	// deploy submit, configs/secrets edits, tls, webhooks) ----
 	op := g.Group("")
-	op.Use(a.ctrl.Auth.RequireRole(store.RoleOperator))
+	op.Use(a.ctrl.Auth.RequirePermission())
 
 	op.POST("/stacks/:name/sync", st.Sync)
 	op.POST("/stacks/:name/rollback", st.Rollback)
@@ -378,7 +390,7 @@ func (a *App) Mount(engine *gin.Engine) {
 
 	// ---- admin: API keys, settings save/apply, and the users CRUD ----
 	ad := g.Group("")
-	ad.Use(a.ctrl.Auth.RequireRole(store.RoleAdmin))
+	ad.Use(a.ctrl.Auth.RequirePermission())
 
 	ak := controllers.APIKeys{Controller: a.ctrl}
 	ad.GET("/apikeys", ak.Page)
@@ -401,6 +413,16 @@ func (a *App) Mount(engine *gin.Engine) {
 	// so it sits with the rest of the account surface (admin only).
 	ad.POST("/users/approve", us.Approve)
 	ad.POST("/users/reject", us.Reject)
+
+	// Roles are data: the page that defines them sits with the accounts they are
+	// assigned to.
+	rl := controllers.Roles{Controller: a.ctrl}
+	ad.GET("/roles", rl.List)
+	ad.GET("/roles/new", rl.New)
+	ad.POST("/roles/add", rl.Create)
+	ad.GET("/roles/edit/:name", rl.Edit)
+	ad.POST("/roles/edit", rl.EditSave)
+	ad.POST("/roles/remove/:name", rl.Remove)
 }
 
 // Handler returns a gin engine with every UI route. The edge service mounts

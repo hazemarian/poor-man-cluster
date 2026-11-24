@@ -1004,6 +1004,73 @@ func loginAs(t *testing.T, app *App, username, password string) map[string]*http
 	return jar
 }
 
+// TestCustomRoleGrantsExactlyWhatItSays — the point of roles as data: a role that
+// grants only reads is refused where an operator would be allowed, and allowed
+// exactly one step further than a viewer nowhere.
+func TestCustomRoleGrantsExactlyWhatItSays(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	adminJar := setupUsersAndLogin(t, app)
+
+	if _, err := app.Store.CreateRole(t.Context(), "reader", "reads only", []string{"console.view"}); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	addUser(t, app, adminJar, "rita", "reader", "readerpass1")
+	jar := loginAs(t, app, "rita", "readerpass1")
+
+	// Reads: allowed.
+	if resp := doRequest(t, app, http.MethodGet, "/web/stacks", "", jar); resp.StatusCode != http.StatusOK {
+		t.Errorf("reader GET /web/stacks = %d, want 200", resp.StatusCode)
+	}
+	// A stack mutation: refused — the role says reads only.
+	if resp := doRequest(t, app, http.MethodPost, "/web/stacks/demo/sync", "", jar); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("reader POST /web/stacks/demo/sync = %d, want 403", resp.StatusCode)
+	}
+	// Account management: refused.
+	if resp := doRequest(t, app, http.MethodGet, "/web/users", "", jar); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("reader GET /web/users = %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestCanHelperAgreesWithTheRouteGuard — the template helper 'can' and
+// RequirePermission must answer the same question. This checks both ends: a role
+// without roles.manage does not SEE the nav entry, and does not get the page
+// either. A UI that hides a control the server would allow is annoying; one that
+// offers a control the server refuses is a bug report.
+func TestCanHelperAgreesWithTheRouteGuard(t *testing.T) {
+	daemon := fakeDaemon(t)
+	defer daemon.Close()
+	app := newTestApp(t, daemon)
+	adminJar := setupUsersAndLogin(t, app)
+
+	// Admin: link present, page allowed.
+	body := readBody(t, doRequest(t, app, http.MethodGet, "/web/", "", adminJar))
+	if !strings.Contains(body, `href="/web/roles"`) {
+		t.Errorf("admin shell has no Roles link")
+	}
+	if resp := doRequest(t, app, http.MethodGet, "/web/roles", "", adminJar); resp.StatusCode != http.StatusOK {
+		t.Errorf("admin GET /web/roles = %d, want 200", resp.StatusCode)
+	}
+
+	// A role with reads only: no link, and the page refused.
+	if _, err := app.Store.CreateRole(t.Context(), "reader", "", []string{"console.view"}); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+	addUser(t, app, adminJar, "rita", "reader", "readerpass1")
+	jar := loginAs(t, app, "rita", "readerpass1")
+	body = readBody(t, doRequest(t, app, http.MethodGet, "/web/", "", jar))
+	if strings.Contains(body, `href="/web/roles"`) {
+		t.Errorf("reader shell offers a Roles link the route would refuse")
+	}
+	if strings.Contains(body, `href="/web/users"`) {
+		t.Errorf("reader shell offers a Users link the route would refuse")
+	}
+	if resp := doRequest(t, app, http.MethodGet, "/web/roles", "", jar); resp.StatusCode != http.StatusForbidden {
+		t.Errorf("reader GET /web/roles = %d, want 403", resp.StatusCode)
+	}
+}
+
 // TestRBAC_ViewerIsReadOnly verifies the viewer role can read everything but
 // cannot mutate anything (403 on operator/admin routes).
 func TestRBAC_ViewerIsReadOnly(t *testing.T) {
@@ -1271,9 +1338,11 @@ func TestLoginDisabled_StillRequiresASession(t *testing.T) {
 	if strings.Contains(b, "Log out") {
 		t.Errorf("login-disabled shell must not show the Log out form")
 	}
-	if strings.Contains(b, "/users") && strings.Contains(b, "Users") {
-		// Users CRUD link is hidden in login-disabled mode (Traefik gates /web).
-		t.Errorf("login-disabled shell must hide the Users link")
+	// Users used to be hidden when login was disabled, because accounts came from
+	// the IdP. It is now the approval queue, so an admin sees it — the permission
+	// (users.manage) decides, not the auth mode.
+	if !strings.Contains(b, `href="/web/users"`) {
+		t.Errorf("admin shell must keep the Users link: it is where identities are approved")
 	}
 	// API Keys is admin-owned but must stay reachable when login is disabled —
 	// the nav link must render for admins even without the login/setup surface.

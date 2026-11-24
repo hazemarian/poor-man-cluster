@@ -1021,14 +1021,11 @@ func (c Settings) fill(g *gin.Context, d settingsData) settingsData {
 	d.Version = c.Version
 	d.User = username(g)
 	if u := middleware.CurrentUser(g); u != nil {
-		if u.Role == store.RoleAdmin {
-			d.CanEditCluster = true
-		}
-		// operator or admin: the daemon gates the registration write at operator
-		// level, so the form is offered to exactly the roles the route accepts.
-		if u.Role == store.RoleAdmin || u.Role == store.RoleOperator {
-			d.CanEditGitHub = true
-		}
+		// Permissions, not role names: the same resolver the routes and the 'can'
+		// template helper use, so a form is offered exactly when its submit would
+		// be accepted — including for roles that did not exist when this was written.
+		d.CanEditCluster = middleware.Can(ctx, c.Store, u.Role, store.PermSettingsWrite)
+		d.CanEditGitHub = middleware.Can(ctx, c.Store, u.Role, store.PermPlatformConfig)
 	}
 	if _, err := c.Store.Setting(ctx, keyToken); err == nil {
 		d.HasToken = true

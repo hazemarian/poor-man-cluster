@@ -32,9 +32,7 @@
     {{if .RoleLocked}}
     <input type="hidden" name="role" value="{{.Role}}">
     <select id="user-role" class="selectbox" disabled>
-      {{if eq .Role "admin"}}<option>{{T "st.admin"}}</option>{{end}}
-      {{if eq .Role "operator"}}<option>{{T "st.operator"}}</option>{{end}}
-      {{if eq .Role "viewer"}}<option>{{T "st.viewer"}}</option>{{end}}
+      <option>{{.Role}}</option>
     </select>
     <span class="hint">{{T "users.role_locked"}}</span>
     {{else}}

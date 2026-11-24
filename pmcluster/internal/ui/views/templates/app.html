@@ -129,13 +129,18 @@
       <a class="nav-item" href="/web/backups" hx-get="/web/backups" hx-target="#view" hx-push-url="true" data-nav="backups" data-tip="{{T "nav.backups"}}">{{icon "backups"}}<span>{{T "nav.backups"}}</span></a>
       </div>
 
-      {{if eq .User.Role "admin"}}
+      {{if or (can "users.manage") (can "roles.manage") (can "keys.manage")}}
       <div class="nav-group" data-nav-group="access">
       <button type="button" class="nav-label nav-toggle" id="nav-access" aria-expanded="false" data-tip="{{T "nav.group.access"}}">{{T "nav.group.access"}}{{icon "chevron-down"}}</button>
-      {{if not .LoginDisabled}}
+      {{if can "users.manage"}}
       <a class="nav-item" href="/web/users" hx-get="/web/users" hx-target="#view" hx-push-url="true" data-nav="users" data-tip="{{T "nav.users"}}">{{icon "users"}}<span>{{T "nav.users"}}</span></a>
       {{end}}
+      {{if can "roles.manage"}}
+      <a class="nav-item" href="/web/roles" hx-get="/web/roles" hx-target="#view" hx-push-url="true" data-nav="roles" data-tip="{{T "nav.roles"}}">{{icon "shield"}}<span>{{T "nav.roles"}}</span></a>
+      {{end}}
+      {{if can "keys.manage"}}
       <a class="nav-item" href="/web/apikeys" hx-get="/web/apikeys" hx-target="#view" hx-push-url="true" data-nav="apikeys" data-tip="{{T "nav.apikeys"}}">{{icon "keys"}}<span>{{T "nav.apikeys"}}</span></a>
+      {{end}}
       </div>
       {{end}}
 

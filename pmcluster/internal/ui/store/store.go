@@ -132,6 +132,10 @@ func Open(dataDir string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate identity columns: %w", err)
 	}
+	if err := ensureRolesSchema(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate roles: %w", err)
+	}
 	return &Store{db: db}, nil
 }
 

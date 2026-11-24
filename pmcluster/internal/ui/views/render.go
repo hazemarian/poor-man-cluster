@@ -101,6 +101,10 @@ type Renderer struct {
 	// or deep link. When nil, fragment routes always render bare partials
 	// (used by login/setup, which have their own documents).
 	ShellData func(c *gin.Context) gin.H
+	// Can answers "may the current user do this". The app wires it to the same
+	// resolver the route guard uses (middleware.Can), so a hidden control and a
+	// refused request always agree.
+	Can func(c *gin.Context, perm string) bool
 }
 
 // NewRenderer parses all embedded templates and their helper funcs.
@@ -130,8 +134,12 @@ func NewRenderer() (*Renderer, error) {
 		// bytes in its HTTP cache across a deploy.
 		"static": StaticURL,
 		"T":      func(key string) string { return key },
-		"TN":     func(key string) string { return "" },
-		"TF":     func(key string, args ...any) string { return key },
+		// can asks whether the signed-in role may do something. Inert until bound
+		// per request (below), like T: a template may call it regardless of the
+		// data shape it was handed.
+		"can": func(perm string) bool { return false },
+		"TN":  func(key string) string { return "" },
+		"TF":  func(key string, args ...any) string { return key },
 		// Numbers arrive as int, int64, uint64 or float64 depending on the
 		// data source, so every numeric helper takes any and coerces.
 		"P":  func(count any, key string, dualCase ...i18n.Case) string { return key },
@@ -167,6 +175,12 @@ func (r *Renderer) withRequest(c *gin.Context) *template.Template {
 	}
 	l := Localize(c)
 	return t.Funcs(template.FuncMap{
+		"can": func(perm string) bool {
+			if r.Can == nil {
+				return false
+			}
+			return r.Can(c, perm)
+		},
 		"partial": func(name string, data any) (template.HTML, error) {
 			var b strings.Builder
 			if err := t.ExecuteTemplate(&b, name, data); err != nil {

@@ -11,7 +11,7 @@
 {{/* A failed store read is one sentence plus the raw payload, folded away. */}}
 {{/* Identities waiting for approval: GitHub authenticated them, nobody has given
      them a role. Approving is the point of this page, so it comes first. */}}
-{{if .Pending}}
+{{if and .Pending (can "users.manage")}}
 <div class="panel">
   {{template "panelhead" (dict "Title" (T "users.pending_title") "Sub" (T "users.pending_sub"))}}
   <div class="panel-body tight">
@@ -95,10 +95,7 @@
                 {{if .IsSelf}} <span class="pill accent">{{T "users.you"}}</span>{{end}}
               </td>
               <td>
-                {{if eq .Role "admin"}}<span class="pill good">{{T "st.admin"}}
-                {{else if eq .Role "operator"}}<span class="pill accent">{{T "st.operator"}}
-                {{else if eq .Role "viewer"}}<span class="pill plain">{{T "st.viewer"}}
-                {{else}}<span class="pill plain"><span class="mono">{{.Role}}</span>{{end}}
+                {{if eq .Role "admin"}}<span class="pill good"><span class="mono">{{.Role}}</span>{{else}}<span class="pill plain"><span class="mono">{{.Role}}</span>{{end}}
                 {{if .RoleLocked}} {{icon "lock"}}{{end}}</span>
               </td>
               <td class="muted num">{{ts .CreatedAt}}</td>
@@ -127,10 +124,7 @@
         <div class="kv">
           <div class="kv-row"><span class="k">{{T "common.username"}}</span><span class="v"><span class="mono iso" dir="ltr">{{.Username}}</span>{{if .IsSelf}} <span class="pill accent">{{T "users.you"}}</span>{{end}}</span></div>
           <div class="kv-row"><span class="k">{{T "common.role"}}</span><span class="v">
-            {{if eq .Role "admin"}}<span class="pill good">{{T "st.admin"}}
-            {{else if eq .Role "operator"}}<span class="pill accent">{{T "st.operator"}}
-            {{else if eq .Role "viewer"}}<span class="pill plain">{{T "st.viewer"}}
-            {{else}}<span class="pill plain"><span class="mono">{{.Role}}</span>{{end}}
+            {{if eq .Role "admin"}}<span class="pill good"><span class="mono">{{.Role}}</span>{{else}}<span class="pill plain"><span class="mono">{{.Role}}</span>{{end}}
             {{if .RoleLocked}} {{icon "lock"}}{{end}}</span>
           </span></div>
           <div class="kv-row"><span class="k">{{T "common.created"}}</span><span class="v muted num">{{ts .CreatedAt}}</span></div>

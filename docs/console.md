@@ -84,9 +84,17 @@ model.
   ([`tls.md`](tls.md)).
 - **Backups** — trigger snapshots, browse archive contents, restore, and view
   the audit log (archives other nodes uploaded to the store included).
-- **Users** — manage console accounts with RBAC roles (admin > operator >
-  viewer); admins only, and served even behind SSO (it is where identities are
-  approved).
+- **Roles** — named sets of permissions from a fixed catalogue: read, deploy,
+  operate, secrets, backups, shells, platform configuration, settings, keys,
+  users, roles. Accounts are assigned a role; a role can be created for a reach
+  that is neither read-only nor full admin. The admin role is fixed (it always
+  grants everything) and built-ins cannot be deleted, so a console can never be
+  left with no way in. Permissions are enforced by one resolver that both the
+  routes and the templates call, so the interface only offers what the server
+  would accept.
+- **Users** — manage console accounts, assign roles, approve or reject waiting
+  identities, and revoke accounts; requires the `users.manage` permission, and is
+  served even behind SSO (it is where identities are approved).
 
   With SSO, GitHub (through oauth2-proxy, restricted to the configured org) says
   *who* may reach the console; this table says *what they may do*. An identity the

@@ -1,0 +1,57 @@
+{{define "roleform"}}
+{{/* Create / edit one role. The permission list is the fixed catalogue from
+     store.Permissions: every entry is checked by a real route, which is the only
+     reason a checkbox here means anything. */}}
+<h2>{{T .TitleKey}}</h2>
+{{if .SubKey}}<p class="sub">{{T .SubKey}}</p>{{end}}
+
+{{if .ErrKey}}
+{{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw)}}
+{{end}}
+
+<form hx-post="{{if .IsEdit}}/web/roles/edit{{else}}/web/roles/add{{end}}" hx-target="#view" hx-swap="innerHTML"
+      hx-on::after-request="if(event.detail.failed){document.getElementById('modal-body').innerHTML=event.detail.xhr.responseText;openModal();}else{closeModal();}"
+      hx-disabled-elt="find [type='submit']">
+
+  <div class="field">
+    <label for="role-name">{{T "common.name"}}</label>
+    {{if .IsEdit}}
+    <input id="role-name" class="finput mono" dir="ltr" value="{{.Name}}" readonly>
+    <input type="hidden" name="name" value="{{.Name}}">
+    <span class="hint">{{T "roles.hint_name_fixed"}}</span>
+    {{else}}
+    <input id="role-name" class="finput mono" dir="ltr" name="name" value="{{.Name}}" autocomplete="off" required data-focus>
+    <span class="hint">{{T "roles.hint_name"}}</span>
+    {{end}}
+  </div>
+
+  <div class="field">
+    <label for="role-desc">{{T "roles.col_description"}}</label>
+    <input id="role-desc" class="finput" name="description" value="{{.Description}}" autocomplete="off">
+  </div>
+
+  {{if .Locked}}
+  <p class="muted">{{T "roles.admin_fixed_hint"}}</p>
+  {{end}}
+
+  {{range .Groups}}
+  <div class="field">
+    <span class="k">{{.Name}}</span>
+    {{range .Perms}}
+    <label class="kv-row" style="align-items:flex-start;gap:10px">
+      <input type="checkbox" name="perm" value="{{.Name}}"{{if .Checked}} checked{{end}}{{if .Locked}} disabled{{end}}>
+      <span>
+        <span class="mono">{{.Name}}</span>
+        <span class="muted">{{.Summary}}</span>
+      </span>
+    </label>
+    {{end}}
+  </div>
+  {{end}}
+
+  <div class="form-actions">
+    <button type="button" class="btn" onclick="closeModal()">{{T "common.cancel"}}</button>
+    <button type="submit" class="btn btn-primary">{{T "common.save"}}</button>
+  </div>
+</form>
+{{end}}

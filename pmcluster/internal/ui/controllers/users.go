@@ -25,10 +25,20 @@ import (
 // shown only inside a <details> disclosure.
 type Users struct{ *Controller }
 
-// roleOptions is the closed set of RBAC roles, in the order the selects list
-// them. The order is significant: admin first, because it is the role an
-// operator is most often looking for.
-var roleOptions = []string{store.RoleAdmin, store.RoleOperator, store.RoleViewer}
+// defaultRoles is the fallback list for the select. The real list is read from the
+// roles table (see c.allRoles): roles are data now, so a form that offered a fixed
+// three would not be able to assign the role somebody just created.
+var defaultRoles = []string{store.RoleAdmin, store.RoleOperator, store.RoleViewer}
+
+// allRoles is the select's options: every role in the store, falling back to the
+// built-ins only when the store cannot be read at all.
+func (c Users) allRoles(ctx context.Context) []string {
+	names, err := c.Store.RoleNames(ctx)
+	if err != nil || len(names) == 0 {
+		return defaultRoles
+	}
+	return names
+}
 
 // minPasswordLen is the shortest password this console will store. The same
 // number is quoted by users.err_password_short.
@@ -36,13 +46,14 @@ const minPasswordLen = 8
 
 // validRole reports whether r is one of the three roles the console understands.
 // A role that fails this check never reaches the store.
-func validRole(r string) bool {
-	for _, v := range roleOptions {
-		if r == v {
-			return true
-		}
+// roleUnknown reports whether r is not a role in the store — the check that keeps
+// an account from being pointed at a role that does not exist.
+func (c Users) roleUnknown(ctx context.Context, r string) bool {
+	if r == "" {
+		return true
 	}
-	return false
+	_, err := c.Store.RoleByName(ctx, r)
+	return err != nil
 }
 
 // userRow is one account as the users table shows it. CanDelete and RoleLocked
@@ -126,7 +137,7 @@ func (c Users) Approve(g *gin.Context) {
 	id, err := strconv.ParseInt(g.PostForm("id"), 10, 64)
 	role := g.PostForm("role")
 	d := usersData{}
-	if err != nil || id <= 0 || !validRole(role) {
+	if err != nil || id <= 0 || c.roleUnknown(ctx, role) {
 		d.ErrKey = "users.err_bad_request"
 		c.Views.Fragment(g, "users", c.page(ctx, username(g), d))
 		return
@@ -178,7 +189,7 @@ func (c Users) New(g *gin.Context) {
 		TitleKey: "users.form_new_title",
 		SubKey:   "users.form_new_sub",
 		Role:     store.RoleOperator,
-		Roles:    roleOptions,
+		Roles:    c.allRoles(g.Request.Context()),
 		Action:   WebBase + "/users/add",
 	})
 }
@@ -191,7 +202,7 @@ func (c Users) Edit(g *gin.Context) {
 		TitleKey: "users.form_edit_title",
 		SubKey:   "users.form_edit_sub",
 		IsEdit:   true,
-		Roles:    roleOptions,
+		Roles:    c.allRoles(ctx),
 		Action:   WebBase + "/users/edit",
 	}
 	id, err := strconv.ParseInt(g.Param("id"), 10, 64)
@@ -232,7 +243,7 @@ func (c Users) Create(g *gin.Context) {
 		SubKey:   "users.form_new_sub",
 		Username: uname,
 		Role:     role,
-		Roles:    roleOptions,
+		Roles:    c.allRoles(ctx),
 		Action:   WebBase + "/users/add",
 	}
 	switch {
@@ -242,7 +253,7 @@ func (c Users) Create(g *gin.Context) {
 		d.ErrKey = "users.err_password_short"
 	case PasswordTooLong(pass):
 		d.ErrKey = "users.err_password_too_long"
-	case !validRole(role):
+	case c.roleUnknown(ctx, role):
 		d.ErrKey = "users.err_role"
 	default:
 		hash, herr := hashPassword(pass)
@@ -276,7 +287,7 @@ func (c Users) EditSave(g *gin.Context) {
 		IsEdit:   true,
 		ID:       id,
 		Role:     role,
-		Roles:    roleOptions,
+		Roles:    c.allRoles(ctx),
 		Action:   WebBase + "/users/edit",
 	}
 	var u *store.User
@@ -292,7 +303,7 @@ func (c Users) EditSave(g *gin.Context) {
 		d.ErrKey = "users.err_bad_id"
 	case err != nil:
 		d.ErrKey, d.ErrRaw = "users.err_not_found", err.Error()
-	case !validRole(role):
+	case c.roleUnknown(ctx, role):
 		d.ErrKey = "users.err_role"
 	case me != nil && u != nil && me.Username == u.Username && role != store.RoleAdmin:
 		// The store refuses this too. Answering here keeps the modal open with
@@ -386,7 +397,7 @@ func (c Users) page(ctx context.Context, me string, d usersData) usersData {
 	pending, pendingErr := c.Store.ListPending(ctx)
 	if pendingErr == nil {
 		for _, u := range pending {
-			d.Pending = append(d.Pending, pendingRow{ID: u.ID, Username: u.Username, Email: u.Email, Roles: roleOptions})
+			d.Pending = append(d.Pending, pendingRow{ID: u.ID, Username: u.Username, Email: u.Email, Roles: c.allRoles(ctx)})
 		}
 	}
 	admins, adminErr := c.Store.CountAdmins(ctx)
