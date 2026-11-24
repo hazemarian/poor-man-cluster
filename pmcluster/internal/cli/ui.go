@@ -265,14 +265,15 @@ func runUIApprove(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	role, _ := cmd.Flags().GetString("role")
-	if !validUIRole(role) {
-		return fmt.Errorf("role must be one of admin, operator, viewer (got %q)", role)
-	}
 	st, err := openUIStore(cmd)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
+	if !validUIRole(cmd, st, role) {
+		names, _ := st.RoleNames(cmd.Context())
+		return fmt.Errorf("no such role %q (roles: %s)", role, strings.Join(names, ", "))
+	}
 	email := strings.TrimSpace(strings.ToLower(args[0]))
 	u, err := st.ByEmail(cmd.Context(), email)
 	if err != nil {
@@ -318,14 +319,15 @@ func runUIGrant(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	role, _ := cmd.Flags().GetString("role")
-	if !validUIRole(role) {
-		return fmt.Errorf("role must be one of admin, operator, viewer (got %q)", role)
-	}
 	st, err := openUIStore(cmd)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = st.Close() }()
+	if !validUIRole(cmd, st, role) {
+		names, _ := st.RoleNames(cmd.Context())
+		return fmt.Errorf("no such role %q (roles: %s)", role, strings.Join(names, ", "))
+	}
 	email := strings.TrimSpace(strings.ToLower(args[0]))
 	if email == "" {
 		return errors.New("email cannot be empty")
@@ -404,12 +406,15 @@ func runUIDelete(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func validUIRole(role string) bool {
-	switch role {
-	case uistore.RoleAdmin, uistore.RoleOperator, uistore.RoleViewer:
-		return true
+// validUIRole asks the STORE whether the role exists. A hardcoded three would
+// make this command unable to grant a role somebody just created in the console —
+// and roles are data now, so the store is the only authority on what a role is.
+func validUIRole(cmd *cobra.Command, st *uistore.Store, role string) bool {
+	if strings.TrimSpace(role) == "" {
+		return false
 	}
-	return false
+	_, err := st.RoleByName(cmd.Context(), role)
+	return err == nil
 }
 
 func dash(s string) string {
