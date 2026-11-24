@@ -2,8 +2,10 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -65,11 +67,16 @@ type userRow struct {
 	// Username is what the console shows; Email is what actually identifies an
 	// SSO account, and two GitHub logins can share a display name, so the table
 	// has to carry it.
-	Username       string
-	Email          string
-	Source         string
-	Role           string
-	CreatedAt      int64
+	Username    string
+	Email       string
+	Source      string
+	Status      string
+	Role        string
+	CreatedAt   int64
+	LastLoginAt int64
+	// Invited means the account exists but has never signed in: an admin named
+	// the address and it has not been used yet.
+	Invited        bool
 	IsSelf         bool
 	RoleLocked     bool
 	CanDelete      bool
@@ -119,9 +126,17 @@ type pendingRow struct {
 // the controller refuses the same requests, so a locked select is not a
 // cosmetic restriction.
 type userFormData struct {
-	TitleKey   string
-	SubKey     string
-	Username   string
+	TitleKey string
+	SubKey   string
+	Username string
+	// Invite selects the SSO form: who to let in and with which role, no
+	// password, because the provider is the only thing that can authenticate.
+	// Who is an address OR a GitHub login — see Store.InviteSSOAccount.
+	Invite bool
+	Who    string
+	// SSO means the provider owns credentials: no password field, on create or
+	// on edit, because a password this console stored would never be asked for.
+	SSO        bool
 	Role       string
 	Roles      []string
 	IsEdit     bool
@@ -192,13 +207,21 @@ func (c Users) List(g *gin.Context) {
 // New opens an empty create form. The default role is operator: it can operate
 // the cluster without being able to manage accounts.
 func (c Users) New(g *gin.Context) {
-	c.Views.Fragment(g, "userform", userFormData{
+	// Under SSO there is no password to choose: the account is an address the
+	// identity provider will vouch for, so the form asks WHO instead.
+	d := userFormData{
 		TitleKey: "users.form_new_title",
 		SubKey:   "users.form_new_sub",
 		Role:     store.RoleOperator,
 		Roles:    c.allRoles(g.Request.Context()),
 		Action:   WebBase + "/users/add",
-	})
+		Invite:   c.Auth.SSO,
+		SSO:      c.Auth.SSO,
+	}
+	if d.Invite {
+		d.TitleKey, d.SubKey = "users.form_invite_title", "users.form_invite_sub"
+	}
+	c.Views.Fragment(g, "userform", d)
 }
 
 // Edit opens the form for one account.
@@ -244,6 +267,10 @@ func (c Users) Edit(g *gin.Context) {
 // with a 422 so htmx keeps it open instead of closing on a bare error.
 func (c Users) Create(g *gin.Context) {
 	ctx := g.Request.Context()
+	if c.Auth.SSO {
+		c.invite(g)
+		return
+	}
 	uname, role, pass := g.PostForm("username"), g.PostForm("role"), g.PostForm("password")
 	d := userFormData{
 		TitleKey: "users.form_new_title",
@@ -278,6 +305,55 @@ func (c Users) Create(g *gin.Context) {
 		return
 	}
 	c.userFormError(g, d)
+}
+
+// invite creates an account for an address the identity provider will vouch for.
+//
+// Under SSO there is no password to choose, so "create a user" means "name this
+// address and say what it may do". The account is active immediately: the whole
+// point is that the next sign-in from that address goes straight in, without
+// waiting for somebody to approve it.
+func (c Users) invite(g *gin.Context) {
+	ctx := g.Request.Context()
+	who := strings.TrimSpace(g.PostForm("who"))
+	uname, role := g.PostForm("username"), g.PostForm("role")
+	d := userFormData{
+		TitleKey: "users.form_invite_title",
+		SubKey:   "users.form_invite_sub",
+		Who:      who,
+		Username: uname,
+		Role:     role,
+		Roles:    c.allRoles(ctx),
+		Action:   WebBase + "/users/add",
+		Invite:   true,
+		SSO:      true,
+	}
+	switch {
+	case who == "":
+		d.ErrKey = "users.err_who"
+	case c.roleUnknown(ctx, role):
+		d.ErrKey = "users.err_role"
+	default:
+		if _, err := c.Store.InviteSSOAccount(ctx, who, uname, role); err != nil {
+			switch {
+			case errors.Is(err, store.ErrInvalidEmail):
+				// An address OR a login is acceptable, so the complaint is about
+				// the field, not about it not being an email.
+				d.ErrKey = "users.err_who"
+			case errors.Is(err, store.ErrAccountDisabled):
+				d.ErrKey = "users.err_email_disabled"
+			default:
+				d.ErrKey, d.ErrRaw = "users.err_save", err.Error()
+			}
+			break
+		}
+		next := c.page(ctx, username(g), usersData{Disabled: c.Auth.LoginDisabled, SSO: c.Auth.SSO})
+		next.MsgKey, next.MsgArg, next.MsgArg2 = "users.msg_invited", who, role
+		c.Views.Fragment(g, "users", next)
+		return
+	}
+	g.Status(http.StatusUnprocessableEntity)
+	c.Views.Fragment(g, "userform", d)
 }
 
 // EditSave applies a role change and, when a password is supplied, a reset.
@@ -430,13 +506,16 @@ func rowsFor(users []*store.User, me string, admins int, adminsErr error) []user
 	rows := make([]userRow, 0, len(users))
 	for _, u := range users {
 		r := userRow{
-			ID:        u.ID,
-			Username:  u.Username,
-			Email:     u.Email,
-			Source:    u.AuthSource,
-			Role:      u.Role,
-			CreatedAt: u.CreatedAt,
-			IsSelf:    me != "" && u.Username == me,
+			ID:          u.ID,
+			Username:    u.Username,
+			Email:       u.Email,
+			Source:      u.AuthSource,
+			Status:      u.Status,
+			Role:        u.Role,
+			CreatedAt:   u.CreatedAt,
+			LastLoginAt: u.LastLoginAt,
+			Invited:     u.AuthSource == store.AuthSSO && u.LastLoginAt == 0 && u.Status == store.StatusActive,
+			IsSelf:      me != "" && u.Username == me,
 		}
 		switch {
 		case r.IsSelf:

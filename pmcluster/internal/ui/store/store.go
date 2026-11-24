@@ -22,6 +22,13 @@ import (
 // ErrNotFound is returned when a user or setting doesn't exist.
 var ErrNotFound = errors.New("not found")
 
+// Identity errors. They exist so a handler can say WHICH thing was wrong instead
+// of turning every refusal into "could not save".
+var (
+	ErrInvalidEmail    = errors.New("not an email address")
+	ErrAccountDisabled = errors.New("that account is disabled")
+)
+
 // Settings keys for the console's pmcluster API override (the defaults come
 // from env / mounted Swarm secrets; these let the operator override in the UI,
 // or are seeded once on first boot).
@@ -81,6 +88,9 @@ type User struct {
 	Status       string
 	AuthSource   string
 	CreatedAt    int64
+	// LastLoginAt is when this identity last signed in, 0 if never. An invited
+	// address that has never appeared is a person who has not accepted yet.
+	LastLoginAt int64
 }
 
 // Active reports whether the user may use the console at all.
@@ -196,6 +206,7 @@ func ensureIdentityColumns(db *sql.DB) error {
 		{"email", `ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''`},
 		{"status", `ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`},
 		{"auth_source", `ALTER TABLE users ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'local'`},
+		{"last_login_at", `ALTER TABLE users ADD COLUMN last_login_at INTEGER NOT NULL DEFAULT 0`},
 	} {
 		if have[col.name] {
 			continue
@@ -218,9 +229,9 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) ByUsername(ctx context.Context, username string) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at
+		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at, last_login_at
 		   FROM users WHERE username = ?`, username).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt)
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt, &u.LastLoginAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -234,9 +245,9 @@ func (s *Store) ByUsername(ctx context.Context, username string) (*User, error) 
 func (s *Store) ByID(ctx context.Context, id int64) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at
+		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at, last_login_at
 		   FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt)
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt, &u.LastLoginAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -250,9 +261,9 @@ func (s *Store) ByID(ctx context.Context, id int64) (*User, error) {
 func (s *Store) FirstUser(ctx context.Context) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at
+		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at, last_login_at
 		   FROM users ORDER BY id LIMIT 1`).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt)
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt, &u.LastLoginAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -265,7 +276,7 @@ func (s *Store) FirstUser(ctx context.Context) (*User, error) {
 // ListUsers returns every user ordered by id.
 func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at
+		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at, last_login_at
 		   FROM users ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -274,7 +285,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
 	var out []*User
 	for rows.Next() {
 		u := &User{}
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt, &u.LastLoginAt); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -333,9 +344,9 @@ func (s *Store) UpdateUser(ctx context.Context, id int64, role, passwordHash str
 func (s *Store) ByEmail(ctx context.Context, email string) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at
+		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at, last_login_at
 		   FROM users WHERE email = ? AND email <> ''`, email).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt)
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt, &u.LastLoginAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -358,7 +369,19 @@ func (s *Store) EnsureSSOUser(ctx context.Context, email, username string) (*Use
 	if email == "" {
 		return nil, ErrNotFound
 	}
-	if u, err := s.ByEmail(ctx, email); err == nil {
+	// Match on EITHER key. oauth2-proxy sends the profile email when GitHub
+	// reports one and an EMPTY email when the account hides it — the console then
+	// falls back to the login. Matching on email alone would send exactly those
+	// people to the approval queue on every single sign-in.
+	if u, err := s.FindIdentity(ctx, email, username); err == nil {
+		// The address can arrive later than the account: GitHub starts reporting
+		// an email the day the person makes theirs public. Fill it in once, so the
+		// row keeps matching even if the login is renamed.
+		if u.Email == "" && email != "" && strings.Contains(email, "@") {
+			_, _ = s.db.ExecContext(ctx, `UPDATE users SET email = ? WHERE id = ?`, strings.ToLower(email), u.ID)
+			u.Email = strings.ToLower(email)
+		}
+		s.TouchLogin(ctx, u.ID)
 		return u, nil
 	} else if !errors.Is(err, ErrNotFound) {
 		return nil, err
@@ -380,10 +403,106 @@ func (s *Store) EnsureSSOUser(ctx context.Context, email, username string) (*Use
 	return s.ByEmail(ctx, email)
 }
 
+// FindIdentity resolves the identity the proxy just vouched for: by address when
+// there is one, then by login, which is all a private-email GitHub account offers.
+// Only SSO rows match by login — a password account's username is not an identity
+// claim from the provider and must never be reachable that way.
+func (s *Store) FindIdentity(ctx context.Context, email, login string) (*User, error) {
+	if email != "" {
+		if u, err := s.ByEmail(ctx, email); err == nil {
+			return u, nil
+		} else if !errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+	}
+	if login != "" {
+		if u, err := s.ByUsername(ctx, login); err == nil {
+			if u.AuthSource == AuthSSO || u.Email == "" {
+				return u, nil
+			}
+			return nil, ErrNotFound
+		} else if !errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+	}
+	return nil, ErrNotFound
+}
+
+// InviteSSOAccount pre-provisions an identity the provider will vouch for later.
+//
+// The point is to skip the approval queue: an admin who already knows the address
+// says so up front, so the person's first sign-in lands in the console instead of
+// a waiting page. Status is active from the start and there is no password — the
+// provider is the only way in, which also means a typo in the address grants
+// nothing: nobody will ever sign in as a mistyped email.
+// The identifier may be an email address or the GitHub login. Both are needed:
+// GitHub reports no email for accounts that hide it, and oauth2-proxy then passes
+// an empty X-Auth-Request-Email, so for those people the login IS the identity.
+func (s *Store) InviteSSOAccount(ctx context.Context, identifier, username, role string) (*User, error) {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" || strings.ContainsAny(identifier, " 	") {
+		return nil, ErrInvalidEmail
+	}
+	if !s.RoleExists(ctx, role) {
+		return nil, ErrRoleUnknown
+	}
+	email := ""
+	if strings.Contains(identifier, "@") {
+		email = strings.ToLower(identifier)
+	}
+	if email == "" && username == "" {
+		username = identifier
+	}
+	username = strings.TrimSpace(username)
+	if u, err := s.FindIdentity(ctx, email, username); err == nil {
+		// Already known: an invite is a way to say "active, this role", not a
+		// second account. An existing disabled account stays disabled unless
+		// somebody deliberately re-enables it.
+		if u.Status == StatusDisabled {
+			return nil, ErrAccountDisabled
+		}
+		if err := s.SetStatus(ctx, u.ID, StatusActive, role); err != nil {
+			return nil, err
+		}
+		return s.FindIdentity(ctx, email, username)
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	if username == "" {
+		username = email
+	}
+	// The username is uniquely indexed for the password path. An invited login
+	// that collides gets a suffix rather than being refused: the identity is the
+	// email/login the proxy sends, and the display name only has to be unique.
+	base := username
+	for i := 2; ; i++ {
+		if _, err := s.ByUsername(ctx, username); errors.Is(err, ErrNotFound) {
+			break
+		}
+		username = fmt.Sprintf("%s-%d", base, i)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO users (username, password_hash, password_set, role, email, status, auth_source, created_at)
+		 VALUES (?, '', 0, ?, ?, ?, ?, ?)`,
+		username, role, email, StatusActive, AuthSSO, time.Now().Unix()); err != nil {
+		return nil, err
+	}
+	// Read back by EITHER key: a login-only invite has no email, and ByEmail("")
+	// can never match — which made "invite the account with the hidden email" the
+	// one case the invite refused.
+	return s.FindIdentity(ctx, email, username)
+}
+
+// TouchLogin records that this identity signed in. It is best effort: a console
+// that cannot write the timestamp must still let the person in.
+func (s *Store) TouchLogin(ctx context.Context, id int64) {
+	_, _ = s.db.ExecContext(ctx, `UPDATE users SET last_login_at = ? WHERE id = ?`, time.Now().Unix(), id)
+}
+
 // ListPending returns the identities waiting for approval, oldest first.
 func (s *Store) ListPending(ctx context.Context) ([]*User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at
+		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at, last_login_at
 		   FROM users WHERE status = ? ORDER BY id`, StatusPending)
 	if err != nil {
 		return nil, err
@@ -392,7 +511,7 @@ func (s *Store) ListPending(ctx context.Context) ([]*User, error) {
 	var out []*User
 	for rows.Next() {
 		u := &User{}
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt, &u.LastLoginAt); err != nil {
 			return nil, err
 		}
 		out = append(out, u)

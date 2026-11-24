@@ -104,6 +104,7 @@ func (r *Role) Has(perm string) bool {
 // errRoleNotFound / errRoleInUse are reported to the role editor verbatim.
 var (
 	ErrRoleNotFound = errors.New("role not found")
+	ErrRoleUnknown  = errors.New("no such role")
 	ErrRoleInUse    = errors.New("role is assigned to at least one account")
 	ErrRoleBuiltin  = errors.New("built-in roles cannot be deleted")
 )
@@ -177,6 +178,14 @@ func (s *Store) ListRoles(ctx context.Context) ([]*Role, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// RoleExists answers the question a form has to ask before storing a role name:
+// a permission typo fails closed (nobody holds it), but a role typo would store an
+// account that can do nothing at all and cannot be fixed by the account holder.
+func (s *Store) RoleExists(ctx context.Context, name string) bool {
+	_, err := s.RoleByName(ctx, name)
+	return err == nil
 }
 
 // RoleByName returns a role or ErrRoleNotFound.

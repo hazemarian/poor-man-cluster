@@ -3,6 +3,32 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.406 — invite an account so it never sees the approval queue
+
+Approval was the only way in: every SSO identity that was not already a row landed
+on the waiting page until somebody approved it. That is right for a stranger and
+wrong for a colleague you just hired, and it made "create a user" impossible under
+SSO, where there is no password to set.
+
+- **Invite by identity.** The Add-user form under SSO asks WHO and which role: the
+  email address, or the GitHub login. The row is created `active`, so the person's
+  first sign-in goes straight into the console. Nothing is queued, and no approval
+  step is needed for somebody the admin already named.
+- **Address or login, matched as the proxy sends them.** oauth2-proxy passes
+  `X-Auth-Request-Email` and `X-Auth-Request-User`; for GitHub accounts that hide
+  their email the first header is EMPTY and the console falls back to the login as
+  the identity. Identity resolution therefore tries the address, then the login (and
+  only for SSO rows — a password account must not be reachable by typing its
+  username). A mistyped invite grants nothing: it simply never matches.
+- **The address is filled in when it appears.** If GitHub starts reporting an email
+  for an account that was invited by login, the row adopts it, so the account keeps
+  matching even if the login is renamed later.
+- **The table answers the question you actually have.** Each account now shows
+  status, source, role, last sign-in and created; an invited account that has never
+  signed in says so, which is how you spot an invite that never landed.
+- **Strangers still queue.** Pre-provisioning narrows nothing: an identity nobody has
+  named lands in pending exactly as before.
+
 ## v0.2.405 — the accounts table shows the address, which is the identity
 
 Under SSO the email is the key: GitHub display names are not unique, and it is the

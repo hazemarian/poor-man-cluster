@@ -47,7 +47,25 @@ func init() {
 		"users.only_admin_hint":     "Keep at least one admin: demote or delete an admin only when another admin remains.",
 
 		// users: messages and errors
-		"users.msg_created":           "User {0} created ({1}).",
+		"users.msg_created": "User {0} created ({1}).",
+		"users.msg_invited": "{0} invited as {1}. The account is active now — its first SSO sign-in goes straight in, no approval needed.",
+
+		// users: SSO invitation (no password: the provider owns credentials)
+		"users.form_invite_title":     "Invite an account",
+		"users.form_invite_sub":       "Name the address or GitHub login the identity provider will send, and the role it should carry. An invited account skips the approval queue.",
+		"users.col_who":               "Email or GitHub login",
+		"users.hint_who":              "Exactly what oauth2-proxy sends for this person: their GitHub email, or their GitHub login when the account hides its email. A typo grants nobody access — it simply never matches.",
+		"users.col_display":           "Display name (optional)",
+		"users.hint_display":          "Only what the table shows. Defaults to the address above.",
+		"users.err_who":               "Enter the email address or GitHub login to invite.",
+		"users.err_email_disabled":    "That identity already has a disabled account. Re-enable it instead of inviting it again.",
+		"users.col_source":            "Source",
+		"users.col_last_signin":       "Last sign-in",
+		"users.never_signed_in":       "never",
+		"users.status_active":         "active",
+		"users.status_pending":        "pending",
+		"users.status_disabled":       "disabled",
+		"users.invited_hint":          "invited, has not signed in yet",
 		"users.msg_updated":           "User {0} updated.",
 		"users.msg_deleted":           "Deleted user {0}.",
 		"users.err_store":             "The account store could not be read or written",

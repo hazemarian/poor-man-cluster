@@ -88,7 +88,9 @@
           <thead>
             <tr>
               <th>{{T "common.username"}}</th>
+              <th>{{T "common.status"}}</th>
               <th>{{T "common.role"}}</th>
+              <th class="num">{{T "users.col_last_signin"}}</th>
               <th class="num">{{T "common.created"}}</th>
               <th><span class="sr-only">{{T "common.actions"}}</span></th>
             </tr>
@@ -106,6 +108,13 @@
                 {{if eq .Role "admin"}}<span class="pill good"><span class="mono">{{.Role}}</span>{{else}}<span class="pill plain"><span class="mono">{{.Role}}</span>{{end}}
                 {{if .RoleLocked}} {{icon "lock"}}{{end}}</span>
               </td>
+              <td>
+                {{if eq .Status "active"}}<span class="pill good">{{T "users.status_active"}}</span>
+                {{else if eq .Status "pending"}}<span class="pill accent">{{T "users.status_pending"}}</span>
+                {{else}}<span class="pill bad">{{T "users.status_disabled"}}</span>{{end}}
+                {{if .Invited}}<div class="muted">{{T "users.invited_hint"}}</div>{{end}}
+              </td>
+              <td class="muted num">{{if .LastLoginAt}}{{ts .LastLoginAt}}{{else}}{{T "users.never_signed_in"}}{{end}}</td>
               <td class="muted num">{{ts .CreatedAt}}</td>
               <td>
                 <div class="row-actions">

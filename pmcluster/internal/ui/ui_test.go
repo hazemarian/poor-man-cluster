@@ -273,6 +273,27 @@ func doRequest(t *testing.T, app *App, method, path string, body string, jar map
 
 // doRequestWithHeaders is doRequest plus identity headers — how an SSO request
 // arrives at the console, after oauth2-proxy has authenticated it.
+// doPostFormWithHeaders is the SSO-gated equivalent of a form submit: identity
+// headers plus a url-encoded body, which is exactly what the browser sends.
+func doPostFormWithHeaders(t *testing.T, app *App, path string, headers map[string]string, jar map[string]*http.Cookie, form url.Values) *http.Response {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	if ck, ok := jar[app.Auth.CookieName()]; ok {
+		req.AddCookie(ck)
+	}
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	resp := rr.Result()
+	for _, ck := range resp.Cookies() {
+		jar[ck.Name] = ck
+	}
+	return resp
+}
+
 func doRequestWithHeaders(t *testing.T, app *App, method, path string, headers map[string]string, jar map[string]*http.Cookie) *http.Response {
 	t.Helper()
 	req := httptest.NewRequest(method, path, nil)
@@ -1410,6 +1431,102 @@ func TestPendingPageRedirectsAnApprovedAccount(t *testing.T) {
 	}
 	if loc := resp.Header.Get("Location"); !strings.HasSuffix(loc, "/web/") {
 		t.Fatalf("redirected to %q, want the console root", loc)
+	}
+}
+
+// newSSOApp builds a console behind the SSO gate and returns it with a jar that
+// authenticates "boss@example.com" as an approved admin — the state an operator is
+// in when they open the Users page.
+func newSSOApp(t *testing.T) (*App, map[string]string, map[string]*http.Cookie) {
+	t.Helper()
+	cfg := FromEnv()
+	cfg.DataDir = t.TempDir()
+	cfg.PMAPIURL = "http://127.0.0.1:1"
+	cfg.PMAPIToken = "pmc_test"
+	cfg.SessionSecret = []byte("0123456789abcdefgh")
+	cfg.CookieName = "pmui_session"
+	cfg.SSOEnabled = true
+	cfg.LoginDisabled = true
+	app, err := NewApp(cfg)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	ident := map[string]string{"X-Auth-Request-Email": "boss@example.com", "X-Auth-Request-User": "boss"}
+	jar := map[string]*http.Cookie{}
+	doRequestWithHeaders(t, app, http.MethodGet, "/web/pending", ident, jar)
+	u, err := app.Store.ByEmail(t.Context(), "boss@example.com")
+	if err != nil {
+		t.Fatalf("boss row: %v", err)
+	}
+	if err := app.Store.SetStatus(t.Context(), u.ID, "active", "admin"); err != nil {
+		t.Fatalf("approve boss: %v", err)
+	}
+	return app, ident, jar
+}
+
+// TestInvitedIdentitySkipsTheApprovalQueue — the whole point of inviting by
+// address: the person's FIRST sign-in lands in the console, not on a waiting page.
+func TestInvitedIdentitySkipsTheApprovalQueue(t *testing.T) {
+	app, bossIdent, bossJar := newSSOApp(t)
+
+	form := url.Values{"who": {"nina@example.com"}, "role": {"operator"}}
+	resp := doPostFormWithHeaders(t, app, "/web/users/add", bossIdent, bossJar, form)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("invite = %d: %s", resp.StatusCode, readBody(t, resp))
+	}
+
+	nina := map[string]string{"X-Auth-Request-Email": "nina@example.com", "X-Auth-Request-User": "nina"}
+	jar := map[string]*http.Cookie{}
+	if got := doRequestWithHeaders(t, app, http.MethodGet, "/web/", nina, jar); got.StatusCode != http.StatusOK {
+		t.Fatalf("invited identity on /web/ = %d, want 200 (it must not queue)", got.StatusCode)
+	}
+	row, err := app.Store.ByEmail(t.Context(), "nina@example.com")
+	if err != nil {
+		t.Fatalf("nina row: %v", err)
+	}
+	if row.Status != "active" || row.Role != "operator" {
+		t.Fatalf("nina = %s/%s, want active/operator", row.Status, row.Role)
+	}
+	if row.LastLoginAt == 0 {
+		t.Errorf("sign-in was not recorded: last_login_at is 0")
+	}
+}
+
+// TestInviteByLoginForHiddenEmail — GitHub reports no email for accounts that hide
+// it, and oauth2-proxy then sends an EMPTY X-Auth-Request-Email with only the
+// login. Inviting such a person by login must work, or they queue forever.
+func TestInviteByLoginForHiddenEmail(t *testing.T) {
+	app, bossIdent, bossJar := newSSOApp(t)
+
+	form := url.Values{"who": {"nina-login"}, "role": {"viewer"}}
+	if resp := doPostFormWithHeaders(t, app, "/web/users/add", bossIdent, bossJar, form); resp.StatusCode != http.StatusOK {
+		b := readBody(t, resp)
+		if i := strings.Index(b, "b-row"); i >= 0 && i+400 < len(b) {
+			b = b[i : i+400]
+		}
+		t.Fatalf("invite by login = %d: %s", resp.StatusCode, b)
+	}
+	// Exactly what the proxy sends for a private-email account: no email header.
+	nina := map[string]string{"X-Auth-Request-User": "nina-login"}
+	jar := map[string]*http.Cookie{}
+	if got := doRequestWithHeaders(t, app, http.MethodGet, "/web/", nina, jar); got.StatusCode != http.StatusOK {
+		t.Fatalf("login-only identity on /web/ = %d, want 200", got.StatusCode)
+	}
+}
+
+// TestStrangerStillQueues — pre-provisioning must not turn the gate into an
+// open door: an address nobody invited still waits.
+func TestStrangerStillQueues(t *testing.T) {
+	app, _, _ := newSSOApp(t)
+	who := map[string]string{"X-Auth-Request-Email": "stranger@example.com", "X-Auth-Request-User": "stranger"}
+	jar := map[string]*http.Cookie{}
+	resp := doRequestWithHeaders(t, app, http.MethodGet, "/web/pending", who, jar)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stranger on /web/pending = %d, want 200", resp.StatusCode)
+	}
+	u, err := app.Store.ByEmail(t.Context(), "stranger@example.com")
+	if err != nil || u.Status != "pending" {
+		t.Fatalf("stranger = %+v, %v; want a pending row", u, err)
 	}
 }
 

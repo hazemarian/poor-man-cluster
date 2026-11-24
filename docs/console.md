@@ -96,6 +96,15 @@ model.
   identities, and revoke accounts; requires the `users.manage` permission, and is
   served even behind SSO (it is where identities are approved).
 
+  Behind SSO the Add-user form is an **invitation**: name the address (or the GitHub
+  login, for accounts that hide their email) and the role, and the account is active
+  immediately — that person's first sign-in goes straight into the console with no
+  approval step. An identity nobody named still lands in the approval queue, so the
+  invite path narrows nothing. Each row shows status, source, role, last sign-in and
+  creation time; "invited, has not signed in yet" marks an invitation that has not
+  been used, which is the difference between a wrong address and somebody who simply
+  has not logged in yet.
+
   With SSO, GitHub (through oauth2-proxy, restricted to the configured org) says
   *who* may reach the console; this table says *what they may do*. An identity the
   table does not know is created in the **pending** state on first login and sees a

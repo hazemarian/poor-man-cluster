@@ -14,18 +14,36 @@
 <form hx-post="{{.Action}}" hx-target="#view" hx-swap="innerHTML"
       hx-on::after-request="if(event.detail.failed){document.getElementById('modal-body').innerHTML=event.detail.xhr.responseText;openModal();}else{closeModal();}" hx-disabled-elt="find [type='submit']">
   {{if .IsEdit}}<input type="hidden" name="id" value="{{.ID}}">{{end}}
+  {{if .Invite}}
+  {{/* SSO: the provider owns the credentials, so the admin names the person by
+       the address or GitHub login the proxy will send, and nothing else. */}}
+  <div class="field">
+    <label for="user-who">{{T "users.col_who"}}</label>
+    <input id="user-who" class="finput{{if eq .ErrKey "users.err_who"}} is-invalid{{end}}" name="who" value="{{.Who}}" autocomplete="off" required data-focus dir="ltr"{{if eq .ErrKey "users.err_who"}} aria-invalid="true" aria-describedby="user-who-err"{{end}}>
+    <span class="hint">{{T "users.hint_who"}}</span>
+    {{if eq .ErrKey "users.err_who"}}<span class="err" id="user-who-err">{{T "users.err_who"}}</span>{{end}}
+  </div>
+  <div class="field">
+    <label for="user-username">{{T "users.col_display"}}</label>
+    <input id="user-username" class="finput" name="username" value="{{.Username}}" autocomplete="off" dir="ltr">
+    <span class="hint">{{T "users.hint_display"}}</span>
+  </div>
+  {{else}}
   <div class="field">
     <label for="user-username">{{T "common.username"}}</label>
     <input id="user-username" class="finput{{if eq .ErrKey "users.err_username"}} is-invalid{{end}}" name="username" value="{{.Username}}" autocomplete="off" required data-focus{{if eq .ErrKey "users.err_username"}} aria-invalid="true" aria-describedby="user-username-err"{{end}}>
     {{if eq .ErrKey "users.err_username"}}<span class="err" id="user-username-err">{{T "users.err_username"}}</span>{{end}}
   </div>
 
+  {{end}}{{/* .Invite */}}
+  {{if not .SSO}}
   <div class="field">
     <label for="user-password">{{if .IsEdit}}{{T "users.password_new"}}{{else}}{{T "common.password"}}{{end}}</label>
     <input id="user-password" class="finput{{if or (eq .ErrKey "users.err_password_short") (eq .ErrKey "users.err_password_too_long")}} is-invalid{{end}}" type="password" name="password" autocomplete="new-password"{{if not .IsEdit}} required{{end}}{{if or (eq .ErrKey "users.err_password_short") (eq .ErrKey "users.err_password_too_long")}} aria-invalid="true" aria-describedby="user-password-err"{{end}}>
     <span class="hint">{{T "users.hint_password"}}{{if .IsEdit}} {{T "users.hint_password_keep"}}{{end}}</span>
     {{if or (eq .ErrKey "users.err_password_short") (eq .ErrKey "users.err_password_too_long")}}<span class="err" id="user-password-err">{{T .ErrKey}}</span>{{end}}
   </div>
+  {{end}}{{/* not .SSO */}}
 
   <div class="field">
     <label for="user-role">{{T "common.role"}}</label>
