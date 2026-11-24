@@ -84,7 +84,7 @@ func TestUserCreateStackFlag(t *testing.T) {
 		t.Errorf("unscoped token stack = %q, want empty", plainUser.Stack)
 	}
 
-	// user list renders the STACK column ("-" = unscoped).
+	// user list renders ROLE, KIND and STACK ("-" = unscoped).
 	listCmd, listBuf, _ := newTestCmd("list", nil, runUserList)
 	if err := listCmd.RunE(listCmd, nil); err != nil {
 		t.Fatalf("user list: %v", err)
@@ -94,10 +94,12 @@ func TestUserCreateStackFlag(t *testing.T) {
 		t.Errorf("list output missing STACK header:\n%s", listing)
 	}
 	rows := strings.Split(listing, "\n")
-	if f := rowFields(rows, "ci"); len(f) < 3 || f[2] != "demo" {
-		t.Errorf("list ci row = %v, want STACK column %q (full output:\n%s)", f, "demo", listing)
+	// Columns are ID NAME ROLE KIND STACK CREATED; a key minted without asking
+	// for a tier or a surface must read operator/api, never admin.
+	if f := rowFields(rows, "ci"); len(f) < 5 || f[2] != "operator" || f[3] != "api" || f[4] != "demo" {
+		t.Errorf("list ci row = %v, want role=operator kind=api stack=demo (full output:\n%s)", f, listing)
 	}
-	if f := rowFields(rows, "admin"); len(f) < 3 || f[2] != "-" {
-		t.Errorf("list admin row = %v, want STACK column %q (full output:\n%s)", f, "-", listing)
+	if f := rowFields(rows, "admin"); len(f) < 5 || f[2] != "operator" || f[4] != "-" {
+		t.Errorf("list admin row = %v, want role=operator stack=- (full output:\n%s)", f, listing)
 	}
 }

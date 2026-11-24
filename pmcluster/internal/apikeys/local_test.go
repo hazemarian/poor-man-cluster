@@ -24,7 +24,7 @@ func TestLocalCreateReturnsPmcTokenAndPersists(t *testing.T) {
 	ctx := context.Background()
 	svc := NewLocal(openTestStore(t))
 
-	id, token, err := svc.Create(ctx, "alice")
+	id, token, err := svc.Create(ctx, "alice", "", "", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestLocalDeleteEdgeUserProtected(t *testing.T) {
 
 	// The 'edge' user is the operator-console identity; it must never be
 	// deletable, even by a valid id.
-	id, _, err := svc.Create(ctx, "edge")
+	id, _, err := svc.Create(ctx, "edge", "", "", "")
 	if err != nil {
 		t.Fatalf("Create edge: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestLocalDeleteOrdinaryUser(t *testing.T) {
 	ctx := context.Background()
 	svc := NewLocal(openTestStore(t))
 
-	id, _, err := svc.Create(ctx, "alice")
+	id, _, err := svc.Create(ctx, "alice", "", "", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestLocalListSurfacesLastUsedAt(t *testing.T) {
 	st := openTestStore(t)
 	svc := NewLocal(st)
 
-	id, token, err := svc.Create(ctx, "alice")
+	id, token, err := svc.Create(ctx, "alice", "", "", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

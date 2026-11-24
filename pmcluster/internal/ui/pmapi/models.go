@@ -232,11 +232,17 @@ type APIKey struct {
 	CreatedAt  int64  `json:"created_at"`
 	LastUsedAt int64  `json:"last_used_at"`
 	Stack      string `json:"stack"`
+	Role       string `json:"role"`
+	Kind       string `json:"kind"`
 }
 
 // APIKeyCreated is the POST /api/api_keys response — it carries the one-time
 // bearer token.
 type APIKeyCreated struct {
+	// Role and Kind echo what the daemon minted, so the one-time panel can state
+	// a master key or an MCP-only key rather than leaving the operator to assume.
+	Role  string `json:"role"`
+	Kind  string `json:"kind"`
 	ID    int64  `json:"id"`
 	Name  string `json:"name"`
 	Stack string `json:"stack"`

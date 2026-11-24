@@ -1,0 +1,12 @@
+-- API keys gain a surface and an explicit tier.
+--
+-- kind:
+--   'api' (default) — the REST control plane, every route the token's scope and
+--                     role allow. Every existing token is this.
+--   'mcp'           — an AI client's key. Its whole surface is /api/mcp; the
+--                     daemon refuses it on every other route, because a tool key
+--                     that can also deploy is a tool key that can also deploy.
+--
+-- role already exists on the table (0005); this migration only records the new
+-- column so a key cannot be minted without saying which surface it is for.
+ALTER TABLE users ADD COLUMN kind TEXT NOT NULL DEFAULT 'api';

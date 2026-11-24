@@ -579,7 +579,7 @@ func TestRemoteAPIKeysAndStackSync(t *testing.T) {
 	ctx := context.Background()
 	ak := NewAPIKeys(c)
 
-	id, token, err := ak.Create(ctx, "ci", "demo")
+	id, token, err := ak.Create(ctx, "ci", "demo", "", "")
 	if err != nil || id != 5 || token != "pmc_x_sec" {
 		t.Fatalf("APIKeys.Create = %d %q %v", id, token, err)
 	}
@@ -589,7 +589,7 @@ func TestRemoteAPIKeysAndStackSync(t *testing.T) {
 
 	// Unscoped creates must omit the field entirely so older daemons (which
 	// reject unknown JSON keys) keep accepting them.
-	if _, _, err := ak.Create(ctx, "plain"); err != nil {
+	if _, _, err := ak.Create(ctx, "plain", "", "", ""); err != nil {
 		t.Fatalf("APIKeys.Create (unscoped): %v", err)
 	}
 	if lastStack != "" {

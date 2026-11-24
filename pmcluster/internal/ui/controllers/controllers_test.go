@@ -225,15 +225,15 @@ func ctrlFakeDaemon(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/api/api_keys", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
-			write(w, `{"keys":[{"id":1,"name":"ci","created_at":10,"last_used_at":20,"stack":"demo"}]}`)
+			write(w, `{"keys":[{"id":1,"name":"ci","created_at":10,"last_used_at":20,"stack":"demo","role":"admin","kind":"api"},{"id":3,"name":"agent","created_at":11,"last_used_at":0,"stack":"","role":"operator","kind":"mcp"}]}`)
 		case http.MethodPost:
 			// Echo the scope back: the console used to send only a name, so a form
 			// field that is collected but not forwarded would look identical here
 			// unless the fake reports what it actually received.
-			var body struct{ Name, Stack string }
+			var body struct{ Name, Stack, Role, Kind string }
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			write(w, fmt.Sprintf(`{"id":2,"name":%q,"token":"pmc_abcdef_restofsecret","stack":%q}`,
-				body.Name, body.Stack))
+			write(w, fmt.Sprintf(`{"id":2,"name":%q,"token":"pmc_abcdef_restofsecret","stack":%q,"role":%q,"kind":%q}`,
+				body.Name, body.Stack, body.Role, body.Kind))
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -711,9 +711,17 @@ func TestControllers_APIKeys(t *testing.T) {
 	if rr := h.post(t, "/web/apikeys/add", "name=ci3&stack=adam-world-dev"); !strings.Contains(rr.Body.String(), "adam-world-dev") {
 		t.Errorf("scoped create lost its scope; the daemon would mint a fleet-wide key: %s", rr.Body.String())
 	}
-	// And the existing key's scope is visible in the table.
-	if rr := h.get(t, "/web/apikeys"); !strings.Contains(rr.Body.String(), "demo") {
-		t.Errorf("key list does not show the scope column: %s", rr.Body.String())
+	// Tier and surface travel too — a master key and an MCP-only key are exactly
+	// the two things an operator must be able to mint from here.
+	if rr := h.post(t, "/web/apikeys/add", "name=agent&role=admin&kind=mcp"); !strings.Contains(rr.Body.String(), "mcp") {
+		t.Errorf("mcp create lost its surface: %s", rr.Body.String())
+	}
+	// And the existing keys' scope, tier and surface are visible in the table.
+	listing := h.get(t, "/web/apikeys").Body.String()
+	for _, want := range []string{"demo", "master", "mcp"} {
+		if !strings.Contains(listing, want) {
+			t.Errorf("key list does not show %q: %s", want, listing)
+		}
 	}
 	// Blank name refused without calling the daemon.
 	if rr := h.post(t, "/web/apikeys/add", "name="); rr.Code != http.StatusOK {

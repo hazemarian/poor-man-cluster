@@ -26,6 +26,10 @@ type User struct {
 	// (from users.stack). Empty means unscoped: the token may operate on
 	// every stack, exactly as before per-stack scoping existed.
 	Stack string
+	// Kind is the token's surface: "api" (default — the REST control plane) or
+	// "mcp" (only /api/mcp). An MCP key is a tool key, so the REST routes refuse
+	// it outright; see the guard in internal/server.
+	Kind string
 	// Role is the daemon-side tier (admin/operator/viewer) used to gate
 	// secret-bearing surfaces (rendered configs, settings). Empty is treated
 	// as "viewer" (least privilege) — see RoleAtLeast.

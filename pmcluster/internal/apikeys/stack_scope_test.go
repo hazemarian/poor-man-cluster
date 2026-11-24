@@ -13,7 +13,7 @@ func TestLocalCreateWithStackScope(t *testing.T) {
 	st := openTestStore(t)
 	svc := NewLocal(st)
 
-	scopedID, scopedTok, err := svc.Create(ctx, "ci", "demo")
+	scopedID, scopedTok, err := svc.Create(ctx, "ci", "demo", "", "")
 	if err != nil {
 		t.Fatalf("Create(scoped): %v", err)
 	}
@@ -21,7 +21,7 @@ func TestLocalCreateWithStackScope(t *testing.T) {
 		t.Fatalf("Create(scoped) = %d, %q", scopedID, scopedTok)
 	}
 
-	plainID, _, err := svc.Create(ctx, "admin")
+	plainID, _, err := svc.Create(ctx, "admin", "", "", "")
 	if err != nil {
 		t.Fatalf("Create(unscoped): %v", err)
 	}

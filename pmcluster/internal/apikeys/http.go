@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/auth"
 	"github.com/hazemarian/poor-man-cluster/pmcluster/internal/store"
 )
 
@@ -34,6 +35,8 @@ type apiKeyRow struct {
 	CreatedAt  int64  `json:"created_at"`
 	LastUsedAt int64  `json:"last_used_at"`
 	Stack      string `json:"stack"`
+	Role       string `json:"role"`
+	Kind       string `json:"kind"`
 }
 
 func (h *HTTP) list(res http.ResponseWriter, req *http.Request) {
@@ -54,6 +57,12 @@ type createAPIKeyRequest struct {
 	// Stack optionally scopes the new token to a single application stack.
 	// Empty/absent means unscoped (full access), the historical default.
 	Stack string `json:"stack"`
+	// Role is the daemon tier: "admin" mints a master key (the same reach as the
+	// token the platform mints for itself at bootstrap), "operator" the default,
+	// "viewer" read-only. Minting a master key requires an admin caller.
+	Role string `json:"role"`
+	// Kind is the key's surface: "api" (default) or "mcp" (only /api/mcp).
+	Kind string `json:"kind"`
 }
 
 func (h *HTTP) create(res http.ResponseWriter, req *http.Request) {
@@ -70,8 +79,31 @@ func (h *HTTP) create(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 	stack := strings.TrimSpace(body.Stack)
+	role := strings.TrimSpace(body.Role)
+	kind := strings.TrimSpace(body.Kind)
+	if role == "" {
+		role = "operator"
+	}
+	if kind == "" {
+		kind = KindAPI
+	}
+	if !ValidRole(role) {
+		writeErr(res, http.StatusBadRequest, ErrInvalidRole.Error())
+		return
+	}
+	if !ValidKind(kind) {
+		writeErr(res, http.StatusBadRequest, ErrInvalidKind.Error())
+		return
+	}
+	// A master key is the platform's own reach. An operator token may not mint
+	// one — that would be privilege escalation through the key API — and the
+	// console's own identity (the edge token) is admin, so the UI still can.
+	if role == "admin" && !auth.IsAdmin(auth.FromContext(req.Context())) {
+		writeErr(res, http.StatusForbidden, "only an admin token may mint a master (admin) key")
+		return
+	}
 
-	id, token, err := h.Svc.Create(req.Context(), name, stack)
+	id, token, err := h.Svc.Create(req.Context(), name, stack, role, kind)
 	if err != nil {
 		if errors.Is(err, store.ErrUserExists) {
 			writeErr(res, http.StatusConflict, "user already exists: "+name)
@@ -81,7 +113,9 @@ func (h *HTTP) create(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	writeJSON(res, http.StatusCreated, map[string]any{"id": id, "name": name, "stack": stack, "token": token})
+	writeJSON(res, http.StatusCreated, map[string]any{
+		"id": id, "name": name, "stack": stack, "role": role, "kind": kind, "token": token,
+	})
 }
 
 // remove deletes an API user by id, revoking its bearer token immediately.

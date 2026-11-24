@@ -59,6 +59,8 @@ to the store; the guard is enforced by name).`,
 
 func init() {
 	userCreateCmd.Flags().String("stack", "", "scope the token to a single stack (e.g. --stack demo); empty = unscoped, full access")
+	userCreateCmd.Flags().String("role", "operator", "key tier: operator (default: deploy/operate, no secrets), admin (master key: everything), viewer (reads)")
+	userCreateCmd.Flags().String("kind", "api", "key surface: api (REST control plane) or mcp (only /api/mcp)")
 	userCmd.AddCommand(userCreateCmd, userListCmd, userRemoveCmd)
 	rootCmd.AddCommand(userCmd)
 }
@@ -70,6 +72,10 @@ func runUserCreate(cmd *cobra.Command, args []string) error {
 	}
 	stack, _ := cmd.Flags().GetString("stack")
 	stack = strings.TrimSpace(stack)
+	role, _ := cmd.Flags().GetString("role")
+	role = strings.TrimSpace(role)
+	kind, _ := cmd.Flags().GetString("kind")
+	kind = strings.TrimSpace(kind)
 
 	svc, closeFn, err := backendAPIKeys(cmd)
 	if err != nil {
@@ -77,7 +83,7 @@ func runUserCreate(cmd *cobra.Command, args []string) error {
 	}
 	defer closeFn()
 
-	_, token, err := svc.Create(cmd.Context(), name, stack)
+	_, token, err := svc.Create(cmd.Context(), name, stack, role, kind)
 	if err != nil {
 		if errors.Is(err, store.ErrUserExists) {
 			return fmt.Errorf("user %q already exists", name)
@@ -90,15 +96,25 @@ func runUserCreate(cmd *cobra.Command, args []string) error {
 	if stack != "" {
 		scope = fmt.Sprintf("scoped to stack %q — 403 everywhere else", stack)
 	}
+	tier := fmt.Sprintf("%s tier", role)
+	switch role {
+	case "admin":
+		tier = "admin tier — a MASTER key: it reads settings, secrets and rendered configs (platform-root reach)"
+	case "viewer":
+		tier = "viewer tier — reads only"
+	}
+	if kind == "mcp" {
+		tier += ", MCP-only (/api/mcp; every REST route answers 403)"
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), `
-✅ User %q created (%s).
+✅ User %q created (%s; %s).
 
 🔑 Bearer token (shown once — save it now):
 
    %s
 
    curl -H "Authorization: Bearer %s" %s/api/me
-`, name, scope, token, token, base)
+`, name, scope, tier, token, token, base)
 	return nil
 }
 
@@ -125,13 +141,20 @@ func printUsers(cmd *cobra.Command, users []apikeys.APIKey) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tNAME\tSTACK\tCREATED")
+	fmt.Fprintln(w, "ID	NAME	ROLE	KIND	STACK	CREATED")
 	for _, u := range users {
 		scope := u.Stack
 		if scope == "" {
 			scope = "-"
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\n", u.ID, u.Name, scope, time.Unix(u.CreatedAt, 0).Format(time.RFC3339))
+		role, kind := u.Role, u.Kind
+		if role == "" {
+			role = "-"
+		}
+		if kind == "" {
+			kind = "-"
+		}
+		fmt.Fprintf(w, "%d	%s	%s	%s	%s	%s\n", u.ID, u.Name, role, kind, scope, time.Unix(u.CreatedAt, 0).Format(time.RFC3339))
 	}
 	return w.Flush()
 }

@@ -232,6 +232,9 @@ func New(d Deps) http.Handler {
 			// refuse everything outside that stack when the user's token is
 			// stack-scoped (no-op for unscoped tokens).
 			r.Use(stackScopeGuard)
+			// A key minted for MCP tools is refused on the REST surface: its
+			// whole reach is /api/mcp, which is mounted outside this group.
+			r.Use(refuseMCPKeys)
 			r.Get("/me", api.Me)
 			if d.Docker != nil {
 				// The on-demand terminal: create a throwaway shell for a stack on THIS node.

@@ -63,11 +63,22 @@ model.
   **storage pill** and promote/demote buttons (the storage-node lifecycle).
 - **Webhooks** — create/list/remove CI webhook sources (secrets shown once) +
   delivery history.
-- **API keys** — issue and revoke bearer tokens for other users/CI systems
-  (operator-tier). The create form takes a **stack scope**: leave it empty for a key
-  that may touch every stack, or name one stack so the daemon answers 403 on every
-  other stack's routes. The table shows each key's scope, because a fleet-wide key
-  and a one-stack key are otherwise indistinguishable.
+- **API keys** — issue and revoke bearer tokens for other users/CI systems. The
+  create form takes three things beyond a name:
+  - **Stack scope** — empty for a key that may touch every stack, or one stack so
+    the daemon answers 403 on every other stack's routes.
+  - **Tier** — `operator` (default: deploy and operate, no secrets),
+    `viewer` (reads), or `master` (`admin`). A master key has the same reach as
+    the token the platform mints for itself at bootstrap: it reads settings,
+    secrets and rendered configs. The daemon refuses to mint one unless the
+    caller is an admin, so an operator token cannot escalate itself here.
+  - **Surface** — `api` (the full REST control plane) or `mcp`. An MCP key is a
+    tool key for an AI client: `/api/mcp` is its whole surface, and every REST
+    route answers 403, so it can drive tools without holding a credential that
+    also reads secrets.
+
+  The table shows scope, tier and surface for every key, because they are
+  otherwise indistinguishable after the one-time token panel closes.
 - **TLS** — rotate the cluster's own (main) certificate and manage per-host
   certificates for customer domains, with expiry warnings
   ([`tls.md`](tls.md)).

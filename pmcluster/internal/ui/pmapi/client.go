@@ -486,10 +486,16 @@ func (c *Client) ListAPIKeys(ctx context.Context) ([]APIKey, error) {
 // everywhere else). The console used to send only a name, so every key it minted
 // was fleet-wide — the one property an operator most wants to choose at the moment
 // they mint it.
-func (c *Client) CreateAPIKey(ctx context.Context, name, stack string) (*APIKeyCreated, error) {
+func (c *Client) CreateAPIKey(ctx context.Context, name, stack, role, kind string) (*APIKeyCreated, error) {
 	body := map[string]string{"name": name}
 	if stack != "" {
 		body["stack"] = stack
+	}
+	if role != "" {
+		body["role"] = role
+	}
+	if kind != "" {
+		body["kind"] = kind
 	}
 	var out APIKeyCreated
 	err := c.do(ctx, http.MethodPost, "/api_keys", body, &out)

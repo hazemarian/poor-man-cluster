@@ -20,6 +20,8 @@ type apiKeyDTO struct {
 	CreatedAt  int64  `json:"created_at"`
 	LastUsedAt int64  `json:"last_used_at"`
 	Stack      string `json:"stack"`
+	Role       string `json:"role"`
+	Kind       string `json:"kind"`
 }
 
 type apiKeyListDTO struct {
@@ -30,16 +32,27 @@ type apiKeyCreatedDTO struct {
 	ID    int64  `json:"id"`
 	Name  string `json:"name"`
 	Stack string `json:"stack"`
+	Role  string `json:"role"`
+	Kind  string `json:"kind"`
 	Token string `json:"token"`
 }
 
-// Create mints an API key, optionally scoped to a single stack. The stack
-// field is only sent when non-empty so older daemons (which don't know the
-// field and reject unknown JSON keys) keep working for unscoped tokens.
-func (a *APIKeys) Create(ctx context.Context, name string, stack ...string) (int64, string, error) {
+// Create mints an API key with a stack scope, a role and a surface.
+//
+// Every optional field is sent only when it differs from the daemon's default,
+// so a call that asks for the historical behaviour posts exactly the body it
+// always did — and an older daemon (which rejects unknown JSON keys) keeps
+// working for the common case.
+func (a *APIKeys) Create(ctx context.Context, name, stack, role, kind string) (int64, string, error) {
 	body := map[string]string{"name": name}
-	if s := firstStack(stack); s != "" {
-		body["stack"] = s
+	if stack != "" {
+		body["stack"] = stack
+	}
+	if role != "" {
+		body["role"] = role
+	}
+	if kind != "" {
+		body["kind"] = kind
 	}
 	var out apiKeyCreatedDTO
 	if err := a.c.do(ctx, http.MethodPost, "/api_keys", body, &out); err != nil {
@@ -64,15 +77,4 @@ func (a *APIKeys) List(ctx context.Context) ([]apikeys.APIKey, error) {
 // Delete revokes an API key by row ID via DELETE /api_keys/{id}.
 func (a *APIKeys) Delete(ctx context.Context, id int64) error {
 	return a.c.do(ctx, http.MethodDelete, "/api_keys/"+strconv.FormatInt(id, 10), nil, nil)
-}
-
-// firstStack resolves the optional variadic stack scope: the first
-// non-empty value wins, "" when no scope was supplied.
-func firstStack(stack []string) string {
-	for _, s := range stack {
-		if s != "" {
-			return s
-		}
-	}
-	return ""
 }

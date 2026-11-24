@@ -329,11 +329,11 @@ func newScopeEnv(t *testing.T) *scopeEnv {
 	seedStack(t, st, "other")
 
 	keys := apikeys.NewLocal(st)
-	_, scoped, err := keys.Create(context.Background(), "ci", "demo")
+	_, scoped, err := keys.Create(context.Background(), "ci", "demo", "", "")
 	if err != nil {
 		t.Fatalf("Create (scoped): %v", err)
 	}
-	_, unscoped, err := keys.Create(context.Background(), "admin")
+	_, unscoped, err := keys.Create(context.Background(), "admin", "", "", "")
 	if err != nil {
 		t.Fatalf("Create (unscoped): %v", err)
 	}

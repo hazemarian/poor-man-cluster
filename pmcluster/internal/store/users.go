@@ -41,8 +41,18 @@ func (s *Store) CreateUser(ctx context.Context, name, tokenID, tokenHash string,
 // bumps the cluster version in the same transaction, or a follower keeps
 // authenticating a fleet where that token does not exist.
 func (s *Store) CreateUserWithRole(ctx context.Context, name, tokenID, tokenHash, role string, stack ...string) (int64, error) {
+	return s.CreateUserFull(ctx, name, tokenID, tokenHash, role, firstStack(stack), "api")
+}
+
+// CreateUserFull is the whole row: role, stack scope and the key's surface
+// ("api" or "mcp"). Everything that mints a token goes through here, so a new
+// field cannot be forgotten at one call site.
+func (s *Store) CreateUserFull(ctx context.Context, name, tokenID, tokenHash, role, stack, kind string) (int64, error) {
 	if role == "" {
 		role = auth.RoleAdmin
+	}
+	if kind == "" {
+		kind = "api"
 	}
 	var tid sql.NullString
 	if tokenID != "" {
@@ -51,8 +61,8 @@ func (s *Store) CreateUserWithRole(ctx context.Context, name, tokenID, tokenHash
 	var id int64
 	err := s.inTxBump(ctx, func(tx *sql.Tx) (bool, error) {
 		res, err := tx.ExecContext(ctx,
-			`INSERT INTO users (name, token_id, token_hash, created_at, stack, role) VALUES (?, ?, ?, ?, ?, ?)`,
-			name, tid, tokenHash, time.Now().Unix(), firstStack(stack), role,
+			`INSERT INTO users (name, token_id, token_hash, created_at, stack, role, kind) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			name, tid, tokenHash, time.Now().Unix(), stack, role, kind,
 		)
 		if err != nil {
 			if isUniqueViolation(err) {
@@ -91,13 +101,18 @@ type UserRow struct {
 	LastUsedAt int64
 	// Stack is the optional per-token stack scope ("" = unscoped).
 	Stack string
+	// Role is the daemon tier (admin/operator/viewer) and Kind the surface
+	// (api/mcp). Both are shown in the console: a master key and a tool key
+	// look identical in every other column.
+	Role string
+	Kind string
 }
 
 // ListUsers returns every user (id, name, created_at, last_used_at, stack)
 // ordered by name, without any token/hash material.
 func (s *Store) ListUsers(ctx context.Context) ([]UserRow, error) {
 	rows, err := s.conn().QueryContext(ctx,
-		`SELECT id, name, created_at, last_used_at, stack FROM users ORDER BY name`)
+		`SELECT id, name, created_at, last_used_at, stack, role, kind FROM users ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
@@ -105,7 +120,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]UserRow, error) {
 	var out []UserRow
 	for rows.Next() {
 		var u UserRow
-		if err := rows.Scan(&u.ID, &u.Name, &u.CreatedAt, &u.LastUsedAt, &u.Stack); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.CreatedAt, &u.LastUsedAt, &u.Stack, &u.Role, &u.Kind); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		out = append(out, u)
@@ -175,8 +190,8 @@ func (s *Store) userByTokenID(ctx context.Context, tokenID, secret string) (*aut
 		hash string
 	)
 	err := s.conn().QueryRowContext(ctx,
-		`SELECT id, name, stack, role, token_hash FROM users WHERE token_id = ?`, tokenID,
-	).Scan(&u.ID, &u.Name, &u.Stack, &u.Role, &hash)
+		`SELECT id, name, stack, role, kind, token_hash FROM users WHERE token_id = ?`, tokenID,
+	).Scan(&u.ID, &u.Name, &u.Stack, &u.Role, &u.Kind, &hash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -198,7 +213,7 @@ func (s *Store) userByTokenID(ctx context.Context, tokenID, secret string) (*aut
 // with pre-v2 tokens.  It iterates ALL user rows and runs argon2id against
 // each until a match is found.
 func (s *Store) userByTokenLegacy(ctx context.Context, token string) (*auth.User, error) {
-	rows, err := s.conn().QueryContext(ctx, `SELECT id, name, stack, role, token_hash FROM users`)
+	rows, err := s.conn().QueryContext(ctx, `SELECT id, name, stack, role, kind, token_hash FROM users`)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
@@ -208,7 +223,7 @@ func (s *Store) userByTokenLegacy(ctx context.Context, token string) (*auth.User
 			u    auth.User
 			hash string
 		)
-		if err := rows.Scan(&u.ID, &u.Name, &u.Stack, &u.Role, &hash); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.Stack, &u.Role, &u.Kind, &hash); err != nil {
 			return nil, fmt.Errorf("scan user: %w", err)
 		}
 		ok, err := auth.VerifyToken(token, hash)

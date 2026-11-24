@@ -25,14 +25,26 @@ func NewLocal(st *store.Store) Service {
 // token id plus an argon2id hash of the secret. The plaintext token is
 // returned exactly once. An optional stack scope binds the token to a
 // single application stack.
-func (a *Local) Create(ctx context.Context, name string, stack ...string) (int64, string, error) {
+func (a *Local) Create(ctx context.Context, name, stack, role, kind string) (int64, string, error) {
+	if role == "" {
+		// The default stays operator: a key minted without asking is the least
+		// privileged tier that can still operate a stack. A master (admin) key
+		// is now possible, but never by omission.
+		role = auth.RoleOperator
+	}
+	if kind == "" {
+		kind = KindAPI
+	}
+	if !ValidRole(role) {
+		return 0, "", ErrInvalidRole
+	}
+	if !ValidKind(kind) {
+		return 0, "", ErrInvalidKind
+	}
 	token, _ := auth.GenerateToken()
 	tokenID, secret := auth.SplitToken(token)
 	hash, _ := auth.HashToken(secret)
-	// API keys minted here are operator-tier, not admin — they can
-	// deploy/operate stacks but must NOT read secret-bearing surfaces
-	// (rendered configs embed root credentials, settings embed secrets).
-	id, err := a.Store.CreateUserWithRole(ctx, name, tokenID, hash, auth.RoleOperator, stack...)
+	id, err := a.Store.CreateUserFull(ctx, name, tokenID, hash, role, stack, kind)
 	if err != nil {
 		return 0, "", err
 	}
@@ -47,7 +59,10 @@ func (a *Local) List(ctx context.Context) ([]APIKey, error) {
 	}
 	keys := make([]APIKey, 0, len(rows))
 	for _, r := range rows {
-		keys = append(keys, APIKey{ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt, LastUsedAt: r.LastUsedAt, Stack: r.Stack})
+		keys = append(keys, APIKey{
+			ID: r.ID, Name: r.Name, CreatedAt: r.CreatedAt, LastUsedAt: r.LastUsedAt,
+			Stack: r.Stack, Role: r.Role, Kind: r.Kind,
+		})
 	}
 	return keys, nil
 }

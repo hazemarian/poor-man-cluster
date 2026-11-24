@@ -63,7 +63,7 @@ func TestHTTPListEmptyAndAfterCreate(t *testing.T) {
 
 	// Create one, then list again.
 	svc := NewLocal(st)
-	if _, _, err := svc.Create(ctx, "alice"); err != nil {
+	if _, _, err := svc.Create(ctx, "alice", "", "", ""); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	rec = doJSON(t, r, http.MethodGet, "/api_keys", "")
@@ -154,7 +154,7 @@ func TestHTTPRemoveLifecycle(t *testing.T) {
 	_, st, r := newTestHTTP(t)
 	ctx := context.Background()
 	svc := NewLocal(st)
-	id, _, err := svc.Create(ctx, "alice")
+	id, _, err := svc.Create(ctx, "alice", "", "", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestHTTPRemoveEdgeUserConflict(t *testing.T) {
 	_, st, r := newTestHTTP(t)
 	ctx := context.Background()
 	svc := NewLocal(st)
-	id, _, err := svc.Create(ctx, "edge")
+	id, _, err := svc.Create(ctx, "edge", "", "", "")
 	if err != nil {
 		t.Fatalf("Create edge: %v", err)
 	}

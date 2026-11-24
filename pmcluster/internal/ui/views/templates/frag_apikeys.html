@@ -28,6 +28,8 @@
     <div class="kv">
       <div class="kv-row"><span class="k">{{T "apikeys.token_prefix"}}</span><span class="v mono iso" dir="ltr">{{.TokenPrefix}}…</span></div>
       <div class="kv-row"><span class="k">{{T "apikeys.col_scope"}}</span><span class="v">{{if .TokenStack}}<span class="mono">{{.TokenStack}}</span>{{else}}<span class="muted">{{T "apikeys.scope_all"}}</span>{{end}}</span></div>
+      <div class="kv-row"><span class="k">{{T "apikeys.col_tier"}}</span><span class="v">{{if .TokenRole}}<span class="mono">{{.TokenRole}}</span>{{else}}<span class="muted">operator</span>{{end}}</span></div>
+      <div class="kv-row"><span class="k">{{T "apikeys.col_surface"}}</span><span class="v">{{if .TokenKind}}<span class="mono">{{.TokenKind}}</span>{{else}}<span class="muted">api</span>{{end}}</span></div>
       {{if .NewID}}<div class="kv-row"><span class="k">{{T "common.id"}}</span><span class="v num">{{.NewID}}</span></div>{{end}}
     </div>
     <p class="muted mt-16">{{T "apikeys.token_usage"}}</p>
@@ -49,6 +51,23 @@
         <label for="apikey-stack">{{T "apikeys.stack_label"}}</label>
         <input id="apikey-stack" class="finput mono" name="stack" placeholder="{{T "apikeys.stack_placeholder"}}" autocomplete="off" dir="ltr">
         <span class="hint">{{T "apikeys.stack_hint"}}</span>
+      </div>
+      <div class="field">
+        <label for="apikey-role">{{T "apikeys.role_label"}}</label>
+        <select id="apikey-role" class="finput" name="role">
+          <option value="operator" selected>{{T "apikeys.role_operator"}}</option>
+          <option value="viewer">{{T "apikeys.role_viewer"}}</option>
+          <option value="admin">{{T "apikeys.role_admin"}}</option>
+        </select>
+        <span class="hint">{{T "apikeys.role_hint"}}</span>
+      </div>
+      <div class="field">
+        <label for="apikey-kind">{{T "apikeys.kind_label"}}</label>
+        <select id="apikey-kind" class="finput" name="kind">
+          <option value="api" selected>{{T "apikeys.kind_api"}}</option>
+          <option value="mcp">{{T "apikeys.kind_mcp"}}</option>
+        </select>
+        <span class="hint">{{T "apikeys.kind_hint"}}</span>
       </div>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary" data-tip="{{T "apikeys.create_action"}}">{{icon "plus"}}<span>{{T "apikeys.create_action"}}</span></button>
@@ -72,6 +91,8 @@
               <th>{{T "common.name"}}</th>
               <th>{{T "apikeys.col_token"}}</th>
               <th>{{T "apikeys.col_scope"}}</th>
+              <th>{{T "apikeys.col_tier"}}</th>
+              <th>{{T "apikeys.col_surface"}}</th>
               <th>{{T "common.created"}}</th>
               <th>{{T "apikeys.col_last_used"}}</th>
               <th><span class="sr-only">{{T "common.actions"}}</span></th>
@@ -86,6 +107,8 @@
                 {{else}}<span class="secret-mask" data-tip="{{T "apikeys.token_gone_hint"}}">••••••••</span> <span class="muted">{{T "apikeys.token_gone"}}</span>{{end}}
               </td>
               <td>{{if .Stack}}<span class="mono">{{.Stack}}</span>{{else}}<span class="muted">{{T "apikeys.scope_all"}}</span>{{end}}</td>
+              <td>{{if eq .Role "admin"}}<span class="pill accent">{{T "apikeys.tier_master"}}</span>{{else}}<span class="muted">{{.Role}}</span>{{end}}</td>
+              <td>{{if eq .Kind "mcp"}}<span class="pill">{{T "apikeys.surface_mcp"}}</span>{{else}}<span class="muted">{{.Kind}}</span>{{end}}</td>
               <td class="muted num">{{ts .CreatedAt}}</td>
               <td class="muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "apikeys.never_used"}}{{end}}</td>
               <td>
@@ -109,6 +132,8 @@
             {{else}}<span class="secret-mask">••••••••</span> <span class="muted">{{T "apikeys.token_gone"}}</span>{{end}}
           </span></div>
           <div class="kv-row"><span class="k">{{T "apikeys.col_scope"}}</span><span class="v">{{if .Stack}}<span class="mono">{{.Stack}}</span>{{else}}<span class="muted">{{T "apikeys.scope_all"}}</span>{{end}}</span></div>
+          <div class="kv-row"><span class="k">{{T "apikeys.col_tier"}}</span><span class="v">{{.Role}}</span></div>
+          <div class="kv-row"><span class="k">{{T "apikeys.col_surface"}}</span><span class="v">{{.Kind}}</span></div>
           <div class="kv-row"><span class="k">{{T "common.created"}}</span><span class="v muted num">{{ts .CreatedAt}}</span></div>
           <div class="kv-row"><span class="k">{{T "apikeys.col_last_used"}}</span><span class="v muted num">{{if .LastUsedAt}}{{ts .LastUsedAt}}{{else}}{{T "apikeys.never_used"}}{{end}}</span></div>
           <div class="action-bar">

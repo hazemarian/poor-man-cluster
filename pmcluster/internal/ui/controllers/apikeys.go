@@ -32,6 +32,10 @@ type apiKeyRow struct {
 	// key is refused everywhere else. Shown because a fleet-wide key and a
 	// one-stack key look identical in every other column.
 	Stack string
+	// Role is the daemon tier (admin = master key, operator, viewer) and Kind the
+	// surface (api, or mcp for a key that may only call /api/mcp).
+	Role string
+	Kind string
 }
 
 type apiKeysData struct {
@@ -49,6 +53,8 @@ type apiKeysData struct {
 	TokenName   string
 	TokenPrefix string
 	TokenStack  string
+	TokenRole   string
+	TokenKind   string
 	NewID       int64
 }
 
@@ -79,6 +85,8 @@ func (c APIKeys) Add(g *gin.Context) {
 	ctx := g.Request.Context()
 	name := strings.TrimSpace(g.PostForm("name"))
 	stack := strings.TrimSpace(g.PostForm("stack"))
+	role := strings.TrimSpace(g.PostForm("role"))
+	kind := strings.TrimSpace(g.PostForm("kind"))
 	d := apiKeysData{}
 	if c.apiRefused(g, &d) {
 		c.Views.Fragment(g, "apikeys", d)
@@ -91,13 +99,13 @@ func (c APIKeys) Add(g *gin.Context) {
 		c.Views.Fragment(g, "apikeys", d)
 		return
 	}
-	created, err := c.API.CreateAPIKey(ctx, name, stack)
+	created, err := c.API.CreateAPIKey(ctx, name, stack, role, kind)
 	if err != nil {
 		d.fail("apikeys.err_create", err.Error())
 	} else {
 		d.Token, d.NewID = created.Token, created.ID
 		d.TokenName, d.TokenPrefix = created.Name, tokenPrefix(created.Token)
-		d.TokenStack = created.Stack
+		d.TokenStack, d.TokenRole, d.TokenKind = created.Stack, created.Role, created.Kind
 		d.MsgKey, d.MsgArg = "apikeys.msg_created", created.Name
 	}
 	c.loadKeys(ctx, &d)
@@ -142,7 +150,7 @@ func (c APIKeys) loadKeys(ctx context.Context, d *apiKeysData) {
 	for _, k := range keys {
 		rows = append(rows, apiKeyRow{
 			ID: k.ID, Name: k.Name, CreatedAt: k.CreatedAt, LastUsedAt: k.LastUsedAt,
-			Stack: k.Stack,
+			Stack: k.Stack, Role: k.Role, Kind: k.Kind,
 		})
 	}
 	d.Keys, d.Count, d.Known = rows, len(rows), true

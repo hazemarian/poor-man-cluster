@@ -3,6 +3,25 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.395 — master keys and MCP-only keys
+
+The console could mint one kind of key: unscoped, operator tier, REST surface. Two of those three
+defaults are right; the absences were not.
+
+**A master key can now be minted** — the tier the platform gives itself at bootstrap. `role: admin` on
+`POST /api/api_keys`, or the **Master** option in the console form. The guard is that a call asking for
+`admin` must itself be admin: an operator token answering 403 rather than upgrading itself through the
+key API. The default stays `operator`, because a key minted without asking should not be a master key.
+
+**A key can be MCP-only** — `kind: mcp`. Its whole surface is `/api/mcp`: the REST router refuses it
+outright, so an AI client gets the tools (deploy, logs, sync, restart) without holding a credential
+that also reads settings, secrets and rendered configs. An empty kind is `api`, so every existing token
+behaves exactly as before.
+
+Both fields travel end to end: `users.kind` (migration 0033), the bearer principal, `pmcluster user
+create --role/--kind`, `user list` (ROLE, KIND columns), the daemon API, the console form and table,
+and `docs/openapi.yaml` — which the OpenAPI drift test fails the build over, and did.
+
 ## v0.2.394 — the console could mint API keys, but not scoped ones
 
 The daemon has accepted a `stack` on `POST /api/api_keys` since scoping existed, and
