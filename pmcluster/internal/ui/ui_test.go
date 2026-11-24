@@ -1413,6 +1413,44 @@ func TestPendingPageRedirectsAnApprovedAccount(t *testing.T) {
 	}
 }
 
+// TestUsersPageSaysWhatSignsPeopleIn — the banner about EDGE_LOGIN_DISABLED used
+// to claim every request was treated as an admin, which stopped being true when
+// the console started identifying people. It now has to name the SSO gate, because
+// that page is where an unapproved identity is expected to appear.
+func TestUsersPageSaysWhatSignsPeopleIn(t *testing.T) {
+	cfg := FromEnv()
+	cfg.DataDir = t.TempDir()
+	cfg.PMAPIURL = "http://127.0.0.1:1"
+	cfg.PMAPIToken = "pmc_test"
+	cfg.SessionSecret = []byte("0123456789abcdefgh")
+	cfg.CookieName = "pmui_session"
+	cfg.SSOEnabled = true
+	cfg.LoginDisabled = true
+	app, err := NewApp(cfg)
+	if err != nil {
+		t.Fatalf("NewApp: %v", err)
+	}
+	ident := map[string]string{"X-Auth-Request-Email": "boss@example.com", "X-Auth-Request-User": "boss"}
+	jar := map[string]*http.Cookie{}
+	doRequestWithHeaders(t, app, http.MethodGet, "/web/pending", ident, jar) // registers them as pending
+
+	row, err := app.Store.ByEmail(t.Context(), "boss@example.com")
+	if err != nil {
+		t.Fatalf("row: %v", err)
+	}
+	if err := app.Store.SetStatus(t.Context(), row.ID, "active", "admin"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+
+	body := readBody(t, doRequestWithHeaders(t, app, http.MethodGet, "/web/users", ident, jar))
+	if !strings.Contains(body, "People sign in through SSO here") {
+		t.Errorf("users page does not explain that SSO does the signing in")
+	}
+	if strings.Contains(body, "treated as an admin") {
+		t.Errorf("users page still claims requests are treated as an admin")
+	}
+}
+
 // TestSSOSignOutAffordance verifies that when SSO is the gate (login disabled
 // + EDGE_SSO_ENABLED) the console shell renders a sign-out affordance pointing
 // at oauth2-proxy's /oauth2/sign_out — the console session cookie is not the

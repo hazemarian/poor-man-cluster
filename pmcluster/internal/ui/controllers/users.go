@@ -85,15 +85,17 @@ type usersData struct {
 	Rows    []userRow
 	Count   int
 	Known   bool
-	ErrKey  string
-	ErrRaw  string
-	MsgKey  string
-	MsgArg  string
-	MsgArg2 string
-	Current string
-	// Disabled mirrors the login-disabled flag so the page can say that no new
-	// account can sign in yet.
+	// Disabled says the password form is off; SSO says whether an identity
+	// provider is doing the signing in instead. Disabled with no SSO is a
+	// lockout, not a configuration, and the banner must not pretend otherwise.
 	Disabled bool
+	SSO      bool
+	ErrKey   string
+	ErrRaw   string
+	MsgKey   string
+	MsgArg   string
+	MsgArg2  string
+	Current  string
 	// Error is the pre-i18n prose field. Kept so a fragment rendered by a caller
 	// this file does not own still shows something readable.
 	Error string
@@ -178,7 +180,7 @@ func (c Users) Reject(g *gin.Context) {
 
 // List renders the accounts table.
 func (c Users) List(g *gin.Context) {
-	d := c.page(g.Request.Context(), username(g), usersData{Disabled: c.Auth.LoginDisabled})
+	d := c.page(g.Request.Context(), username(g), usersData{Disabled: c.Auth.LoginDisabled, SSO: c.Auth.SSO})
 	c.Views.Fragment(g, "users", d)
 }
 
@@ -265,7 +267,7 @@ func (c Users) Create(g *gin.Context) {
 			d.ErrKey, d.ErrRaw = "users.err_save", err.Error()
 			break
 		}
-		next := c.page(ctx, username(g), usersData{Disabled: c.Auth.LoginDisabled})
+		next := c.page(ctx, username(g), usersData{Disabled: c.Auth.LoginDisabled, SSO: c.Auth.SSO})
 		next.MsgKey, next.MsgArg, next.MsgArg2 = "users.msg_created", uname, role
 		c.Views.Fragment(g, "users", next)
 		return
@@ -329,7 +331,7 @@ func (c Users) EditSave(g *gin.Context) {
 			d.ErrKey, d.ErrRaw = "users.err_save", err.Error()
 			break
 		}
-		next := c.page(ctx, username(g), usersData{Disabled: c.Auth.LoginDisabled})
+		next := c.page(ctx, username(g), usersData{Disabled: c.Auth.LoginDisabled, SSO: c.Auth.SSO})
 		next.MsgKey, next.MsgArg = "users.msg_updated", d.Username
 		c.Views.Fragment(g, "users", next)
 		return
@@ -343,7 +345,7 @@ func (c Users) EditSave(g *gin.Context) {
 func (c Users) Remove(g *gin.Context) {
 	ctx := g.Request.Context()
 	me := middleware.CurrentUser(g)
-	d := usersData{Disabled: c.Auth.LoginDisabled}
+	d := usersData{Disabled: c.Auth.LoginDisabled, SSO: c.Auth.SSO}
 	id, idErr := strconv.ParseInt(g.Param("id"), 10, 64)
 	var u *store.User
 	var err error

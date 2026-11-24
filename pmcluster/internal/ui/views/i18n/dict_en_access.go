@@ -10,18 +10,20 @@ package i18n
 func init() {
 	register(EN, map[string]string{
 		// ---------- users: console accounts ----------
-		"users.title":               "Users",
-		"users.sub":                 "Console accounts and the role each one carries. Only admins can see or change this list.",
-		"users.accounts":            "Accounts",
-		"users.new":                 "Add user",
-		"users.you":                 "you",
-		"users.roles_help":          "admin manages accounts, configs and secrets — operator deploys and operates stacks — viewer reads only.",
-		"users.empty_title":         "No accounts to show",
-		"users.empty_body":          "The store returned no accounts. Create the first one to share access.",
-		"users.unknown_title":       "The account list could not be loaded",
-		"users.unknown_body":        "The console could not read its user store. Nothing was changed — this is not an empty list.",
-		"users.login_disabled":      "Sign-in is disabled on this console",
-		"users.login_disabled_body": "EDGE_LOGIN_DISABLED is set, so every request is treated as an admin. Accounts are ignored while it is on.",
+		"users.title":           "Users",
+		"users.sub":             "Console accounts and the role each one carries. Only admins can see or change this list.",
+		"users.accounts":        "Accounts",
+		"users.new":             "Add user",
+		"users.you":             "you",
+		"users.roles_help":      "admin manages accounts, configs and secrets — operator deploys and operates stacks — viewer reads only.",
+		"users.empty_title":     "No accounts to show",
+		"users.empty_body":      "The store returned no accounts. Create the first one to share access.",
+		"users.unknown_title":   "The account list could not be loaded",
+		"users.unknown_body":    "The console could not read its user store. Nothing was changed — this is not an empty list.",
+		"users.sso_only_title":  "People sign in through SSO here",
+		"users.sso_only_body":   "EDGE_LOGIN_DISABLED retires the password form; the identity provider signs people in instead. Anyone this console does not know yet appears above and waits until an admin approves them and gives them a role.",
+		"users.no_signin_title": "Nobody can sign in",
+		"users.no_signin_body":  "EDGE_LOGIN_DISABLED is set but SSO is not configured, so the password form is off and nothing replaces it. This console cannot authenticate anyone — enable SSO or unset EDGE_LOGIN_DISABLED.",
 
 		// users: create / edit form
 		"users.form_new_title":     "Add user",

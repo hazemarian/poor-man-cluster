@@ -61,10 +61,16 @@
 {{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/users")}}
 {{end}}
 
-{{/* Login bypass is a configuration state, not a failure: the accounts exist,
-     they are simply not consulted while it is on. */}}
+{{/* Two different states wear the same flag. With SSO, EDGE_LOGIN_DISABLED only
+     retires the password form — the proxy authenticates, and this page is where
+     unknown people are approved. Without SSO there is no way in at all, which is
+     a lockout and gets said plainly. */}}
 {{if .Disabled}}
-{{template "banner" (dict "Tone" "warn" "Icon" "lock" "Title" (T "users.login_disabled") "Body" (T "users.login_disabled_body"))}}
+{{if .SSO}}
+{{template "banner" (dict "Tone" "info" "Icon" "shield" "Title" (T "users.sso_only_title") "Body" (T "users.sso_only_body"))}}
+{{else}}
+{{template "banner" (dict "Tone" "warn" "Icon" "lock" "Title" (T "users.no_signin_title") "Body" (T "users.no_signin_body"))}}
+{{end}}
 {{end}}
 
 {{if .MsgKey}}
