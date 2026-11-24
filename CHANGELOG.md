@@ -3,6 +3,23 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.409 — the address is editable where it is shown
+
+The list showed an address column that no form could set: the invite form collected
+one at creation, and Edit offered only a username and a password. An address typed
+wrong at invite time was therefore permanent, and on a password console every account
+showed a blank address forever.
+
+- **Edit carries the address.** It is shown for every account and saved with the rest
+  of the form. Behind SSO this is a re-point rather than a rename: the account moves
+  to the new address, and the old one becomes a stranger again — which is the correct
+  behaviour for a typo fix, and means a stale address cannot keep a door open.
+- **Create on a password console accepts one too**, optional, so the column is never
+  a field nobody can fill.
+- **Collisions are sentences, not constraint errors.** A name or address another
+  account already holds is refused with "another account already uses …", checked in
+  the store, because a UNIQUE violation is not something an operator can act on.
+
 ## v0.2.408 — with SSO off, the password is the way in (and the banner says so)
 
 v0.2.404 replaced the stale login-disabled banner with two states, and got the

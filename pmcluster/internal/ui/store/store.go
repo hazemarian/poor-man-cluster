@@ -27,6 +27,8 @@ var ErrNotFound = errors.New("not found")
 var (
 	ErrInvalidEmail    = errors.New("not an email address")
 	ErrAccountDisabled = errors.New("that account is disabled")
+	ErrUsernameTaken   = errors.New("another account already uses that name")
+	ErrEmailTaken      = errors.New("another account already uses that address")
 )
 
 // Settings keys for the console's pmcluster API override (the defaults come
@@ -491,6 +493,32 @@ func (s *Store) InviteSSOAccount(ctx context.Context, identifier, username, role
 	// can never match — which made "invite the account with the hidden email" the
 	// one case the invite refused.
 	return s.FindIdentity(ctx, email, username)
+}
+
+// UpdateIdentity changes the two fields that decide WHICH identity an account is:
+// its display name and its address. Both are checked for collisions here rather
+// than at the index, because "another account already uses that address" is a
+// sentence an operator can act on and a UNIQUE constraint error is not.
+func (s *Store) UpdateIdentity(ctx context.Context, id int64, username, email string) error {
+	username = strings.TrimSpace(username)
+	email = strings.TrimSpace(strings.ToLower(email))
+	if username == "" {
+		return ErrUsernameTaken // an empty name is not available to anybody
+	}
+	var other int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM users WHERE username = ? AND id <> ?`, username, id).Scan(&other); err == nil {
+		return ErrUsernameTaken
+	}
+	if email != "" {
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT id FROM users WHERE email = ? AND id <> ?`, email, id).Scan(&other); err == nil {
+			return ErrEmailTaken
+		}
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET username = ?, email = ? WHERE id = ?`, username, email, id)
+	return err
 }
 
 // TouchLogin records that this identity signed in. It is best effort: a console

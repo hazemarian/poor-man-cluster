@@ -18,7 +18,7 @@
   {{/* SSO: the provider owns the credentials, so the admin names the person by
        the address or GitHub login the proxy will send, and nothing else. */}}
   <div class="field">
-    <label for="user-who">{{T "users.col_who"}}</label>
+    <label for="user-who">{{T "users.col_email"}}</label>
     <input id="user-who" class="finput{{if eq .ErrKey "users.err_who"}} is-invalid{{end}}" name="who" value="{{.Who}}" autocomplete="off" required data-focus dir="ltr"{{if eq .ErrKey "users.err_who"}} aria-invalid="true" aria-describedby="user-who-err"{{end}}>
     <span class="hint">{{T "users.hint_who"}}</span>
     {{if eq .ErrKey "users.err_who"}}<span class="err" id="user-who-err">{{T "users.err_who"}}</span>{{end}}
@@ -29,6 +29,12 @@
     <span class="hint">{{T "users.hint_display"}}</span>
   </div>
   {{else}}
+  <div class="field">
+    <label for="user-email">{{T "users.col_email"}}</label>
+    <input id="user-email" class="finput{{if or (eq .ErrKey "users.err_email_taken")}} is-invalid{{end}}" type="email" name="email" value="{{.Email}}" autocomplete="off" dir="ltr"{{if eq .ErrKey "users.err_email_taken"}} aria-invalid="true" aria-describedby="user-email-err"{{end}}>
+    <span class="hint">{{T "users.hint_email"}}</span>
+    {{if eq .ErrKey "users.err_email_taken"}}<span class="err" id="user-email-err">{{T "users.err_email_taken"}}</span>{{end}}
+  </div>
   <div class="field">
     <label for="user-username">{{T "common.username"}}</label>
     <input id="user-username" class="finput{{if eq .ErrKey "users.err_username"}} is-invalid{{end}}" name="username" value="{{.Username}}" autocomplete="off" required data-focus{{if eq .ErrKey "users.err_username"}} aria-invalid="true" aria-describedby="user-username-err"{{end}}>

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1563,6 +1564,43 @@ func TestLoginDisabledWithoutSSOStillAllowsPasswordLogin(t *testing.T) {
 	}
 	if strings.Contains(body, "Nobody can sign in") {
 		t.Errorf("users page still claims nobody can sign in, which is false without SSO")
+	}
+}
+
+// TestEditingTheAddressRepointsTheAccount — the address is the identity behind
+// SSO, so an admin correcting it must move the account with it. Before this the
+// edit form had no address field at all: the list showed one and nothing could
+// change it, which is the worst of both.
+func TestEditingTheAddressRepointsTheAccount(t *testing.T) {
+	app, bossIdent, bossJar := newSSOApp(t)
+
+	old := url.Values{"who": {"nina@example.com"}, "role": {"operator"}}
+	if resp := doPostFormWithHeaders(t, app, "/web/users/add", bossIdent, bossJar, old); resp.StatusCode != http.StatusOK {
+		t.Fatalf("invite = %d", resp.StatusCode)
+	}
+	nina, err := app.Store.ByEmail(t.Context(), "nina@example.com")
+	if err != nil {
+		t.Fatalf("nina row: %v", err)
+	}
+
+	// Fix the address, the way an admin would after a typo.
+	edit := url.Values{
+		"id": {strconv.FormatInt(nina.ID, 10)}, "username": {"nina"},
+		"email": {"nina.new@example.com"}, "role": {"operator"},
+	}
+	if resp := doPostFormWithHeaders(t, app, "/web/users/edit", bossIdent, bossJar, edit); resp.StatusCode != http.StatusOK {
+		t.Fatalf("edit = %d: %s", resp.StatusCode, readBody(t, resp)[:0])
+	}
+
+	// The new address is the account now.
+	fresh := map[string]string{"X-Auth-Request-Email": "nina.new@example.com", "X-Auth-Request-User": "nina"}
+	if got := doRequestWithHeaders(t, app, http.MethodGet, "/web/", fresh, map[string]*http.Cookie{}); got.StatusCode != http.StatusOK {
+		t.Errorf("sign-in from the corrected address = %d, want 200", got.StatusCode)
+	}
+	// And the old one is a stranger again, not a second way in.
+	stale := map[string]string{"X-Auth-Request-Email": "nina@example.com", "X-Auth-Request-User": "nina-old"}
+	if got := doRequestWithHeaders(t, app, http.MethodGet, "/web/", stale, map[string]*http.Cookie{}); got.StatusCode != http.StatusFound {
+		t.Errorf("sign-in from the old address = %d, want 302 to the approval queue", got.StatusCode)
 	}
 }
 

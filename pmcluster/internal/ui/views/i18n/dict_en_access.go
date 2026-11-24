@@ -53,6 +53,10 @@ func init() {
 		// users: SSO invitation (no password: the provider owns credentials)
 		"users.form_invite_title":     "Invite an account",
 		"users.form_invite_sub":       "Name the address or GitHub login the identity provider will send, and the role it should carry. An invited account skips the approval queue.",
+		"users.col_email":             "Email",
+		"users.hint_email":            "The address this account is recognised by. Behind SSO it is what the identity provider sends, so changing it re-points the account.",
+		"users.err_email_taken":       "Another account already uses that address.",
+		"users.err_username_taken":    "Another account already uses that name.",
 		"users.col_who":               "Email or GitHub login",
 		"users.hint_who":              "Exactly what oauth2-proxy sends for this person: their GitHub email, or their GitHub login when the account hides its email. A typo grants nobody access — it simply never matches.",
 		"users.col_display":           "Display name (optional)",

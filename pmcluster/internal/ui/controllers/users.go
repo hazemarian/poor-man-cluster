@@ -134,6 +134,10 @@ type userFormData struct {
 	// Who is an address OR a GitHub login — see Store.InviteSSOAccount.
 	Invite bool
 	Who    string
+	// Email is the identity an SSO account is matched on. Shown on edit for every
+	// account and optional on local create, so the list is never populated with a
+	// field nobody can set.
+	Email string
 	// SSO means the provider owns credentials: no password field, on create or
 	// on edit, because a password this console stored would never be asked for.
 	SSO        bool
@@ -248,7 +252,7 @@ func (c Users) Edit(g *gin.Context) {
 		c.userFormError(g, d)
 		return
 	}
-	d.Username, d.Role = u.Username, u.Role
+	d.Username, d.Role, d.Email = u.Username, u.Role, u.Email
 
 	// Pin the role select whenever changing it could remove the last way into
 	// this console: the operator's own account, or the only admin there is.
@@ -295,9 +299,19 @@ func (c Users) Create(g *gin.Context) {
 			d.ErrKey, d.ErrRaw = "users.err_save", herr.Error()
 			break
 		}
-		if _, err := c.Store.CreateUser(ctx, uname, hash, true, role); err != nil {
+		created, err := c.Store.CreateUser(ctx, uname, hash, true, role)
+		if err != nil {
 			d.ErrKey, d.ErrRaw = "users.err_save", err.Error()
 			break
+		}
+		if email := strings.TrimSpace(g.PostForm("email")); email != "" {
+			// Optional on a password console, but if it is given it must be stored:
+			// the list shows an address column, and a field nobody can fill is worse
+			// than no column at all.
+			if err := c.Store.UpdateIdentity(ctx, created.ID, uname, email); err != nil {
+				d.ErrKey, d.ErrRaw = "users.err_email_taken", err.Error()
+				break
+			}
 		}
 		next := c.page(ctx, username(g), usersData{Disabled: c.Auth.LoginDisabled, SSO: c.Auth.SSO})
 		next.MsgKey, next.MsgArg, next.MsgArg2 = "users.msg_created", uname, role
@@ -364,6 +378,7 @@ func (c Users) EditSave(g *gin.Context) {
 	me := middleware.CurrentUser(g)
 	id, idErr := strconv.ParseInt(g.PostForm("id"), 10, 64)
 	role, pass := g.PostForm("role"), g.PostForm("password")
+	uname, email := strings.TrimSpace(g.PostForm("username")), strings.TrimSpace(g.PostForm("email"))
 	d := userFormData{
 		TitleKey: "users.form_edit_title",
 		SubKey:   "users.form_edit_sub",
@@ -378,9 +393,17 @@ func (c Users) EditSave(g *gin.Context) {
 	if idErr == nil {
 		u, err = c.Store.ByID(ctx, id)
 		if u != nil {
-			d.Username = u.Username
+			// Keep what the form said, fall back to the stored values: a modal that
+			// re-renders after a validation error must not silently reset either.
+			if uname == "" {
+				uname = u.Username
+			}
+			if email == "" {
+				email = u.Email
+			}
 		}
 	}
+	d.Username, d.Email = uname, email
 	switch {
 	case idErr != nil:
 		d.ErrKey = "users.err_bad_id"
@@ -394,6 +417,8 @@ func (c Users) EditSave(g *gin.Context) {
 		d.ErrKey = "users.err_self_demote"
 		d.Role = u.Role
 		d.RoleLocked = true
+	case uname == "":
+		d.ErrKey = "users.err_username"
 	case len(pass) > 0 && len(pass) < minPasswordLen:
 		d.ErrKey = "users.err_password_short"
 	case len(pass) > 0 && PasswordTooLong(pass):
@@ -410,6 +435,19 @@ func (c Users) EditSave(g *gin.Context) {
 		}
 		if err := c.Store.UpdateUser(ctx, id, role, hash); err != nil {
 			d.ErrKey, d.ErrRaw = "users.err_save", err.Error()
+			break
+		}
+		// The address is what SSO matches on, so editing it re-points the account;
+		// a collision is a sentence, not a constraint error.
+		if err := c.Store.UpdateIdentity(ctx, id, uname, g.PostForm("email")); err != nil {
+			switch {
+			case errors.Is(err, store.ErrUsernameTaken):
+				d.ErrKey = "users.err_username_taken"
+			case errors.Is(err, store.ErrEmailTaken):
+				d.ErrKey = "users.err_email_taken"
+			default:
+				d.ErrKey, d.ErrRaw = "users.err_save", err.Error()
+			}
 			break
 		}
 		next := c.page(ctx, username(g), usersData{Disabled: c.Auth.LoginDisabled, SSO: c.Auth.SSO})
