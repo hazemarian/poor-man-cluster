@@ -3,6 +3,23 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.399 — the console's volume moves under the platform volume root
+
+`pmui-data` was declared in the edge manifest with an empty value, which the compose writer turns into
+a plain docker-managed volume under `/var/lib/docker/volumes` — and the platform's backup agents cover
+`/var/stack/data`, not that. So the console's identity table — the approvals that decide who may use
+the console — was the one piece of state on this cluster with no backup.
+
+Dropped the declaration. A volume that a service references but the manifest does not declare is
+declared by the writer with a bind `driver_opts` at `<volume root>/<app>/<name>`, so it now lives at
+`/var/stack/data/edge/pmui-data`, on host storage, covered by the same snapshots as every other stack.
+The render is pinned by a test (`device: /var/stack/data/edge/pmui-data`, `o: bind`), because the
+difference between the two forms is invisible in the service block and only shows up in where the
+bytes are.
+
+The table was empty when this shipped (probe identities removed), so the move cost nothing; the old
+docker volume is deleted on the node.
+
 ## v0.2.398 — the break-glass reaches the volume the normal way
 
 `pmcluster ui` opened `/var/lib/docker/volumes/edge_pmui-data/_data/…` directly, as root. That is not

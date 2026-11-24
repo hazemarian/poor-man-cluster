@@ -1840,6 +1840,15 @@ func TestLoadComposeFile_EdgeStateless(t *testing.T) {
 	if strings.Contains(cs, ":memory:") {
 		t.Errorf("cluster-mode edge must not use an in-memory store:\n%s", cs)
 	}
+	// The volume must land under the platform volume root (host bind), not in
+	// docker's own volume store: only the former is covered by the backup agents.
+	// That is what leaving it OUT of the top-level volumes: block achieves.
+	// compose names it pmui-data; swarm prefixes the stack (edge_pmui-data).
+	for _, want := range []string{"pmui-data:", "/var/stack/data/edge/pmui-data", "o: bind"} {
+		if !strings.Contains(cs, want) {
+			t.Errorf("edge volume declaration missing %q (it would land outside backup coverage):\n%s", want, cs)
+		}
+	}
 
 	standalone, err := LoadComposeFile(StackEdge, RenderInput{
 		Domain:            "example.com",
