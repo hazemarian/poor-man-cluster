@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -48,16 +49,42 @@ const (
 	RoleViewer   = "viewer"
 )
 
+// Account status. A console user is only worth a role once it is active: an SSO
+// identity that nobody has approved sits in pending and reaches exactly one page.
+const (
+	StatusActive   = "active"
+	StatusPending  = "pending"
+	StatusDisabled = "disabled"
+)
+
+// How the identity arrived. Local users log in with a password; SSO users are
+// asserted by oauth2-proxy (GitHub org membership is its gate) and authorized
+// here, by a row an admin approved.
+const (
+	AuthLocal = "local"
+	AuthSSO   = "sso"
+)
+
 // User is a UI login. PasswordHash is a bcrypt hash; PasswordSet is true once a
 // password has been chosen (either from env bootstrap or the first-load setup).
+//
+// Email + AuthSource identify an SSO user: the identity comes from the proxy's
+// headers, the role and status come from this row. Username is what the console
+// displays; for SSO it is the GitHub login.
 type User struct {
 	ID           int64
 	Username     string
 	PasswordHash string
 	PasswordSet  bool
 	Role         string
+	Email        string
+	Status       string
+	AuthSource   string
 	CreatedAt    int64
 }
+
+// Active reports whether the user may use the console at all.
+func (u *User) Active() bool { return u != nil && u.Status == StatusActive }
 
 // Open creates (if needed) and opens the SQLite DB under dataDir.
 //
@@ -101,6 +128,10 @@ func Open(dataDir string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate role column: %w", err)
 	}
+	if err := ensureIdentityColumns(db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate identity columns: %w", err)
+	}
 	return &Store{db: db}, nil
 }
 
@@ -137,6 +168,45 @@ func ensureRoleColumn(db *sql.DB) error {
 	return err
 }
 
+// ensureIdentityColumns adds email / status / auth_source to a pre-SSO
+// database. Every existing row is a local, active account: they logged in with a
+// password before this existed, and nothing about that changes.
+func ensureIdentityColumns(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(users)`)
+	if err != nil {
+		return err
+	}
+	have := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt any
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		have[name] = true
+	}
+	_ = rows.Close()
+	for _, col := range []struct{ name, ddl string }{
+		{"email", `ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''`},
+		{"status", `ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`},
+		{"auth_source", `ALTER TABLE users ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'local'`},
+	} {
+		if have[col.name] {
+			continue
+		}
+		if _, err := db.Exec(col.ddl); err != nil {
+			return err
+		}
+	}
+	// SSO lookup goes through email on every request.
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS users_email ON users(email)`); err != nil {
+		return err
+	}
+	return nil
+}
+
 // Close releases the underlying connection.
 func (s *Store) Close() error { return s.db.Close() }
 
@@ -144,9 +214,9 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) ByUsername(ctx context.Context, username string) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, password_set, role, created_at
+		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at
 		   FROM users WHERE username = ?`, username).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.CreatedAt)
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -160,9 +230,9 @@ func (s *Store) ByUsername(ctx context.Context, username string) (*User, error) 
 func (s *Store) ByID(ctx context.Context, id int64) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, password_set, role, created_at
+		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at
 		   FROM users WHERE id = ?`, id).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.CreatedAt)
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -176,9 +246,9 @@ func (s *Store) ByID(ctx context.Context, id int64) (*User, error) {
 func (s *Store) FirstUser(ctx context.Context) (*User, error) {
 	u := &User{}
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, username, password_hash, password_set, role, created_at
+		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at
 		   FROM users ORDER BY id LIMIT 1`).
-		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.CreatedAt)
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -191,7 +261,7 @@ func (s *Store) FirstUser(ctx context.Context) (*User, error) {
 // ListUsers returns every user ordered by id.
 func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, username, password_hash, password_set, role, created_at
+		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at
 		   FROM users ORDER BY id`)
 	if err != nil {
 		return nil, err
@@ -200,7 +270,7 @@ func (s *Store) ListUsers(ctx context.Context) ([]*User, error) {
 	var out []*User
 	for rows.Next() {
 		u := &User{}
-		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.CreatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
@@ -228,8 +298,10 @@ func (s *Store) CreateUser(ctx context.Context, username, passwordHash string, p
 		role = RoleOperator
 	}
 	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO users (username, password_hash, password_set, role, created_at)
-		 VALUES (?, ?, ?, ?, ?)`, username, passwordHash, boolInt(passwordSet), role, time.Now().Unix()); err != nil {
+		`INSERT INTO users (username, password_hash, password_set, role, email, status, auth_source, created_at)
+		 VALUES (?, ?, ?, ?, '', ?, ?, ?)`,
+		username, passwordHash, boolInt(passwordSet), role,
+		StatusActive, AuthLocal, time.Now().Unix()); err != nil {
 		return nil, err
 	}
 	return s.ByUsername(ctx, username)
@@ -251,6 +323,99 @@ func (s *Store) UpdateUser(ctx context.Context, id int64, role, passwordHash str
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE users SET role = ? WHERE id = ?`, role, id)
 	return err
+}
+
+// ByEmail returns the console user for an SSO identity, or ErrNotFound.
+func (s *Store) ByEmail(ctx context.Context, email string) (*User, error) {
+	u := &User{}
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at
+		   FROM users WHERE email = ? AND email <> ''`, email).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return u, nil
+}
+
+// EnsureSSOUser resolves an SSO identity to a console row, creating it in the
+// pending state when it is new.
+//
+// This is the whole approval model: GitHub (through oauth2-proxy, restricted to
+// the configured org) says WHO the person is; this table says whether they may
+// use the console and with which role. A stranger's first login therefore grants
+// nothing but a row that an admin can see and approve.
+func (s *Store) EnsureSSOUser(ctx context.Context, email, username string) (*User, error) {
+	email = strings.TrimSpace(strings.ToLower(email))
+	username = strings.TrimSpace(username)
+	if email == "" {
+		return nil, ErrNotFound
+	}
+	if u, err := s.ByEmail(ctx, email); err == nil {
+		return u, nil
+	} else if !errors.Is(err, ErrNotFound) {
+		return nil, err
+	}
+	if username == "" {
+		username = email
+	}
+	// Username is uniquely indexed for the password path; an SSO login that
+	// collides with one gets its email as the display name instead.
+	if _, err := s.ByUsername(ctx, username); err == nil {
+		username = email
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO users (username, password_hash, password_set, role, email, status, auth_source, created_at)
+		 VALUES (?, '', 0, ?, ?, ?, ?, ?)`,
+		username, RoleViewer, email, StatusPending, AuthSSO, time.Now().Unix()); err != nil {
+		return nil, err
+	}
+	return s.ByEmail(ctx, email)
+}
+
+// ListPending returns the identities waiting for approval, oldest first.
+func (s *Store) ListPending(ctx context.Context) ([]*User, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, username, password_hash, password_set, role, email, status, auth_source, created_at
+		   FROM users WHERE status = ? ORDER BY id`, StatusPending)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		u := &User{}
+		if err := rows.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.PasswordSet, &u.Role, &u.Email, &u.Status, &u.AuthSource, &u.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// SetStatus sets a user's status and, when approving, its role in the same
+// statement — an identity that becomes active must never be active with a role
+// nobody chose.
+func (s *Store) SetStatus(ctx context.Context, id int64, status, role string) error {
+	if role == "" {
+		_, err := s.db.ExecContext(ctx, `UPDATE users SET status = ? WHERE id = ?`, status, id)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE users SET status = ?, role = ? WHERE id = ?`, status, role, id)
+	return err
+}
+
+// CountActiveAdmins returns how many admins can actually log in. It is the guard
+// the console keeps for "do not lock everybody out".
+func (s *Store) CountActiveAdmins(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE role = ? AND status = ?`, RoleAdmin, StatusActive).Scan(&n)
+	return n, err
 }
 
 // DeleteUser removes a user by id.

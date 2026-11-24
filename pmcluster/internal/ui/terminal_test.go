@@ -146,17 +146,25 @@ func TestTerminalWSBridge(t *testing.T) {
 	engine := httptest.NewServer(app.Handler())
 	defer engine.Close()
 
-	jar := map[string]*http.Cookie{}
+	// The console is no longer open in this mode (C1), so the socket has to carry a
+	// real session AND a ticket: the session says who is calling, the ticket says the
+	// socket came from a page this console rendered. Both negative cases below must
+	// therefore be authenticated, or they would be refused for the wrong reason.
+	jar := setupUsersAndLogin(t, app)
+	authH := http.Header{}
+	if ck, ok := jar[app.Auth.CookieName()]; ok {
+		authH.Set("Cookie", ck.Name+"="+ck.Value)
+	}
 
 	// A socket with no ticket is refused: the gate in front of /web cannot cover a websocket
 	// handshake, so the ticket is what proves the socket came from a page this console rendered.
 	bare := "ws" + strings.TrimPrefix(engine.URL, "http") + "/web/stacks/demo/terminal/ws?service=web"
-	if _, resp, err := websocket.DefaultDialer.Dial(bare, http.Header{}); err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+	if _, resp, err := websocket.DefaultDialer.Dial(bare, authH); err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("a ticketless socket was not refused with 403 (err=%v, resp=%v)", err, resp)
 	}
 	// A ticket minted for another service must not open this one.
 	wrong := app.Auth.SignTerminalToken("demo", "worker", time.Now())
-	if _, resp, err := websocket.DefaultDialer.Dial(bare+"&t="+url.QueryEscape(wrong), http.Header{}); err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+	if _, resp, err := websocket.DefaultDialer.Dial(bare+"&t="+url.QueryEscape(wrong), authH); err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("a ticket for another service was accepted (err=%v, resp=%v)", err, resp)
 	}
 

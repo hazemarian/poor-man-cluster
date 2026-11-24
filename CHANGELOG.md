@@ -3,6 +3,37 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.396 — the console knows who is calling
+
+C1 of the 2026-11-21 audit was the room behind C3/H1/H4: `EDGE_LOGIN_DISABLED` made the
+session middleware attach a synthetic admin to every request, on the reasoning that Traefik's
+admin-auth gate stands in front. That holds for the internet and fails on the overlay — the console
+listens on `traefik-net` and `monitoring-net`, and every app with `expose.host` joins both, so from
+inside one compromised app the console was an unauthenticated admin panel. With SSO it was the other
+half of the same mistake: the proxy authenticated the person, and the console then trusted anyone it
+would pass as admin.
+
+Identity and authorization are now separate, and only the second one can grant anything:
+
+- **Identity** comes from the proxy's `X-Auth-Request-Email`/`-User` headers when SSO is on, and from
+  the signed session cookie when it is not. `EDGE_LOGIN_DISABLED` no longer means "no login" — it
+  means "do not offer the password form", and only when SSO is actually the way in. With SSO off the
+  form stays: hiding the only door is how a console locks itself out.
+- **Authorization** is a row in the console's own table: role (admin > operator > viewer) and status
+  (active / pending / disabled), re-read on every request so a demotion takes effect immediately.
+- **First contact grants nothing.** An SSO identity with no row gets one, `pending` and viewer-tier,
+  and every route redirects it to a waiting page that names the account. No fragments, no counts, no
+  stack names.
+- **Approval is an admin decision** — the Users page lists pending identities with a role picker, and
+  `pmcluster ui approve <email> --role <role>` does it from the node for the case that needs it: a
+  fresh SSO console where everyone is pending, so nobody can approve from inside.
+- The oauth2-proxy org/repo restriction is unchanged. It says who may reach the console; the table
+  says what they may do.
+
+The console's SQLite is state now, not a cache, so `DATA_DIR` is `/data` on the `pmui-volume` in both
+modes — an in-memory store would forget every pending request on restart. ADR 0013 records the model
+and what was rejected.
+
 ## v0.2.395 — master keys and MCP-only keys
 
 The console could mint one kind of key: unscoped, operator tier, REST surface. Two of those three

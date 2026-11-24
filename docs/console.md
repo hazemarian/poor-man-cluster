@@ -85,7 +85,20 @@ model.
 - **Backups** — trigger snapshots, browse archive contents, restore, and view
   the audit log (archives other nodes uploaded to the store included).
 - **Users** — manage console accounts with RBAC roles (admin > operator >
-  viewer); admins only. Hidden from nav when behind SSO/admin-auth.
+  viewer); admins only, and served even behind SSO (it is where identities are
+  approved).
+
+  With SSO, GitHub (through oauth2-proxy, restricted to the configured org) says
+  *who* may reach the console; this table says *what they may do*. An identity the
+  table does not know is created in the **pending** state on first login and sees a
+  waiting page naming the account — nothing else. An admin approves it here with a
+  role, or an operator approves it from the node with
+  `pmcluster ui approve <email> --role <role>` when the console itself is the thing
+  that is locked. Rejecting deletes the row, so the person's next login starts the
+  request over.
+
+  `EDGE_LOGIN_DISABLED` (the `edge_login_disabled` setting) no longer makes the
+  console open. It only hides the password form on an SSO console. See ADR 0013.
 - **Inventory** — every stored config and secret in two searchable tabs:
   **Stacks** (service-scope rows, by stack) and **Platform** (cluster-scope
   rows). Both tabs can move a row to another scope (retag), edit or delete it,

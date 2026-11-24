@@ -67,6 +67,10 @@ type userRow struct {
 // Known stays false, the table is replaced by the unavailable state, and the
 // reason is in ErrKey/ErrRaw.
 type usersData struct {
+	// Pending are SSO identities waiting for a role: GitHub said who they are,
+	// nobody has said what they may do. They are listed above the accounts table
+	// because approving one is the reason an admin opens this page.
+	Pending []pendingRow
 	Rows    []userRow
 	Count   int
 	Known   bool
@@ -82,6 +86,14 @@ type usersData struct {
 	// Error is the pre-i18n prose field. Kept so a fragment rendered by a caller
 	// this file does not own still shows something readable.
 	Error string
+}
+
+// pendingRow is one identity waiting for approval.
+type pendingRow struct {
+	ID       int64
+	Username string
+	Email    string
+	Roles    []string
 }
 
 // userFormData is the create/edit modal model. RoleLocked pins the role select
@@ -102,6 +114,55 @@ type userFormData struct {
 	ErrRaw     string
 	// Error is the pre-i18n prose field, kept for callers outside this rewrite.
 	Error string
+}
+
+// Approve turns a pending SSO identity into an account with the chosen role.
+//
+// This is the "another user with the right permission accepts me" step: the
+// identity exists only because the proxy authenticated it, and it becomes usable
+// only because an admin decided what it may do.
+func (c Users) Approve(g *gin.Context) {
+	ctx := g.Request.Context()
+	id, err := strconv.ParseInt(g.PostForm("id"), 10, 64)
+	role := g.PostForm("role")
+	d := usersData{}
+	if err != nil || id <= 0 || !validRole(role) {
+		d.ErrKey = "users.err_bad_request"
+		c.Views.Fragment(g, "users", c.page(ctx, username(g), d))
+		return
+	}
+	if err := c.Store.SetStatus(ctx, id, store.StatusActive, role); err != nil {
+		d.ErrKey, d.ErrRaw = "users.err_store", err.Error()
+		c.Views.Fragment(g, "users", c.page(ctx, username(g), d))
+		return
+	}
+	d.MsgKey, d.MsgArg = "users.msg_approved", g.PostForm("email")
+	c.Views.Fragment(g, "users", c.page(ctx, username(g), d))
+}
+
+// Reject deletes a pending identity, so the next login by that person starts the
+// request over rather than reviving a rejected row.
+func (c Users) Reject(g *gin.Context) {
+	ctx := g.Request.Context()
+	id, err := strconv.ParseInt(g.PostForm("id"), 10, 64)
+	d := usersData{}
+	if err != nil || id <= 0 {
+		d.ErrKey = "users.err_bad_request"
+		c.Views.Fragment(g, "users", c.page(ctx, username(g), d))
+		return
+	}
+	if u, gerr := c.Store.ByID(ctx, id); gerr == nil && u.Status != store.StatusPending {
+		d.ErrKey = "users.err_not_pending"
+		c.Views.Fragment(g, "users", c.page(ctx, username(g), d))
+		return
+	}
+	if err := c.Store.DeleteUser(ctx, id); err != nil {
+		d.ErrKey, d.ErrRaw = "users.err_store", err.Error()
+		c.Views.Fragment(g, "users", c.page(ctx, username(g), d))
+		return
+	}
+	d.MsgKey = "users.msg_rejected"
+	c.Views.Fragment(g, "users", c.page(ctx, username(g), d))
 }
 
 // List renders the accounts table.
@@ -321,6 +382,12 @@ func (c Users) page(ctx context.Context, me string, d usersData) usersData {
 			d.ErrRaw = err.Error()
 		}
 		return d
+	}
+	pending, pendingErr := c.Store.ListPending(ctx)
+	if pendingErr == nil {
+		for _, u := range pending {
+			d.Pending = append(d.Pending, pendingRow{ID: u.ID, Username: u.Username, Email: u.Email, Roles: roleOptions})
+		}
 	}
 	admins, adminErr := c.Store.CountAdmins(ctx)
 	d.Rows, d.Count, d.Known = rowsFor(users, me, admins, adminErr), len(users), true

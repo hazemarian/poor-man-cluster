@@ -5,8 +5,9 @@
 # Console credentials (edge_admin_password / edge_ui_secret / edge_api_token)
 # are provisioned by pmcluster and delivered as Swarm secrets mounted read-only
 # at /run/secrets/. The edge reads them on first boot and stores them ONCE into
-# its SQLite DB on the pmui-data volume (cluster mode EDGE_LOGIN_DISABLED=true
-# is stateless and uses an in-memory store — no volume).
+# its SQLite DB on the pmui-data volume. The volume is always mounted: the console
+# owns an approval table (SSO identities waiting for a role), and an in-memory
+# store would forget every pending request on restart.
 app: edge
 env: production
 domain: ${DOMAIN}
@@ -17,9 +18,7 @@ networks:
   # joins it to ship its own telemetry (ADR 0010).
   - monitoring-net
 volumes:
-  [[- if not .EdgeLoginDisabled]]
   pmui-data: ""
-  [[- end]]
 services:
   pmcluster-edge:
     image: [[.EdgeImage]]
@@ -28,7 +27,9 @@ services:
     env:
       LISTEN_ADDR: ":8042"
       UPSTREAM: "http://host.docker.internal:9090"
-      DATA_DIR: "[[if .EdgeLoginDisabled]]:memory:[[else]]/data[[end]]"
+      # Always a real directory — see the volume comment above. EDGE_LOGIN_DISABLED
+      # only hides the password form now; it never makes the console anonymous.
+      DATA_DIR: "/data"
       PMCLUSTER_DOMAIN: "[[.Domain]]"
       API_RATE: "200"
       API_BURST: "400"
@@ -66,9 +67,7 @@ services:
       # or every console record is the only one in the platform with no machine attached.
       PMCLUSTER_NODE: "[[ if .LeaderNode ]][[.LeaderNode]][[ end ]]"
     volumes:
-      [[- if not .EdgeLoginDisabled]]
       - "pmui-data:/data"
-      [[- end]]
     secrets:
       - edge_admin_password
       - edge_ui_secret

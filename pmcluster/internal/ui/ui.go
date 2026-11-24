@@ -97,6 +97,9 @@ func NewApp(cfg Config) (*App, error) {
 
 	auth := middleware.NewAuth(st, cfg.SessionSecret, cfg.CookieName)
 	auth.LoginDisabled = cfg.LoginDisabled
+	// With SSO, oauth2-proxy asserts the identity on every request and the user
+	// table decides the role. Without it, the session cookie does.
+	auth.SSO = cfg.SSOEnabled
 	auth.NudgeSetup = func(ctx context.Context) (bool, error) {
 		n, err := st.CountUsers(ctx)
 		if err != nil {
@@ -189,6 +192,10 @@ func (a *App) Mount(engine *gin.Engine) {
 	g := engine.Group(WebBase)
 	g.Use(middleware.Gzip()) // console responses only: Mount shares the engine with the edge proxy
 	g.Use(a.ctrl.Auth.Require())
+
+	// The one page a pending identity may reach. It sits inside Require (identity
+	// is known) and outside every role group (a pending user has no role yet).
+	g.GET("/pending", (controllers.Access{Controller: a.ctrl}).Pending)
 
 	// ---- viewer: read-only console (all GET page/fragment/list routes) ----
 	vr := g.Group("")
@@ -390,6 +397,10 @@ func (a *App) Mount(engine *gin.Engine) {
 	ad.POST("/users/add", us.Create)
 	ad.POST("/users/edit", us.EditSave)
 	ad.POST("/users/remove/:id", us.Remove)
+	// SSO identities waiting for a role: approving one is an account decision,
+	// so it sits with the rest of the account surface (admin only).
+	ad.POST("/users/approve", us.Approve)
+	ad.POST("/users/reject", us.Reject)
 }
 
 // Handler returns a gin engine with every UI route. The edge service mounts

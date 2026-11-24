@@ -1,0 +1,65 @@
+{{define "pending"}}
+{{/* The only page a pending identity can reach.
+
+     GitHub said who this person is; the table has not yet said what they may do.
+     So the page states the fact, names the account to approve, and offers a way
+     out — no links into the console, because there is nothing behind them for
+     this user. */}}
+<!doctype html>
+<html lang="{{LANG}}" dir="{{DIR}}" data-theme="{{THEME}}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="{{static "favicon.svg"}}" type="image/svg+xml">
+  <title>{{T "access.pending_title"}} · {{T "app.title"}}</title>
+  <link rel="stylesheet" href="{{static "fonts.css"}}">
+  <link rel="stylesheet" href="{{static "base.css"}}">
+  <link rel="stylesheet" href="{{static "components.css"}}">
+  <link rel="stylesheet" href="{{static "patterns.css"}}">
+  <link rel="stylesheet" href="{{static "brand.css"}}">
+  <link rel="stylesheet" href="{{static "nx-fonts.css"}}">
+  <link rel="stylesheet" href="{{static "nx-theme.css"}}">
+</head>
+<body>
+{{template "icons" .}}
+<main class="doc login-doc">
+  <section class="auth-intro" aria-labelledby="intro-title">
+    <div class="auth-brand">{{template "logo"}}</div>
+    <div class="auth-story">
+      <p class="auth-eyebrow">{{T "brand.sub"}}</p>
+      <h1 id="intro-title">{{T "access.pending_title"}}</h1>
+      <p class="auth-description">{{T "access.pending_body"}}</p>
+    </div>
+  </section>
+  <div class="auth-form-side">
+    <div class="auth-card">
+      <div class="auth-heading">
+        <span class="auth-lock" aria-hidden="true">{{icon "lock"}}</span>
+        <h2>{{T "access.pending_heading"}}</h2>
+        <p>{{T "access.pending_wait"}}</p>
+      </div>
+
+      <div class="kv">
+        <div class="kv-row">
+          <span class="k">{{T "access.pending_identity"}}</span>
+          <span class="v mono iso" dir="ltr">{{.Email}}</span>
+        </div>
+      </div>
+
+      <p class="muted mt-16">{{T "access.pending_hint"}}</p>
+
+      {{if .SSO}}
+      <p class="mt-16"><a class="btn" href="/oauth2/sign_out">{{T "nav.logout"}}</a></p>
+      {{else}}
+      <form method="post" action="/web/logout" class="form-actions">
+        <button type="submit" class="btn">{{T "nav.logout"}}</button>
+      </form>
+      {{end}}
+    </div>
+  </div>
+</main>
+</body>
+</html>
+{{end}}

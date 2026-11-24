@@ -9,6 +9,54 @@
 {{template "pagehead" (dict "Title" (T "users.title") "Sub" (T "users.sub") "Refresh" "/web/users" "Actions" (partial "users_actions" .))}}
 
 {{/* A failed store read is one sentence plus the raw payload, folded away. */}}
+{{/* Identities waiting for approval: GitHub authenticated them, nobody has given
+     them a role. Approving is the point of this page, so it comes first. */}}
+{{if .Pending}}
+<div class="panel">
+  {{template "panelhead" (dict "Title" (T "users.pending_title") "Sub" (T "users.pending_sub"))}}
+  <div class="panel-body tight">
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>{{T "users.pending_identity"}}</th>
+            <th>{{T "users.col_role"}}</th>
+            <th><span class="sr-only">{{T "common.actions"}}</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Pending}}
+          <tr>
+            <td>
+              <span class="mono">{{.Username}}</span>
+              {{if .Email}}<div class="muted">{{.Email}}</div>{{end}}
+            </td>
+            <td>
+              <form hx-post="/web/users/approve" hx-target="#view" hx-swap="innerHTML" class="row-actions">
+                <input type="hidden" name="id" value="{{.ID}}">
+                <input type="hidden" name="email" value="{{.Email}}">
+                <select class="finput" name="role">
+                  {{$row := .}}
+                  {{range $row.Roles}}<option value="{{.}}"{{if eq . "operator"}} selected{{end}}>{{.}}</option>{{end}}
+                </select>
+                <button type="submit" class="btn btn-primary btn-sm">{{T "users.pending_approve"}}</button>
+              </form>
+            </td>
+            <td>
+              <form hx-post="/web/users/reject" hx-target="#view" hx-swap="innerHTML" hx-confirm="{{TF "users.pending_reject_confirm" .Username}}" class="row-actions">
+                <input type="hidden" name="id" value="{{.ID}}">
+                <button type="submit" class="btn btn-danger btn-sm">{{T "users.pending_reject"}}</button>
+              </form>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{{end}}
+
 {{if .ErrKey}}
 {{template "errbanner" (dict "Key" .ErrKey "Raw" .ErrRaw "Retry" "/web/users")}}
 {{end}}

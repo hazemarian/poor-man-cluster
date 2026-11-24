@@ -271,6 +271,25 @@ func doRequest(t *testing.T, app *App, method, path string, body string, jar map
 	return rr.Result()
 }
 
+// doRequestWithHeaders is doRequest plus identity headers — how an SSO request
+// arrives at the console, after oauth2-proxy has authenticated it.
+func doRequestWithHeaders(t *testing.T, app *App, method, path string, headers map[string]string, jar map[string]*http.Cookie) *http.Response {
+	t.Helper()
+	req := httptest.NewRequest(method, path, nil)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	if ck, ok := jar[app.Auth.CookieName()]; ok {
+		req.AddCookie(ck)
+	}
+	rr := httptest.NewRecorder()
+	app.Handler().ServeHTTP(rr, req)
+	for _, c := range rr.Result().Cookies() {
+		jar[c.Name] = c
+	}
+	return rr.Result()
+}
+
 func TestBootstrap_Setup_Login_Overview(t *testing.T) {
 	daemon := fakeDaemon(t)
 	defer daemon.Close()
@@ -1170,10 +1189,12 @@ func TestUsers_CRUDAndGuards(t *testing.T) {
 	}
 }
 
-// TestLoginDisabled_PassThrough verifies EDGE_LOGIN_DISABLED mode: Require()
-// treats every request as an authenticated admin, /web/ renders the console
-// without a cookie, and admin-only surfaces (users) are reachable.
-func TestLoginDisabled_PassThrough(t *testing.T) {
+// TestLoginDisabled_StillRequiresASession: EDGE_LOGIN_DISABLED now hides the
+// password form on an SSO console and nothing else. It used to treat every request
+// as an authenticated admin — C1 of the 2026-11-21 audit, since the console port is
+// reachable from any exposed app on the overlay. A session (or an SSO identity) is
+// required either way.
+func TestLoginDisabled_StillRequiresASession(t *testing.T) {
 	daemon := fakeDaemon(t)
 	defer daemon.Close()
 
@@ -1190,10 +1211,20 @@ func TestLoginDisabled_PassThrough(t *testing.T) {
 	}
 	jar := map[string]*http.Cookie{}
 
-	// No cookie, no session: console shell renders directly.
+	// No cookie and no identity header: this used to render the console for
+	// anyone who could reach the port (C1). It must bounce to the sign-in page.
 	resp := doRequest(t, app, http.MethodGet, "/web/", "", jar)
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("GET /web/ without identity = %d, want 302", resp.StatusCode)
+	}
+	if loc := resp.Header.Get("Location"); !strings.Contains(loc, "/web/login") && !strings.Contains(loc, "/web/setup") {
+		t.Fatalf("redirected to %q, want the sign-in page", loc)
+	}
+	// With a real session the shell renders as before.
+	jar = setupUsersAndLogin(t, app)
+	resp = doRequest(t, app, http.MethodGet, "/web/", "", jar)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /web/ = %d, want 200", resp.StatusCode)
+		t.Fatalf("GET /web/ as a signed-in admin = %d, want 200", resp.StatusCode)
 	}
 	b := readBody(t, resp)
 	for _, want := range []string{`href="/web/static/base.css?v=`, "Poor Man's", "Overview"} {
@@ -1256,14 +1287,15 @@ func TestLoginDisabled_PassThrough(t *testing.T) {
 		t.Errorf("GET /users (login disabled) = %d, want 200", resp.StatusCode)
 	}
 
-	// /web/login redirects to the console root.
+	// /web/login still renders: with SSO off it is the only way in, so the flag
+	// must not hide it. (It hides the form only when SSO is the authenticator.)
 	resp = doRequest(t, app, http.MethodGet, "/web/login", "", jar)
-	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != "/web/" {
-		t.Errorf("GET /login (login disabled) = %d Location=%q, want 302 → /web/",
-			resp.StatusCode, resp.Header.Get("Location"))
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /login (login disabled, no SSO) = %d, want 200 — hiding it locks the console out",
+			resp.StatusCode)
 	}
 
-	// Mutations work without login.
+	// Mutations work for the signed-in admin.
 	resp = doRequest(t, app, http.MethodPost, "/web/stacks/demo/rollback", "", jar)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("POST rollback (login disabled) = %d, want 200", resp.StatusCode)
@@ -1296,12 +1328,38 @@ func TestSSOSignOutAffordance(t *testing.T) {
 		return app
 	}
 
-	// SSO enabled: the shell shows the SSO sign-out link.
+	// SSO enabled: an unknown identity is real, but has no role yet. The first
+	// request creates the pending row and lands on the waiting page — the shell
+	// is not reachable until an admin approves.
 	app := newSSOApp(true)
 	jar := map[string]*http.Cookie{}
-	resp := doRequest(t, app, http.MethodGet, "/web/", "", jar)
+	pending := doRequestWithHeaders(t, app, http.MethodGet, "/web/", map[string]string{
+		"X-Auth-Request-Email": "stranger@example.com",
+		"X-Auth-Request-User":  "stranger",
+	}, jar)
+	if pending.StatusCode != http.StatusFound {
+		t.Fatalf("pending identity on /web/ = %d, want 302 to the waiting page", pending.StatusCode)
+	}
+	if loc := pending.Header.Get("Location"); !strings.Contains(loc, "/web/pending") {
+		t.Fatalf("pending identity redirected to %q, want /web/pending", loc)
+	}
+	row, err := app.Store.ByEmail(t.Context(), "stranger@example.com")
+	if err != nil {
+		t.Fatalf("first SSO login did not create a row: %v", err)
+	}
+	if row.Status != "pending" || row.Role == "admin" {
+		t.Fatalf("new SSO identity = status %q role %q, want pending and not admin", row.Status, row.Role)
+	}
+	// An admin approves it; now the shell renders with the SSO sign-out link.
+	if err := app.Store.SetStatus(t.Context(), row.ID, "active", "operator"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	resp := doRequestWithHeaders(t, app, http.MethodGet, "/web/", map[string]string{
+		"X-Auth-Request-Email": "stranger@example.com",
+		"X-Auth-Request-User":  "stranger",
+	}, jar)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /web/ = %d, want 200", resp.StatusCode)
+		t.Fatalf("GET /web/ after approval = %d, want 200", resp.StatusCode)
 	}
 	b := readBody(t, resp)
 	if !strings.Contains(b, `href="/oauth2/sign_out"`) {

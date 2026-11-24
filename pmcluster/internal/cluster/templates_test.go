@@ -1826,19 +1826,19 @@ func TestLoadComposeFile_EdgeStateless(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The console keeps a real data dir in BOTH modes now. It owns an approval
+	// table (SSO identities waiting for a role); an in-memory store would forget
+	// every pending request on restart, which is exactly when an operator is
+	// trying to find out who asked for access.
 	cs := string(cluster)
-	for _, want := range []string{"DATA_DIR: ':memory:'"} {
+	// The renderer re-emits the value unquoted; assert on what a node receives.
+	for _, want := range []string{"DATA_DIR: /data", "- pmui-data:/data"} {
 		if !strings.Contains(cs, want) {
 			t.Errorf("cluster-mode edge missing %q:\n%s", want, cs)
 		}
 	}
-	// The template comment mentions pmui-data for context, so assert on the
-	// actual mounts/declarations: the volume mount and the top-level volumes
-	// block must be absent.
-	for _, bad := range []string{"- pmui-data:/data", "\nvolumes:\n"} {
-		if strings.Contains(cs, bad) {
-			t.Errorf("cluster-mode edge must not contain %q:\n%s", bad, cs)
-		}
+	if strings.Contains(cs, ":memory:") {
+		t.Errorf("cluster-mode edge must not use an in-memory store:\n%s", cs)
 	}
 
 	standalone, err := LoadComposeFile(StackEdge, RenderInput{

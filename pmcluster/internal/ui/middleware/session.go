@@ -43,10 +43,17 @@ type Auth struct {
 	cookie string
 	// setupRequired returns true while the bootstrap admin has no password yet.
 	NudgeSetup func(c context.Context) (bool, error)
-	// LoginDisabled skips session auth entirely: every request passes through
-	// as a synthetic admin (the Traefik admin-auth gate protects /web/* in this
-	// mode) and the setup/login pages are hidden.
+	// LoginDisabled no longer opens the console. It used to: every request ran as
+	// a synthetic admin, on the reasoning that Traefik's admin-auth gate was in
+	// front. That reasoning is exactly C1 of the 2026-11-21 audit — from inside
+	// an exposed app, the gate is not there. The flag now only says "the password
+	// form is not offered here" (an SSO-only console); identity and role always
+	// come from a row in the user table.
 	LoginDisabled bool
+	// SSO reports that oauth2-proxy asserts identity through headers on every
+	// request to the console. The proxy's org filter says who may reach the
+	// console at all; the user table says what they may do once inside.
+	SSO bool
 }
 
 // NewAuth wires session auth around the store. secret is the HMAC key.
@@ -252,30 +259,29 @@ func isStateChangingMethod(method string) bool {
 // gate is open: every request is treated as an authenticated admin.
 func (a *Auth) Require() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if a.LoginDisabled {
-			c.Set(ctxUserKey, &store.User{
-				ID: 1, Username: "admin", PasswordSet: true, Role: store.RoleAdmin,
-			})
-			c.Next()
-			return
-		}
-		ck, err := c.Cookie(a.cookie)
-		if err != nil {
-			a.redirect(c, a.target(c.Request.Context()))
-			return
-		}
-		s, ok := a.Verify(ck)
+		u, ok := a.identify(c)
 		if !ok {
 			a.redirect(c, a.target(c.Request.Context()))
 			return
 		}
-		u, err := a.st.ByUsername(c.Request.Context(), s.Username)
-		if err != nil {
+		// A pending identity reaches the waiting page and nothing else: no
+		// fragments, no API calls, no data. That is the whole point of the row
+		// existing before an admin decides about it.
+		if u.Status == store.StatusPending {
+			if c.Request.URL.Path == WebBase+"/pending" || c.Request.URL.Path == WebBase+"/logout" {
+				c.Set(ctxUserKey, u)
+				c.Next()
+				return
+			}
+			a.redirect(c, WebBase+"/pending")
+			return
+		}
+		if u.Status == store.StatusDisabled {
 			a.redirect(c, a.target(c.Request.Context()))
 			return
 		}
 
-		if !u.PasswordSet && a.NudgeSetup != nil {
+		if !u.PasswordSet && u.AuthSource != store.AuthSSO && a.NudgeSetup != nil {
 			if need, e := a.NudgeSetup(c.Request.Context()); e == nil && need {
 				a.redirect(c, WebBase+"/setup")
 				return
@@ -284,6 +290,47 @@ func (a *Auth) Require() gin.HandlerFunc {
 		c.Set(ctxUserKey, u)
 		c.Next()
 	}
+}
+
+// identify resolves the caller to a console user.
+//
+// Two sources, one authority afterwards. With SSO, oauth2-proxy has already
+// authenticated the request and says who it is through headers; unknown
+// identities get a pending row on first sight, so a stranger's login is a row to
+// review, not access. Without SSO, the signed session cookie is the source, as
+// before. Either way, the role and status read here are the row's.
+func (a *Auth) identify(c *gin.Context) (*store.User, bool) {
+	if a.SSO {
+		email := strings.TrimSpace(c.GetHeader("X-Auth-Request-Email"))
+		user := strings.TrimSpace(c.GetHeader("X-Auth-Request-User"))
+		if email == "" && user == "" {
+			return nil, false
+		}
+		if email == "" {
+			email = user
+		}
+		if user == "" {
+			user = email
+		}
+		u, err := a.st.EnsureSSOUser(c.Request.Context(), email, user)
+		if err != nil || u == nil {
+			return nil, false
+		}
+		return u, true
+	}
+	ck, err := c.Cookie(a.cookie)
+	if err != nil {
+		return nil, false
+	}
+	s, ok := a.Verify(ck)
+	if !ok {
+		return nil, false
+	}
+	u, err := a.st.ByUsername(c.Request.Context(), s.Username)
+	if err != nil {
+		return nil, false
+	}
+	return u, true
 }
 
 // roleRank returns the numeric precedence of a role (admin > operator >
@@ -322,11 +369,9 @@ func (a *Auth) RequireRole(minRole string) gin.HandlerFunc {
 }
 
 func (a *Auth) target(ctx context.Context) string {
-	if a.LoginDisabled {
-		// No login/setup in this mode — unauthenticated (should never happen,
-		// Require bypasses) lands on the console root.
-		return WebBase + "/"
-	}
+	// There is no "no login" mode any more: LoginDisabled only hides the password
+	// FORM on an SSO console (see LoginPage). Every unauthenticated request has to
+	// land somewhere it can actually authenticate, or it bounces in a loop.
 	if a.NudgeSetup != nil {
 		if need, err := a.NudgeSetup(ctx); err == nil && need {
 			return WebBase + "/setup"

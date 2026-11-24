@@ -56,7 +56,10 @@ type authPage struct {
 // LoginPage renders the sign-in form. When EDGE_LOGIN_DISABLED is set the
 // console is fully open (Traefik admin-auth gates it), so the form bounces.
 func (c Auth) LoginPage(g *gin.Context) {
-	if c.Auth.LoginDisabled {
+	// EDGE_LOGIN_DISABLED now means "this console signs in through SSO, so the
+	// password form is not offered". It must NOT hide the only way in when SSO is
+	// off — that is how a console locks itself out.
+	if c.Auth.SSO && c.Auth.LoginDisabled {
 		redirect(g, WebBase+"/")
 		return
 	}
@@ -65,7 +68,7 @@ func (c Auth) LoginPage(g *gin.Context) {
 
 // Login verifies credentials and issues a session cookie.
 func (c Auth) Login(g *gin.Context) {
-	if c.Auth.LoginDisabled {
+	if c.Auth.SSO && c.Auth.LoginDisabled {
 		redirect(g, WebBase+"/")
 		return
 	}
@@ -87,7 +90,7 @@ func (c Auth) Login(g *gin.Context) {
 // no admin exists yet; otherwise bounce to login (or /web/ when login is
 // disabled).
 func (c Auth) SetupPage(g *gin.Context) {
-	if c.Auth.LoginDisabled {
+	if c.Auth.SSO && c.Auth.LoginDisabled {
 		redirect(g, WebBase+"/")
 		return
 	}
@@ -101,7 +104,7 @@ func (c Auth) SetupPage(g *gin.Context) {
 
 // Setup creates the first admin account on first run (username + password).
 func (c Auth) Setup(g *gin.Context) {
-	if c.Auth.LoginDisabled {
+	if c.Auth.SSO && c.Auth.LoginDisabled {
 		redirect(g, WebBase+"/")
 		return
 	}

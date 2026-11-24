@@ -26,9 +26,11 @@ func TestBrandLogoInShellAndLogin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewApp(login disabled): %v", err)
 	}
-	resp := doRequest(t, shellApp, http.MethodGet, "/web/", "", map[string]*http.Cookie{})
+	// The console is no longer open in this mode (C1): sign in first.
+	shellJar := setupUsersAndLogin(t, shellApp)
+	resp := doRequest(t, shellApp, http.MethodGet, "/web/", "", shellJar)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /web/ = %d, want 200", resp.StatusCode)
+		t.Fatalf("GET /web/ as a signed-in admin = %d, want 200", resp.StatusCode)
 	}
 	assertBrandLockup(t, "shell", readBody(t, resp))
 

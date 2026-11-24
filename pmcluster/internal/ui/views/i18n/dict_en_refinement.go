@@ -25,9 +25,16 @@ func init() {
 		"overview.services_hint":     "Replica health, tasks, and live logs",
 		"overview.backups_hint":      "Volume snapshots and backup history",
 		"auth.welcome":               "Welcome Back",
-		"auth.welcome_body":          "Sign in to manage your cluster.",
-		"auth.intro_title":           "Your infrastructure.\nUnder your control.",
-		"auth.intro_body":            "Deploy applications, inspect services, and manage your cluster from one focused workspace.",
-		"auth.intro_foot":            "A small stack. A capable control plane.",
+		// The waiting page — the only one a pending identity reaches.
+		"access.pending_title":    "Access requested",
+		"access.pending_heading":  "Waiting for approval",
+		"access.pending_body":     "Your GitHub account is recognised, but this cluster has not granted it a console role yet. An administrator has to approve this account before anything is visible.",
+		"access.pending_wait":     "Nothing else is shown until an administrator approves you. Signing out and back in will not change that.",
+		"access.pending_identity": "Account",
+		"access.pending_hint":     "Ask an administrator to approve this account in the console's Users page, or to run `pmcluster ui approve <email> --role <role>` on the node.",
+		"auth.welcome_body":       "Sign in to manage your cluster.",
+		"auth.intro_title":        "Your infrastructure.\nUnder your control.",
+		"auth.intro_body":         "Deploy applications, inspect services, and manage your cluster from one focused workspace.",
+		"auth.intro_foot":         "A small stack. A capable control plane.",
 	})
 }

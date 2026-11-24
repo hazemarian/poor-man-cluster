@@ -59,6 +59,13 @@ var topLevelScopes = map[string]commandScope{
 	// store that has no authoritative view. The session itself is throwaway.
 	"shell": scopeLeader,
 
+	// ui reads and writes the CONSOLE's own SQLite file on this node (the
+	// pmui-data volume). It is node-local for the same reason storage is: the
+	// answer is this machine's identity table, and gating it on leadership would
+	// leave an operator unable to approve anyone on a node that happens to not be
+	// the leader — including the case it exists for, a console nobody can enter.
+	"ui": scopeNode,
+
 	// Bootstrap and lifecycle.
 	"init":    scopeBootstrap,
 	"setup":   scopeBootstrap,

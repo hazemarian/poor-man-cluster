@@ -149,11 +149,14 @@ func TestRequire_LoginDisabledPassThrough(t *testing.T) {
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("login-disabled request = %d, want 200", rr.Code)
+	// C1 of the 2026-11-21 audit: this flag used to make every request an admin,
+	// which is unaudited root for anyone who can reach the console port. It now
+	// only hides the password form; without an identity the request is bounced.
+	if rr.Code != http.StatusFound {
+		t.Fatalf("login-disabled request = %d, want 302 (no identity, no access)", rr.Code)
 	}
-	if got := rr.Body.String(); got != "admin:admin" {
-		t.Errorf("synthetic user = %q, want admin:admin", got)
+	if got := rr.Body.String(); strings.Contains(got, "admin:admin") {
+		t.Errorf("a synthetic admin user was still attached: %q", got)
 	}
 }
 
