@@ -20,6 +20,7 @@ func init() {
 		"users.empty_body":      "The store returned no accounts. Create the first one to share access.",
 		"users.unknown_title":   "The account list could not be loaded",
 		"users.unknown_body":    "The console could not read its user store. Nothing was changed — this is not an empty list.",
+		"users.source_sso":      "SSO",
 		"users.sso_only_title":  "People sign in through SSO here",
 		"users.sso_only_body":   "EDGE_LOGIN_DISABLED retires the password form; the identity provider signs people in instead. Anyone this console does not know yet appears above and waits until an admin approves them and gives them a role.",
 		"users.no_signin_title": "Nobody can sign in",

@@ -98,6 +98,8 @@
             <tr>
               <td>
                 <span class="mono iso" dir="ltr">{{.Username}}</span>
+                {{if .Email}}<div class="muted mono iso" dir="ltr">{{.Email}}</div>{{end}}
+                {{if eq .Source "sso"}}<span class="pill plain">{{T "users.source_sso"}}</span>{{end}}
                 {{if .IsSelf}} <span class="pill accent">{{T "users.you"}}</span>{{end}}
               </td>
               <td>
@@ -129,6 +131,7 @@
         {{range .Rows}}
         <div class="kv">
           <div class="kv-row"><span class="k">{{T "common.username"}}</span><span class="v"><span class="mono iso" dir="ltr">{{.Username}}</span>{{if .IsSelf}} <span class="pill accent">{{T "users.you"}}</span>{{end}}</span></div>
+          {{if .Email}}<div class="kv-row"><span class="k">{{T "common.email"}}</span><span class="v mono iso" dir="ltr">{{.Email}}</span></div>{{end}}
           <div class="kv-row"><span class="k">{{T "common.role"}}</span><span class="v">
             {{if eq .Role "admin"}}<span class="pill good"><span class="mono">{{.Role}}</span>{{else}}<span class="pill plain"><span class="mono">{{.Role}}</span>{{end}}
             {{if .RoleLocked}} {{icon "lock"}}{{end}}</span>

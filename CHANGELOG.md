@@ -3,6 +3,17 @@
 Release history for **poor-man-cluster**. `docs/whitepaper.md` is the design paper; the reference
 docs under `docs/` describe the platform as built.
 
+## v0.2.405 — the accounts table shows the address, which is the identity
+
+Under SSO the email is the key: GitHub display names are not unique, and it is the
+address the approver has to recognise. The table listed only the username, so two
+accounts called `hazemarian` were indistinguishable and an approved identity could not
+be matched to the person in the room. Rows now carry the address under the name and an
+`SSO` pill, and the detail card shows it as a field.
+
+Carries v0.2.404, which supersedes v0.2.404 itself: that tag's release built but was
+never rolled out (a watcher looked for the wrong SHA), so no node ever ran it.
+
 ## v0.2.404 — the Users page stops describing a console that no longer exists
 
 The banner still read "EDGE_LOGIN_DISABLED is set, so every request is treated as an

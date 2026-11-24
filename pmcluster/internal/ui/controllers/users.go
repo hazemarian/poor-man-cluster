@@ -61,8 +61,13 @@ func (c Users) roleUnknown(ctx context.Context, r string) bool {
 // DeleteBlockKey is the dictionary key explaining a disabled delete button, and
 // is always set when CanDelete is false.
 type userRow struct {
-	ID             int64
+	ID int64
+	// Username is what the console shows; Email is what actually identifies an
+	// SSO account, and two GitHub logins can share a display name, so the table
+	// has to carry it.
 	Username       string
+	Email          string
+	Source         string
 	Role           string
 	CreatedAt      int64
 	IsSelf         bool
@@ -427,6 +432,8 @@ func rowsFor(users []*store.User, me string, admins int, adminsErr error) []user
 		r := userRow{
 			ID:        u.ID,
 			Username:  u.Username,
+			Email:     u.Email,
+			Source:    u.AuthSource,
 			Role:      u.Role,
 			CreatedAt: u.CreatedAt,
 			IsSelf:    me != "" && u.Username == me,
